@@ -181,23 +181,23 @@ class OpenCodeBridge:
 
     # ---------- 会话管理 ----------
 
-    async def get_or_create_session(self) -> str:
-        if self._session_id:
-            return self._session_id
-        return await self.create_session()
+    async def create_session(self, model: str = None) -> str:
+        """创建新 session，可选指定模型"""
+        body = {}
+        if model and "/" in model:
+            parts = model.split("/", 1)
+            body["model"] = {"providerID": parts[0], "modelID": parts[1]}
 
-    async def create_session(self) -> str:
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.base_url}/session") as resp:
+            async with session.post(
+                f"{self.base_url}/session",
+                json=body if body else None,
+            ) as resp:
                 if resp.status != 200:
                     raise Exception(f"创建会话失败: {await resp.text()}")
                 data = await resp.json()
-                self._session_id = data["id"]
-                logger.info(f"Session: {self._session_id}")
-                return self._session_id
-
-    async def clear_session(self):
-        self._session_id = None
+                logger.info(f"Session: {data['id']} model={model}")
+                return data["id"]
 
     # ---------- 核心：SSE 流式消息 ----------
 
@@ -205,30 +205,25 @@ class OpenCodeBridge:
         """
         发送消息并通过 WebSocket 逐 token 转发 SSE 流。
         
-        流程：
-        1. 启动后台任务监听 /event SSE 流
-        2. POST /session/{id}/message 发送消息
-        3. SSE 事件中的 message.part.delta 包含逐 token 内容
+        每个消息使用独立 session，避免上下文延续和事件流冲突。
         """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
             return
 
-        session_id = await self.get_or_create_session()
-        logger.info(f"发送消息: {message[:60]}...")
+        # 1. 在 session 层面设置模型（create_session 时传 model）
+        session_id = await self.create_session(model=model)
+        logger.info(f"消息 session: {session_id} 模型: {model}")
 
-        # 启动后台任务监听 /event SSE 流
+        # 2. 启动后台任务监听 /event SSE 流
         event_consumer = asyncio.create_task(
             self._consume_events_stream(session_id, msg_id, websocket)
         )
 
         try:
-            # 发送消息（返回 JSON，非流式）
+            # 3. 发送消息
             async with aiohttp.ClientSession() as session:
                 payload = {"parts": [{"type": "text", "text": message}]}
-                if model and "/" in model:
-                    parts = model.split("/", 1)
-                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
@@ -244,11 +239,10 @@ class OpenCodeBridge:
                     resp_text = await resp.text()
                     logger.info(f"POST message 响应: {resp_text[:200]}")
 
-            # 等待事件流结束（由 event_consumer 负责发送 stream chunks）
+            # 4. 等待事件流结束
             await event_consumer
 
         except asyncio.CancelledError:
-            logger.info("event_consumer 被取消")
             event_consumer.cancel()
             raise
         except Exception as e:
