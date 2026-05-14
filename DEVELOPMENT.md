@@ -80,33 +80,93 @@
 - [x] 对话区域宽度 max-w-3xl → max-w-5xl
 - [x] 全面审查并提升所有组件文字大小
 
-### 🔄 进行中
+### 🐛 已知问题
 
-- [ ] OpenCode CLI 桥接对接
-  - `opencode providers list` 只列出自定义模型，不支持获取免费模型列表
-  - **当前方案**：用户手动输入模型名称，发送时携带 `--model` 参数
-  - 需桥接服务连接后才能真实执行，未连接时降级为模拟回复并提示
-  - **流式输出已实现**：`execute_opencode_streaming` 命令支持实时显示
-  - **问题**：CLI 命令执行成功且返回数据，但前端 UI 无法显示聊天记录
-    - 排查方向：WebSocket 消息转发、事件监听、状态更新、消息回调处理
+#### 问题 1：项目点击后下方新建普通对话（项目对话模型待澄清）
+
+**现象**：点击左侧项目名称，侧边栏对话列表下方会多出一条普通（chat 模式）对话。
+
+**根因分析**：`Sidebar.handleSelectProjectConversation` 调用 `chat.newConversation("code", projectId)` 创建开发对话。但此操作与其他对话创建逻辑可能存在冲突，导致额外生成一条 mode="chat" 的普通对话。
+
+**核心设计澄清**：
+```
+项目对话 ≠ 特殊实体
+项目对话 = 普通对话 + 可选的 OpenCode 执行能力
+```
+
+即项目本身就是一个聊天记录，和普通对话完全一样，唯一区别在于：
+- 输入框底部多一个 **OpenCode 模型选择器**
+- 选中 OC 模型后发送的消息走 `opencode run --model <id> "<command>"` 执行
+- 不选 OC 模型时和普通对话行为完全一致
+
+**当前表现与预期差异**：
+| 预期 | 当前 |
+|------|------|
+| 点击项目 → 打开该项目的聊天（已有则切换，无则新建） | 会额外生成普通对话 |
+| 项目对话列表只显示一条记录 | 显示多条（普通 + 开发） |
+| 项目对话的输入框底部有 OC 模型选择器 | 有 ✅ |
+
+**待修复方向**：
+- 排查 `handleSelectProjectConversation` 与 `chat.conversations` 的交互
+- 确保 `chat.newConversation("code", projectId)` 不触发副作用创建普通对话
+- 考虑改用 find-or-create 模式：只在没有关联对话时新建
+
+#### 问题 2：OpenCode 模型选择后发送，UI 无数据显示
+
+**现象**：
+1. 桥接服务日志显示命令成功执行并返回数据
+2. 但前端聊天 UI 不显示任何内容（无新消息气泡）
+
+**桥接日志**：
+```
+[Bridge] 执行 OpenCode（流式）: hi (model=opencode/minimax-m2.5-free)
+[Bridge] 执行（流式）: opencode run --model opencode/minimax-m2.5-free "hi"
+[Bridge] 客户端连接已断开
+[Bridge] ERROR: Task exception... keepalive ping timeout
+```
+
+**根因分析**（已发现两个关键问题）：
+
+1. **WebSocket keepalive 超时断连**
+   - Tauri Rust 端 WebSocket 默认 keepalive ping 约 10 秒
+   - OpenCode CLI 首次执行耗时较长（下载模型等），期间无数据返回
+   - 桥接无数据返回 → 无 WebSocket 消息 → ping 超时 → 连接断开
+   - **临时修复**：已降级为同步 `execute_opencode`（非流式），但仍需验证
+
+2. **流式回调竞态条件**
+   - `useStreamingChat.sendMessage` 中先 `sendStreamingMessage` 后 `setMessageCallback`
+   - 桥接响应可能在回调注册前到达，导致数据丢失
+   - **临时修复**：已调整为先注册回调再发送消息，但仍需验证
+
+3. **可能的 `activeConversationId` 不匹配**
+   - `appendToLastAssistant` 依赖 `activeConversationId`
+   - 回调函数捕获的 `activeConversationId` 可能与当前活跃对话不一致
+   - 需要确认消息追加到正确的对话
+
+**待修复方向**：
+- 在桥接 `execute_opencode_streaming` 中添加定时心跳，防止 keepalive 超时
+- 或增加 Rust 端 WebSocket ping 超时时间
+- 使用 ref 而非 state 管理回调，确保闭包始终指向最新值
+- 添加日志追踪消息流转路径（前端→IPC→Rust→WS→Python→WS→Rust→事件→前端）
 
 ### ❌ 未解决 / 待办
 
 #### 高优先级
+- [ ] **问题 1 修复**：项目点击不产生多余普通对话
+  - 排查 `handleSelectProjectConversation` 的副作用
+  - 确保 projectId 关联正确
+- [ ] **问题 2 修复**：OpenCode 命令结果在前端显示
+  - 解决 WebSocket keepalive 超时
+  - 修复回调时序与 activeConversationId 匹配
 - [ ] 桥接服务与 Tauri 自动联动
   - 目前需手动启动 `npm run bridge`
   - 期望 Tauri 启动时自动拉起 Python 桥接进程
-- [ ] OpenCode CLI 真实对接验证
-  - `opencode --model <name> <command>` 参数传递已验证
-  - 需确认 `opencode providers list` 是否能获取模型列表
-  - 或支持用户通过配置手动添加可用模型
 
 #### 中优先级
 - [ ] Python 桥接服务对接真实 AI API（非 OpenCode）
 - [ ] 文件编辑与代码执行结果展示
 - [ ] 对话上下文管理与记忆
 - [ ] OpenCode CLI 版本检测与兼容性检查
-- [ ] 项目对话与项目目录的强关联验证
 
 #### 低优先级 / 未来规划
 - [ ] 系统托盘
