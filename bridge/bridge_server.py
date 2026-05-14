@@ -250,13 +250,12 @@ class OpenCodeBridge:
     async def _listen_events(self, session_id: str, msg_id: str, websocket):
         """
         监听 /event SSE，逐 token 转发。
-        delta 是累积内容，需要去重：只转发新增部分。
-        检测到 session.idle 后自动退出。
+        delta 是累积内容，用 (messageID, field) 去重，只发增量。
         """
         async with aiohttp.ClientSession() as s:
             async with s.get(f"{self.base_url}/event", timeout=aiohttp.ClientTimeout(total=300)) as resp:
                 buf = ""
-                last_for_part: dict[str, str] = {}  # partID → 上次已发内容
+                last_for_key: dict[str, str] = {}  # "msgID:field" → 上次已发内容
 
                 while True:
                     try:
@@ -268,28 +267,32 @@ class OpenCodeBridge:
                     buf += chunk.decode("utf-8", errors="replace")
                     while "\n\n" in buf:
                         block, buf = buf.split("\n\n", 1)
-                        etype, text, part_id = self._parse_sse_event_detailed(block)
-                        if text and part_id:
-                            # 去重：delta 是累积的，只发新增部分
-                            prev = last_for_part.get(part_id, "")
-                            if text.startswith(prev):
-                                new_text = text[len(prev):]
-                            else:
-                                new_text = text  # 不匹配就全发（兜底）
-                            last_for_part[part_id] = text
-                            if new_text:
-                                await send_response(websocket, msg_id, "stream", {"chunk": new_text})
-                        elif text:
-                            # 没有 partID 的老格式，直接发
-                            await send_response(websocket, msg_id, "stream", {"chunk": text})
-                        if etype == "session.status":
-                            props = self._get_event_properties(block) or {}
-                            status = props.get("status", {})
-                            if isinstance(status, dict) and status.get("type") == "idle":
-                                return
+                        etype, text, msg_id_field = self._parse_sse_event_detailed(block)
+                        if not text:
+                            # 检查 session idle
+                            if etype == "session.status":
+                                props = self._get_event_properties(block) or {}
+                                status = props.get("status", {})
+                                if isinstance(status, dict) and status.get("type") == "idle":
+                                    return
+                            continue
+
+                        # 去重：delta 是累积的，只发新增部分
+                        key = msg_id_field or f"default_{etype}"
+                        prev = last_for_key.get(key, "")
+                        if text.startswith(prev):
+                            new_text = text[len(prev):]
+                        else:
+                            new_text = text  # 不匹配就全发（兜底）
+                        last_for_key[key] = text
+                        if new_text:
+                            await send_response(websocket, msg_id, "stream", {"chunk": new_text})
 
     def _parse_sse_event_detailed(self, event_block: str) -> tuple[str | None, str | None, str | None]:
-        """解析 SSE 事件，返回 (event_type, content, partID)"""
+        """
+        解析 SSE 事件，返回 (event_type, delta_text, dedup_key)。
+        dedup_key = "messageID:field" 或 "partID" 或 None。
+        """
         for line in event_block.strip().split("\n"):
             if not line.startswith("data:"):
                 continue
@@ -300,8 +303,12 @@ class OpenCodeBridge:
                 if not isinstance(props, dict):
                     return (etype, None, None)
                 delta = props.get("delta") or props.get("text") or props.get("content")
-                part_id = props.get("partID")
-                return (etype, delta, part_id)
+                mid = props.get("messageID") or ""
+                fld = props.get("field") or ""
+                pid = props.get("partID") or ""
+                # 优先用 messageID:field，其次用 partID
+                dedup_key = f"{mid}:{fld}" if mid else (pid or None)
+                return (etype, delta, dedup_key)
             except json.JSONDecodeError:
                 pass
         return (None, None, None)
