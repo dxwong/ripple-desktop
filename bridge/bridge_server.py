@@ -228,7 +228,7 @@ class OpenCodeBridge:
                 payload = {"parts": [{"type": "text", "text": message}]}
                 if model and "/" in model:
                     parts = model.split("/", 1)
-                    payload["model"] = {"providerID": parts[0], "name": parts[1]}
+                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
