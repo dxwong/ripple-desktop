@@ -500,6 +500,12 @@ function LogViewer() {
           <button onClick={handleClear} className="text-xs text-content-tertiary hover:text-red-500 transition-colors">
             清空
           </button>
+          <button
+            onClick={() => { const el = scrollRef.current; if (el) { const r = document.createRange(); r.selectNodeContents(el); window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(r); } }}
+            className="text-xs text-content-tertiary hover:text-accent transition-colors"
+          >
+            全选
+          </button>
         </div>
       </div>
 

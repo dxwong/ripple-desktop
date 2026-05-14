@@ -648,12 +648,32 @@ async def handler(websocket):
         logger.error(f"连接异常: {e}")
 
 
+async def try_start_server():
+    """尝试启动 WebSocket 服务器，端口冲突时杀死旧进程重试"""
+    try:
+        return await websockets.serve(handler, HOST, PORT)
+    except OSError as e:
+        if "10048" in str(e) or "Address already in use" in str(e):
+            logger.warning(f"端口 {PORT} 被占用，尝试清理...")
+            # Windows: 杀死占用端口的进程
+            subprocess.run(f"netstat -ano | findstr :{PORT} | findstr LISTEN", shell=True, capture_output=True)
+            # 尝试用 taskkill 清理
+            result = subprocess.run(
+                f"for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{PORT} ^| findstr LISTEN') do taskkill /f /pid %a",
+                shell=True, capture_output=True, text=True,
+            )
+            logger.info(f"端口清理结果: {result.stdout.strip() or '无'} {result.stderr.strip() or ''}")
+            await asyncio.sleep(1)
+            return await websockets.serve(handler, HOST, PORT)
+        raise
+
+
 async def main():
     """启动 WebSocket 服务器"""
     logger.info(f"启动桥接服务: ws://{HOST}:{PORT}")
     logger.info("等待 Tauri 后端连接...")
 
-    async with websockets.serve(handler, HOST, PORT):
+    async with await try_start_server():
         await asyncio.Future()
 
 
