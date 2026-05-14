@@ -25,7 +25,14 @@ function App() {
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
-  // OpenCode 模型（手动输入，不再自动从配置读取）
+  // OpenCode 模型列表（从 opencode models 命令获取）
+  const [openCodeModels, setOpenCodeModels] = useState<{ id: string; name: string }[]>([
+    { id: "opencode/deepseek-v4-flash-free", name: "DeepSeek V4 Flash (免费)" },
+    { id: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 (免费)" },
+    { id: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super (免费)" },
+    { id: "opencode/ring-2.6-1t-free", name: "Ring 2.6 1T (免费)" },
+  ]);
+  // 当前选择的 OpenCode 模型
   const [openCodeModel, setOpenCodeModel] = useState("");
 
   // 获取当前会话关联的项目和模式
@@ -47,10 +54,12 @@ function App() {
       content,
       isOnline ? "bridge" : "simulate",
       isOnline ? bridge.sendMessage : undefined,
+      isOnline ? bridge.sendStreamingMessage : undefined,
+      isOnline ? bridge.setMessageCallback : undefined,
       projectDirectory,
       ocModel
     );
-  }, [bridge.status, bridge.sendMessage, chat.sendMessage, currentProject?.directory, isCodeMode, openCodeModel]);
+  }, [bridge.status, bridge.sendMessage, bridge.sendStreamingMessage, bridge.setMessageCallback, chat.sendMessage, currentProject?.directory, isCodeMode, openCodeModel]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
@@ -112,7 +121,7 @@ function App() {
             onSwitchModel={setActiveModel}
             chatMode={currentMode}
             project={currentProject}
-            openCodeModels={[]}
+            openCodeModels={openCodeModels}
             openCodeModel={openCodeModel}
             onSwitchOpenCodeModel={setOpenCodeModel}
           />

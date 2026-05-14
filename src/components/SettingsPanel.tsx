@@ -135,7 +135,7 @@ function SettingsPanel({
 
       {/* 弹窗 */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-        <div className="bg-surface-secondary dark:bg-surface-secondary-dark rounded-2xl shadow-elevated border border-border dark:border-border-dark w-full max-w-3xl h-[680px] flex flex-col animate-fade-in">
+        <div className="bg-surface-secondary dark:bg-surface-secondary-dark rounded-2xl shadow-elevated border border-border dark:border-border-dark w-full max-w-4xl h-[600px] flex flex-col animate-fade-in">
           {/* ===== 头部 ===== */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-border dark:border-border-dark">
             <h2 className="text-base font-semibold">设置</h2>
@@ -147,7 +147,7 @@ function SettingsPanel({
           {/* ===== 主体 ===== */}
           <div className="flex flex-1 min-h-0">
             {/* 左栏导航 */}
-            <nav className="w-44 shrink-0 border-r border-border dark:border-border-dark p-3 space-y-1 overflow-y-auto">
+            <nav className="w-52 shrink-0 border-r border-border dark:border-border-dark p-3 space-y-1 overflow-y-auto">
               {NAV_ITEMS.map((item) => (
                 <button
                   key={item.key}

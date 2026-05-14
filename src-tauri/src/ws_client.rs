@@ -117,6 +117,23 @@ impl WebSocketClient {
         Ok(response)
     }
 
+    /// 发送消息但不等待响应（用于流式输出）
+    pub async fn send_no_wait(&mut self, request: BridgeRequest) -> Result<(), String> {
+        let stream = self.stream.as_mut()
+            .ok_or_else(|| "未连接到桥接服务".to_string())?;
+
+        // 序列化并发送请求
+        let json = serde_json::to_string(&request)
+            .map_err(|e| format!("序列化请求失败: {}", e))?;
+        
+        stream.send(Message::Text(json.into()))
+            .await
+            .map_err(|e| format!("发送消息失败: {}", e))?;
+        
+        log::info!("已发送消息（不等待响应）: {}", request.msg_type);
+        Ok(())
+    }
+
     /// 处理从桥接服务收到的消息（由事件循环调用）
     pub async fn handle_incoming(&mut self, response: BridgeResponse) {
         if let Some(sender) = self.pending_requests.remove(&response.id) {

@@ -91,13 +91,9 @@ function Sidebar({
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  /** 新建对话：有激活项目时创建编程模式，否则普通对话 */
+  /** 新建对话：+号始终创建普通对话模式（项目对话通过点击项目名称进入） */
   const handleNewConversation = () => {
-    if (activeProjectId && activeProjectId !== "default") {
-      onNewConversation("code", activeProjectId);
-    } else {
-      onNewConversation("chat");
-    }
+    onNewConversation("chat");
   };
 
   /** 打开新建项目弹窗 */

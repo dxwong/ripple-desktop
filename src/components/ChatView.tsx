@@ -21,7 +21,7 @@ interface ChatViewProps {
   /** 当前关联的项目 */
   project?: Project | null;
   /** OpenCode 可用模型列表 */
-  openCodeModels?: { name: string; provider?: string }[];
+  openCodeModels?: { id: string; name: string; provider?: string }[];
   /** 当前选中的 OpenCode 模型 */
   openCodeModel?: string;
   /** 切换 OpenCode 模型 */

@@ -117,9 +117,9 @@ def get_opencode_models(config: dict = None) -> list[dict]:
 
 # ==================== CLI 执行 ====================
 
-async def execute_opencode(command: str, model: str = None, timeout: int = 120) -> dict:
+async def execute_opencode(command: str, model: str = None, timeout: int = 300) -> dict:
     """
-    执行 OpenCode CLI 命令
+    执行 OpenCode CLI 命令（非流式，等待完成后返回）
 
     Args:
         command: 要执行的命令字符串
@@ -130,11 +130,13 @@ async def execute_opencode(command: str, model: str = None, timeout: int = 120) 
         {"stdout": "...", "stderr": "...", "returncode": 0}
     """
     try:
-        # 构建命令: opencode [--model <name>] <command>
-        cmd_parts = [OPENCODE_CMD]
+        # 构建命令: opencode run [--model <name>] "<command>"
+        # 命令内容需要用引号包围，防止被解析为路径
+        cmd_parts = [OPENCODE_CMD, "run"]
         if model:
             cmd_parts.extend(["--model", model])
-        cmd_parts.append(command)
+        # 用双引号包围命令内容，处理空格和特殊字符
+        cmd_parts.append(f'"{command}"')
         cmd_str = " ".join(cmd_parts)
 
         logger.info(f"执行: {cmd_str}")
@@ -172,6 +174,85 @@ async def execute_opencode(command: str, model: str = None, timeout: int = 120) 
             "stderr": f"执行命令异常: {str(e)}",
             "returncode": -1,
         }
+
+
+async def execute_opencode_streaming(websocket, msg_id: str, command: str, model: str = None, timeout: int = 300):
+    """
+    执行 OpenCode CLI 命令（流式输出）
+    
+    Args:
+        websocket: WebSocket 连接对象
+        msg_id: 消息 ID
+        command: 要执行的命令字符串
+        model: 指定使用的模型名称（对应 --model 参数）
+        timeout: 超时时间（秒）
+    """
+    try:
+        # 构建命令: opencode run [--model <name>] "<command>"
+        cmd_parts = [OPENCODE_CMD, "run"]
+        if model:
+            cmd_parts.extend(["--model", model])
+        cmd_parts.append(f'"{command}"')
+        cmd_str = " ".join(cmd_parts)
+
+        logger.info(f"执行（流式）: {cmd_str}")
+
+        proc = await asyncio.create_subprocess_shell(
+            cmd_str,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # 将 stderr 合并到 stdout
+        )
+
+        # 流式读取输出
+        buffer = ""
+        start_time = time.time()
+        
+        while True:
+            # 检查超时
+            if time.time() - start_time > timeout:
+                proc.kill()
+                await send_response(websocket, msg_id, "error", {"error": f"命令执行超时（{timeout}秒）"})
+                return
+
+            # 读取输出（非阻塞）
+            try:
+                data = await asyncio.wait_for(
+                    proc.stdout.read(1024),
+                    timeout=1.0  # 每次读取超时 1 秒
+                )
+                if not data:
+                    # 输出流结束
+                    break
+                buffer += data.decode("utf-8", errors="replace")
+                
+                # 按行发送（找到换行符就发送）
+                while "\n" in buffer:
+                    line_end = buffer.index("\n")
+                    line = buffer[:line_end]
+                    buffer = buffer[line_end + 1:]
+                    if line.strip():  # 只发送非空行
+                        await send_response(websocket, msg_id, "stream", {"chunk": line})
+            except asyncio.TimeoutError:
+                # 继续等待，可能还在生成输出
+                continue
+
+        # 发送剩余的缓冲内容
+        if buffer.strip():
+            await send_response(websocket, msg_id, "stream", {"chunk": buffer})
+
+        # 等待进程结束
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+        
+        # 发送结束信号
+        await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": proc.returncode or 0})
+        
+    except FileNotFoundError:
+        await send_response(websocket, msg_id, "error", {"error": f"未找到 OpenCode CLI，请确保 '{OPENCODE_CMD}' 已安装且在 PATH 中"})
+    except Exception as e:
+        await send_response(websocket, msg_id, "error", {"error": f"执行命令异常: {str(e)}"})
 
 
 async def execute_shell(command: str, timeout: int = 60) -> dict:
@@ -224,6 +305,16 @@ async def handle_message(websocket, message: dict) -> None:
         logger.info(f"执行 OpenCode: {command}" + (f" (model={model})" if model else ""))
         result = await execute_opencode(command, model=model)
         await send_response(websocket, msg_id, "ok", result)
+
+    elif msg_type == "execute_opencode_streaming":
+        command = data.get("command", "")
+        if not command:
+            await send_response(websocket, msg_id, "error", {"error": "缺少 command 参数"})
+            return
+        model = data.get("model", None)  # 可选: 指定模型
+        logger.info(f"执行 OpenCode（流式）: {command}" + (f" (model={model})" if model else ""))
+        # 流式执行不需要 await，直接启动协程
+        asyncio.create_task(execute_opencode_streaming(websocket, msg_id, command, model=model))
 
     elif msg_type == "get_opencode_config":
         """获取 OpenCode 配置（含可用模型列表）"""

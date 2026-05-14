@@ -286,6 +286,33 @@ async fn send_to_bridge(
     }))
 }
 
+/// 发送消息到桥接服务（不等待响应，用于流式输出）
+#[tauri::command]
+async fn send_to_bridge_no_wait(
+    state: State<'_, SharedWsClient>,
+    msg_type: String,
+    data: serde_json::Value,
+) -> Result<String, String> {
+    let mut client = state.lock().await;
+    
+    // 检查连接状态
+    if client.state != WsConnectionState::Connected {
+        return Err("未连接到桥接服务，请先调用 connect_bridge".to_string());
+    }
+
+    // 创建请求
+    let request = BridgeRequest {
+        id: uuid::Uuid::new_v4().to_string(),
+        msg_type,
+        data,
+    };
+
+    // 只发送不等待响应
+    client.send_no_wait(request).await?;
+
+    Ok("消息已发送".to_string())
+}
+
 /// 后台事件循环：持续读取 WebSocket 消息并转发到前端
 async fn ws_event_loop(client: SharedWsClient, app: AppHandle) {
     loop {
@@ -352,6 +379,7 @@ pub fn run() {
             disconnect_bridge,
             get_bridge_status,
             send_to_bridge,
+            send_to_bridge_no_wait,
             save_config,
             load_config,
             read_opencode_config,

@@ -150,6 +150,8 @@ export function useStreamingChat() {
       content: string,
       mode: "simulate" | "bridge" = "simulate",
       bridgeSend?: (type: string, data: any) => Promise<any>,
+      bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
+      bridgeSetCallback?: (callback: (msg: any) => void) => void,
       projectDirectory?: string,
       openCodeModel?: string
     ) => {
@@ -162,23 +164,42 @@ export function useStreamingChat() {
       addMessage("user", content);
 
       try {
-        // 有 OC 模型 → 优先走桥接
-        if (openCodeModel && bridgeSend) {
+        // 有 OC 模型 → 优先走桥接流式输出
+        if (openCodeModel && bridgeSend && bridgeSendStreaming) {
           try {
             const payload: any = { command: content, cwd: projectDirectory, model: openCodeModel };
-            const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout || response?.stderr || "（无输出）";
-            appendToLastAssistant(result);
-            return; // 成功则结束
+            
+            // 重要: 先注册回调，再发送消息（防止竞态条件导致丢失前几帧）
+            const messageHandler = (msg: any) => {
+              if (msg.status === "stream") {
+                appendToLastAssistant(msg.data?.chunk || "");
+              } else if (msg.status === "ok") {
+                // 流式结束
+              } else if (msg.status === "error") {
+                appendToLastAssistant(`\n\n**OpenCode 执行错误**: ${msg.data?.error || "未知错误"}`);
+              }
+            };
+            if (bridgeSetCallback) {
+              bridgeSetCallback(messageHandler);
+            }
+            
+            // 再发送流式消息
+            await bridgeSendStreaming("execute_opencode_streaming", payload);
+            
+            return; // 流式响应由回调处理
           } catch (e: any) {
             appendToLastAssistant(`**OpenCode 执行错误**: ${e.message || "桥接服务不可用"}`);
             return;
           }
         }
 
-        // 有 OC 模型但桥接未连接 → 降级模拟，提示需要桥接
+        // 有 OC 模型但桥接未连接 → 显示错误提示并退出
         if (openCodeModel && !bridgeSend) {
-          appendToLastAssistant("> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。当前返回模拟回复。\n\n");
+          appendToLastAssistant("> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。\n\n");
+          appendToLastAssistant("**请先连接桥接服务**：\n");
+          appendToLastAssistant("1. 在侧边栏点击 [连接桥接服务] 按钮\n");
+          appendToLastAssistant("2. 确保 Python 桥接服务已启动 (`npm run bridge`)\n");
+          return; // 不再继续模拟回复
         }
 
         // 模拟模式（无 OC 模型 或 OC 模型降级）

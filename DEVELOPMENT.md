@@ -20,6 +20,7 @@
 - [x] 代码块 Monaco 编辑器预览（流式用轻量 pre，完成用 Monaco）
 - [x] 对话历史管理（新建/切换/删除/搜索）
 - [x] 编程开发模式对话 & 普通对话模式
+- [x] **OpenCode CLI 流式输出支持**（实时显示执行结果）
 
 #### 输入框
 - [x] 发送按钮始终显示（无文字时置灰）
@@ -28,6 +29,7 @@
 - [x] OpenCode 模型选择器仅代码模式显示
 - [x] 选中 OC 模型时对话模型禁用（二选一逻辑）
 - [x] 手动输入 OpenCode 模型名称
+- [x] **模型选择器传递模型 ID 而非显示名称**
 
 #### 模型配置管理
 - [x] 多模型配置保存/编辑/删除/切换
@@ -58,14 +60,18 @@
 #### 桥接服务
 - [x] Python WebSocket 服务（bridge_server.py）
 - [x] `execute_opencode` 支持 `--model` 参数
+- [x] **`execute_opencode_streaming` 流式执行（实时输出）**
 - [x] `get_opencode_config` 读取 OpenCode 配置
 - [x] 文件读写（read_file / write_file / list_dir）
 - [x] Tauri IPC 桥接命令注册
+- [x] **超时时间优化（300秒）**
 
 #### Rust 后端
 - [x] `save_config` / `load_config` JSON 配置读写
 - [x] `read_opencode_config` OpenCode 配置直读
 - [x] `connect_bridge` / `disconnect_bridge` / `send_to_bridge`
+- [x] **`send_to_bridge_no_wait` 不等待响应的发送（流式专用）**
+- [x] WebSocket 事件循环转发 `bridge-message` 事件
 - [x] 对话框插件（文件夹选择器）
 
 #### UI 优化
@@ -80,6 +86,9 @@
   - `opencode providers list` 只列出自定义模型，不支持获取免费模型列表
   - **当前方案**：用户手动输入模型名称，发送时携带 `--model` 参数
   - 需桥接服务连接后才能真实执行，未连接时降级为模拟回复并提示
+  - **流式输出已实现**：`execute_opencode_streaming` 命令支持实时显示
+  - **问题**：CLI 命令执行成功且返回数据，但前端 UI 无法显示聊天记录
+    - 排查方向：WebSocket 消息转发、事件监听、状态更新、消息回调处理
 
 ### ❌ 未解决 / 待办
 
@@ -115,7 +124,7 @@
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
-| v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择 |
+| v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择、流式输出 |
 | v0.1.0 | - | 初始版本：基础聊天、多模型配置、双主题、流式对话 |
 
 ---
@@ -132,27 +141,70 @@
 │  └── hooks/                                     │
 │      ├── useStreamingChat.ts → 流式对话管理      │
 │      ├── useBridge.ts      → Tauri IPC 桥接      │
+│      │   ├── sendMessage()          → 同步请求    │
+│      │   ├── sendStreamingMessage() → 流式请求    │
+│      │   └── setMessageCallback()   → 响应回调    │
 │      ├── useSettings.ts    → 设置+模型持久化     │
 │      └── useProjects.ts    → 项目持久化          │
 ├── Tauri (Rust) ─────────────────────────────────┤
-│  lib.rs: IPC 命令 (桥接/配置/OpenCode)          │
+│  lib.rs: IPC 命令                                │
+│  │   ├── send_to_bridge          → 等待响应      │
+│  │   └── send_to_bridge_no_wait  → 不等待响应    │
 │  ws_client.rs: WebSocket → Python 桥接           │
+│  │   ├── send_request()   → 等待响应            │
+│  │   └── send_no_wait()   → 不等待响应          │
 ├── Python ───────────────────────────────────────┤
 │  bridge_server.py: WebSocket 服务 + OpenCode CLI │
+│  │   ├── execute_opencode()           → 同步执行  │
+│  │   └── execute_opencode_streaming() → 流式执行  │
 └─────────────────────────────────────────────────┘
 ```
 
-### 数据流（编程开发模式）
+### 数据流（编程开发模式 - 同步）
 
 ```
 用户输入 → MessageInput → App.handleSendMessage
-  → useStreamingChat.sendMessage(model参数)
+  → useStreamingChat.sendMessage(opencode模型)
   → useBridge.sendMessage("execute_opencode", {command, cwd, model})
   → Tauri IPC invoke("send_to_bridge")
-  → Rust WebSocket → Python Bridge
-  → opencode [--model <name>] <command>
-  → 结果返回 → 追加到对话流
+  → Rust WebSocket send_request() → Python Bridge
+  → opencode run [--model <id>] "<command>"
+  → 完整结果返回 → 追加到对话
 ```
+
+### 数据流（编程开发模式 - 流式）
+
+```
+用户输入 → MessageInput → App.handleSendMessage
+  → useStreamingChat.sendMessage(opencode模型)
+  → useBridge.setMessageCallback(handler)  // 设置响应回调
+  → useBridge.sendStreamingMessage("execute_opencode_streaming", {command, cwd, model})
+  → Tauri IPC invoke("send_to_bridge_no_wait")  // 不等待响应
+  → Rust WebSocket send_no_wait() → Python Bridge
+  → opencode run [--model <id>] "<command>"
+  → Python 逐行读取输出 → send_response(status="stream", data={chunk})
+  → Rust 事件循环 → app.emit("bridge-message")
+  → 前端事件监听 → callback → appendToLastAssistant(chunk)
+  → 执行完成 → send_response(status="ok")
+```
+
+### 关键技术要点
+
+#### 模型选择器
+- 模型列表结构：`{ id: string, name: string, provider?: string }`
+- 显示给用户的是 `name`（友好名称）
+- 传递给 OpenCode CLI 的是 `id`（完整模型标识，如 `opencode/deepseek-v4-flash-free`）
+
+#### 流式输出设计
+- **避免超时断开**：使用 `send_to_bridge_no_wait` 命令，发送后立即返回
+- **实时响应**：Python 端按行读取命令输出，逐行发送 `stream` 状态消息
+- **事件驱动**：Rust 端将所有非 pending 消息转发为 `bridge-message` 事件
+- **回调处理**：前端通过 `setMessageCallback` 注册回调，处理流式数据
+
+#### 超时配置
+- Python 命令执行超时：300 秒（可配置）
+- Rust WebSocket 响应超时：120 秒
+- Tauri invoke 超时：180 秒（流式请求不适用）
 
 ### 配置持久化
 
@@ -160,3 +212,61 @@
 Tauri 环境:  useStore → Rust save_config → {app_data_dir}/config.json
 浏览器环境:  useStore → localStorage → key: ripple-*
 ```
+
+---
+
+## 快速开始
+
+### 前置条件
+- Node.js >= 20
+- Python >= 3.10
+- OpenCode CLI 已安装并配置
+
+### 启动开发
+
+```bash
+# 安装依赖
+npm install
+
+# 启动桥接服务（新开终端）
+npm run bridge
+
+# 启动开发服务器
+npm run tauri dev
+```
+
+### 构建生产版本
+
+```bash
+npm run tauri build
+```
+
+---
+
+## 命令参考
+
+### IPC 命令
+
+| 命令 | 功能 | 参数 | 返回 |
+|------|------|------|------|
+| `connect_bridge` | 连接桥接服务 | - | `void` |
+| `disconnect_bridge` | 断开桥接服务 | - | `void` |
+| `get_bridge_status` | 获取连接状态 | - | `"connected" \| "disconnected" \| "connecting" \| "error"` |
+| `send_to_bridge` | 发送消息并等待响应 | `msgType: string, data: any` | `{ status: string, data: any }` |
+| `send_to_bridge_no_wait` | 发送消息不等待响应 | `msgType: string, data: any` | `"消息已发送"` |
+| `save_config` | 保存配置 | `config: string` | `void` |
+| `load_config` | 加载配置 | - | `string` |
+| `read_opencode_config` | 读取 OpenCode 配置 | - | `string` |
+
+### Python 桥接消息类型
+
+| 类型 | 功能 | 参数 | 响应 |
+|------|------|------|------|
+| `ping` | 心跳检测 | - | `{ pong: number }` |
+| `execute_opencode` | 执行 OpenCode（同步） | `command, model?, cwd?` | `{ stdout, stderr, returncode }` |
+| `execute_opencode_streaming` | 执行 OpenCode（流式） | `command, model?, cwd?` | 多个 `stream` + 一个 `ok`/`error` |
+| `get_opencode_config` | 获取 OpenCode 配置 | - | `{ models, config }` |
+| `execute_shell` | 执行 Shell 命令 | `command` | `{ stdout, stderr, returncode }` |
+| `read_file` | 读取文件 | `path` | `{ path, content }` |
+| `write_file` | 写入文件 | `path, content` | `{ path, written }` |
+| `list_dir` | 列出目录 | `path` | `{ path, entries }` |
