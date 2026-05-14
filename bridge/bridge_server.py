@@ -141,19 +141,35 @@ class OpenCodeBridge:
         if await self._health_check():
             return True
 
+        # 清理残留的 opencode serve 进程（防止端口冲突）
+        logger.info(f"清理残留 opencode 进程...")
+        if os.name == "nt":
+            subprocess.run(
+                "taskkill /f /im node.exe 2>nul | findstr opencode >nul",
+                shell=True, capture_output=True,
+            )
+        else:
+            subprocess.run("pkill -f 'opencode serve' 2>/dev/null", shell=True)
+        await asyncio.sleep(1)
+
         logger.info(f"启动 opencode serve :{self.port}...")
         self._server_process = subprocess.Popen(
             f"{OPENCODE_CMD} serve --port {self.port}",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            shell=True,  # 通过 cmd.exe 执行，确保 PATH 生效
+            shell=True,
         )
 
-        for _ in range(20):
+        for _ in range(30):
             await asyncio.sleep(0.5)
             if await self._health_check():
                 logger.info("opencode serve 就绪")
                 return True
+
+            # 检查进程是否已退出
+            if self._server_process.poll() is not None:
+                logger.error(f"opencode serve 进程异常退出, code={self._server_process.returncode}")
+                break
 
         logger.error("opencode serve 启动失败")
         return False
