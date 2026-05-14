@@ -226,8 +226,9 @@ class OpenCodeBridge:
             # 发送消息（返回 JSON，非流式）
             async with aiohttp.ClientSession() as session:
                 payload = {"parts": [{"type": "text", "text": message}]}
-                if model:
-                    payload["model"] = {"name": model}
+                if model and "/" in model:
+                    parts = model.split("/", 1)
+                    payload["model"] = {"providerID": parts[0], "name": parts[1]}
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
