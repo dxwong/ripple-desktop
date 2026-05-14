@@ -143,9 +143,10 @@ class OpenCodeBridge:
 
         logger.info(f"启动 opencode serve :{self.port}...")
         self._server_process = subprocess.Popen(
-            ["opencode", "serve", "--port", str(self.port)],
+            f"{OPENCODE_CMD} serve --port {self.port}",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            shell=True,  # 通过 cmd.exe 执行，确保 PATH 生效
         )
 
         for _ in range(20):
