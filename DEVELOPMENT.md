@@ -180,11 +180,30 @@ OpenCode CLI 执行完命令后因 stdin 未关闭而进入交互 shell（显示
 - `execute_opencode`、`execute_opencode_streaming`、`execute_shell` 均添加 `stdin=subprocess.DEVNULL`
 - CLI 执行完单条命令后自动退出，不再等待输入
 
+**④ Rust 双锁架构（彻底消除死锁）**：
+**根因**：`ws_event_loop` 和 `send_to_bridge`/`send_to_bridge_no_wait` 共用一把 `SharedWsClient` 的 `Mutex`。当 `ws_event_loop` 持有锁等待 WebSocket 消息时，任何发送操作都无法获取锁 → 死锁。
+
+**方案**：将 WebSocket 流从 `WebSocketClient` 中分离，使用两把独立锁：
+
+| 锁 | 保护对象 | 谁持有 |
+|------|---------|-------|
+| `client` 锁 | `state`（连接状态）+ `pending_requests` | 短暂持锁设/取 pending |
+| `ws_stream` 锁 | WebSocket 流（收发消息） | 发消息或读消息时持锁 |
+
+**各路径的锁行为**：
+```
+ws_event_loop:       ws_stream锁(读消息) → client锁(路由) → 释放 → 循环
+send_to_bridge:      client锁(设pending) → ws_stream锁(发消息) → 释放两锁 → 无锁等响应
+send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
+```
+
+两路径只在各自需要的瞬间持锁，`ws_event_loop` 读消息时 `send_to_bridge` 可自由设 pending 和发消息，互不阻塞。
+
 **涉及文件**：
-- `src-tauri/src/lib.rs`：`send_to_bridge` 分阶段执行
-- `src-tauri/src/ws_client.rs`：`stream` 字段改为 `pub(crate)`
-- `src/hooks/useStreamingChat.ts`：简化同步路径，移除流式分支
+- `src-tauri/src/lib.rs`：适配新架构，命令简化
+- `src-tauri/src/ws_client.rs`：`SharedWsClient` 重构为双锁，移除旧 `WebSocketClient` 中的 stream
 - `bridge/bridge_server.py`：三个子进程函数加 `stdin=subprocess.DEVNULL`
+- `src/hooks/useStreamingChat.ts`：简化同步路径
 
 ### ❌ 未解决 / 待办
 
