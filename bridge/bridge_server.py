@@ -299,33 +299,35 @@ class OpenCodeBridge:
                 logger.info(f"SSE 流结束，共 {total_events} 个事件, {token_count} 个 token")
 
     def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
-        """解析单个 SSE 事件块，返回 (event_type, content_text)"""
+        """
+        解析 SSE 事件块，返回 (event_type, content_text)。
+        
+        实际 SSE 格式（无 event: 行，类型在 JSON data 中）：
+          data: {"type":"message.part.delta","properties":{"delta":"token"}}
+        """
         lines = event_block.strip().split("\n")
         event_type = None
-        data = None
+        raw_data = None
 
         for line in lines:
-            if line.startswith("event:"):
-                event_type = line[6:].strip()
-            elif line.startswith("data:"):
+            if line.startswith("data:"):
                 try:
-                    data = json.loads(line[5:].strip())
+                    raw_data = json.loads(line[5:].strip())
                 except json.JSONDecodeError:
                     pass
 
-        if data:
-            # 尝试多种字段名提取文本内容
-            part = data.get("part", {})
-            if isinstance(part, dict):
-                content = part.get("content") or part.get("text") or part.get("delta")
-                if content:
-                    return (event_type or "unknown", content)
+        if not raw_data:
+            return (None, None)
 
-            # 顶层字段
-            for key in ("content", "text", "delta", "message"):
-                val = data.get(key)
-                if isinstance(val, str) and val.strip():
-                    return (event_type or "unknown", val)
+        # 事件类型在 data.type 中（区别于 SSE 的 event: 行）
+        event_type = raw_data.get("type") or raw_data.get("event")
+
+        # 内容在 data.properties.delta 中
+        props = raw_data.get("properties", {})
+        if isinstance(props, dict):
+            delta = props.get("delta") or props.get("text") or props.get("content")
+            if delta:
+                return (event_type, delta)
 
         return (event_type, None)
 
