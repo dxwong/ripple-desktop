@@ -1,0 +1,230 @@
+/* Inter 字体（使用 swap 策略避免阻塞渲染） */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ========== 基础样式 ========== */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    /* 字体优先级：系统原生字体优先，避免 Web 字体渲染模糊 */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+    /* Windows 上移除 antialiased，使用系统原生渲染（更清晰） */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+    text-rendering: optimizeLegibility;
+    font-size: 15px;
+  }
+
+  body {
+    @apply bg-surface dark:bg-surface-dark text-content dark:text-content-dark;
+    overflow: hidden;
+    user-select: none;
+    font-weight: 450;
+  }
+
+  /* 滚动容器：启用 CSS 滚动锚定，防止内容变化时滚动位置跳跃 */
+  .scroll-anchor {
+    overflow-anchor: auto;
+  }
+
+  /* 可选中文本 */
+  .selectable-text {
+    user-select: text;
+  }
+
+  /* 字体渲染优化：仅对较小的文字禁用抗锯齿可能导致模糊，所以统一用 auto */
+  .text-crisp {
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+  }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-black/15 dark:bg-white/15 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-black/25 dark:bg-white/25;
+  }
+}
+
+/* ========== 组件样式 ========== */
+@layer components {
+  /* 侧边栏按钮 */
+  .sidebar-btn {
+    @apply flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-sm
+           text-content-secondary dark:text-content-secondary-dark
+           hover:bg-black/5 dark:hover:bg-white/5
+           active:bg-black/10 dark:active:bg-white/10
+           transition-colors duration-150
+           font-medium tracking-normal;
+  }
+
+  .sidebar-btn.active {
+    @apply bg-accent-muted dark:bg-accent-muted-dark
+           text-content dark:text-content-dark;
+  }
+
+  /* 图标按钮 */
+  .icon-btn {
+    @apply p-1.5 rounded-lg
+           text-content-tertiary dark:text-content-tertiary-dark
+           hover:bg-black/5 dark:hover:bg-white/5
+           hover:text-content-secondary dark:hover:text-content-secondary-dark
+           active:bg-black/10 dark:active:bg-white/10
+           transition-all duration-150;
+  }
+
+  /* 发送按钮 — 始终可见，无文字时降低饱和度但不透明 */
+  .send-btn {
+    @apply p-2 rounded-xl
+           text-white
+           transition-all duration-200 ease-out
+           disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .send-btn:not(:disabled) {
+    @apply bg-accent hover:bg-accent-hover
+           shadow-sm hover:shadow-md
+           active:scale-95;
+  }
+
+  .send-btn:disabled {
+    @apply bg-content-tertiary dark:bg-content-tertiary-dark;
+  }
+
+  /* 消息输入容器 */
+  .input-container {
+    @apply flex items-end gap-2 px-4 py-2.5
+           bg-surface-secondary dark:bg-surface-secondary-dark
+           border border-border dark:border-border-dark
+           rounded-2xl
+           transition-all duration-200;
+  }
+
+  .input-container:focus-within {
+    @apply border-accent/50 dark:border-accent/50
+           shadow-[0_0_0_3px_rgba(217,119,87,0.1)];
+  }
+
+  /* Markdown 渲染 — 加大字号提升阅读体验 */
+  .markdown-body {
+    @apply text-[15px] leading-relaxed;
+  }
+
+  .markdown-body h1 { @apply text-xl font-semibold mt-5 mb-2; }
+  .markdown-body h2 { @apply text-lg font-semibold mt-4 mb-2; }
+  .markdown-body h3 { @apply text-base font-semibold mt-3 mb-1.5; }
+
+  .markdown-body p {
+    @apply mb-2 leading-relaxed;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply pl-5 mb-2;
+  }
+
+  .markdown-body ul { @apply list-disc; }
+  .markdown-body ol { @apply list-decimal; }
+  .markdown-body li { @apply mb-0.5; }
+
+  .markdown-body a {
+    @apply text-accent underline decoration-accent/30 hover:decoration-accent/60 transition-all;
+  }
+
+  .markdown-body blockquote {
+    @apply border-l-[3px] border-accent/40 pl-3.5 italic
+           text-content-secondary dark:text-content-secondary-dark my-2;
+  }
+
+  .markdown-body table {
+    @apply w-full border-collapse mb-2 text-sm;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-border dark:border-border-dark px-3 py-1.5 text-left;
+  }
+
+  .markdown-body th {
+    @apply bg-message-ai dark:bg-message-ai-dark font-medium;
+  }
+
+  .markdown-body hr {
+    @apply border-border dark:border-border-dark my-4;
+  }
+
+  .markdown-body pre {
+    @apply my-3 rounded-xl overflow-hidden
+           bg-message-code dark:bg-message-code-dark
+           border border-border dark:border-border-dark;
+  }
+
+  .markdown-body pre > div {
+    @apply p-0 !important;
+  }
+
+  .markdown-body pre code {
+    @apply block p-4 overflow-x-auto text-[14px] leading-relaxed font-mono;
+  }
+
+  .markdown-body :not(pre) > code {
+    @apply px-1.5 py-0.5 rounded-md
+           bg-message-code dark:bg-message-code-dark
+           text-accent text-[14px] font-mono;
+  }
+
+  .markdown-body img {
+    @apply max-w-full rounded-lg my-2;
+  }
+}
+
+/* ========== 标题栏拖拽区域 ========== */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 流式内容容器：防止增量更新导致布局抖动 */
+.streaming-content {
+  overflow-anchor: auto;
+  contain: layout style;
+}
+
+/* 已完成消息：隔离布局计算，减少回流影响 */
+.message-complete {
+  contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: 100px;
+}
+
+/* ========== 动画 ========== */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-enter {
+  animation: fadeIn 0.2s ease-out;
+}
