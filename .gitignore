@@ -21,3 +21,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Python
+bridge/__pycache__/
+*.pyc
+
+# OpenCode auto-generated
+chat_log.txt

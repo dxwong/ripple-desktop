@@ -1,6 +1,6 @@
 # 开发进展
 
-> 版本: 0.2.0 | 更新: 2026-05-14
+> 版本: 0.2.1 | 更新: 2026-05-14
 
 ---
 
@@ -205,6 +205,21 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 - `bridge/bridge_server.py`：三个子进程函数加 `stdin=subprocess.DEVNULL`
 - `src/hooks/useStreamingChat.ts`：简化同步路径
 
+### ⚠️ 已知限制
+
+#### OpenCode 流式非实时
+`opencode run` 的流式输出不是逐 token 实时流，而是：
+1. 先静默执行 agent 推理（20-30 秒无输出）
+2. 一次性吐出完整回答
+
+这是因为 opencode CLI 是 agent 模式，内部会思考、执行 shell 命令、生成完整回答后再输出，而非像 ChatGPT 那样逐字生成。
+
+#### bridge_server.py 的 import re
+`_strip_ansi` 函数使用 `re.sub()`，文件顶部必须有 `import re`（曾漏掉导致崩溃）。
+
+#### Rust 后端锁架构（已修复）
+WebSocket 事件循环独占 stream，通过 mpsc channel 接收发送命令，`tokio::select!` 同时处理收发。详见上方修复记录。
+
 ### ❌ 未解决 / 待办
 
 #### 高优先级
@@ -214,9 +229,9 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 
 #### 中优先级
 - [ ] Python 桥接服务对接真实 AI API（非 OpenCode）
-- [ ] 文件编辑与代码执行结果展示
-- [ ] 对话上下文管理与记忆
+  - 跳过 opencode CLI，前端直接调大模型 API，可获真实流式效果
 - [ ] OpenCode CLI 版本检测与兼容性检查
+- [ ] 流式输出期间显示"思考中……"提示（目前 20-30 秒静默，用户无反馈）
 
 #### 低优先级 / 未来规划
 - [ ] 系统托盘
@@ -235,6 +250,7 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
 | v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择、流式输出 |
+| v0.2.1 | 2026-05-14 | Bug 修复：项目即对话、Rust 锁死锁（channel+select! 架构）、桥接流式清洗输出 |
 | v0.1.0 | - | 初始版本：基础聊天、多模型配置、双主题、流式对话 |
 
 ---
