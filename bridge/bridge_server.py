@@ -225,8 +225,10 @@ class OpenCodeBridge:
                     await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {error}"})
                     return
 
-                # SSE 流式解析：行缓冲 + \n\n 事件分隔
+                content_type = resp.headers.get("Content-Type", "未知")
+                logger.info(f"HTTP {resp.status} Content-Type: {content_type}")
                 logger.info("SSE 连接建立，开始读取流...")
+
                 buffer = ""
                 token_count = 0
                 chunk_count = 0
@@ -239,10 +241,14 @@ class OpenCodeBridge:
                         continue
 
                     text = chunk.decode("utf-8", errors="replace")
+                    if chunk_count <= 3:
+                        logger.info(f"原始 chunk #{chunk_count}: {text[:200]}")
                     buffer += text
 
                     while "\n\n" in buffer:
                         event_block, buffer = buffer.split("\n\n", 1)
+                        if token_count == 0 and chunk_count <= 3:
+                            logger.info(f"SSE 事件块: {event_block[:200]}")
                         event_type, content = self._parse_sse_event(event_block)
                         if event_type == "message.part.delta" and content:
                             token_count += 1
