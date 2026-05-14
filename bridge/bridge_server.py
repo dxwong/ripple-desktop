@@ -25,6 +25,12 @@ except ImportError:
     print("请先安装依赖: pip install -r requirements.txt")
     sys.exit(1)
 
+try:
+    import aiohttp
+except ImportError:
+    print("请先安装依赖: pip install -r requirements.txt")
+    sys.exit(1)
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -116,6 +122,152 @@ def get_opencode_models(config: dict = None) -> list[dict]:
     return models
 
 
+# ==================== OpenCode Serve 管理 ====================
+
+class OpenCodeBridge:
+    """管理 opencode serve 进程 + SSE 流式通信"""
+
+    def __init__(self, port: int = 4096, host: str = "127.0.0.1"):
+        self.port = port
+        self.host = host
+        self.base_url = f"http://{host}:{port}"
+        self._server_process: subprocess.Popen | None = None
+        self._session_id: str | None = None
+
+    # ---------- 服务生命周期 ----------
+
+    async def ensure_server(self) -> bool:
+        """确保 serve 服务运行，未运行则启动"""
+        if await self._health_check():
+            return True
+
+        logger.info(f"启动 opencode serve :{self.port}...")
+        self._server_process = subprocess.Popen(
+            ["opencode", "serve", "--port", str(self.port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            if await self._health_check():
+                logger.info("opencode serve 就绪")
+                return True
+
+        logger.error("opencode serve 启动失败")
+        return False
+
+    async def _health_check(self) -> bool:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}/global/health", timeout=2) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("healthy", False)
+        except Exception:
+            return False
+
+    async def shutdown(self):
+        """关闭 serve 进程"""
+        if self._server_process:
+            logger.info("关闭 opencode serve...")
+            self._server_process.terminate()
+            try:
+                self._server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._server_process.kill()
+            self._server_process = None
+
+    # ---------- 会话管理 ----------
+
+    async def get_or_create_session(self) -> str:
+        if self._session_id:
+            return self._session_id
+        return await self.create_session()
+
+    async def create_session(self) -> str:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{self.base_url}/session") as resp:
+                if resp.status != 200:
+                    raise Exception(f"创建会话失败: {await resp.text()}")
+                data = await resp.json()
+                self._session_id = data["id"]
+                logger.info(f"Session: {self._session_id}")
+                return self._session_id
+
+    async def clear_session(self):
+        self._session_id = None
+
+    # ---------- 核心：SSE 流式消息 ----------
+
+    async def send_message_stream(self, message: str, msg_id: str, websocket):
+        """
+        发送消息并通过 WebSocket 逐 token 转发 SSE 流。
+        使用行缓冲 + \n\n 事件分隔符解析，处理跨 chunk 边界。
+        """
+        if not await self.ensure_server():
+            await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
+            return
+
+        session_id = await self.get_or_create_session()
+        logger.info(f"发送消息: {message[:60]}...")
+
+        async with aiohttp.ClientSession() as session:
+            payload = {"parts": [{"type": "text", "text": message}]}
+
+            async with session.post(
+                f"{self.base_url}/session/{session_id}/message",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {error}"})
+                    return
+
+                # SSE 流式解析：行缓冲 + \n\n 事件分隔
+                buffer = ""
+                async for chunk, _ in resp.content.iter_chunks():
+                    if not chunk:
+                        continue
+                    buffer += chunk.decode("utf-8", errors="replace")
+
+                    # SSE 事件以 \n\n 分隔
+                    while "\n\n" in buffer:
+                        event_block, buffer = buffer.split("\n\n", 1)
+                        await self._emit_sse_event(event_block, websocket, msg_id)
+
+                # 处理剩余 buffer
+                if buffer.strip():
+                    await self._emit_sse_event(buffer, websocket, msg_id)
+
+    async def _emit_sse_event(self, event_block: str, websocket, msg_id: str):
+        """解析单个 SSE 事件块，提取 token 并发送到前端"""
+        lines = event_block.strip().split("\n")
+        event_type = None
+        data = None
+
+        for line in lines:
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                try:
+                    data = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    pass
+
+        # 只处理文本 delta 事件
+        if event_type == "message.part.delta" and data:
+            part = data.get("part", {})
+            content = part.get("content") if isinstance(part, dict) else None
+            if content:
+                await send_response(websocket, msg_id, "stream", {"chunk": content})
+
+
+# 全局桥接实例
+opencode_bridge = OpenCodeBridge()
+
+
 # ==================== CLI 执行 ====================
 
 async def execute_opencode(command: str, model: str = None, timeout: int = 300) -> dict:
@@ -199,119 +351,30 @@ def _is_shell_line(line: str) -> bool:
 
 async def execute_opencode_streaming(websocket, msg_id: str, command: str, model: str = None, timeout: int = 300):
     """
-    执行 OpenCode CLI 命令（流式输出）
-    
-    清洗输出内容：去 ANSI 码、去 shell 命令回显、去重复行，
-    只推送有意义的文本内容到前端。
+    通过 opencode serve HTTP API + SSE 流式执行 OpenCode 命令。
+    逐 token 转发到前端，实现实时流式显示。
     
     Args:
         websocket: WebSocket 连接对象
         msg_id: 消息 ID
         command: 要执行的命令字符串
-        model: 指定使用的模型名称（对应 --model 参数）
+        model: 指定使用的模型名称（用于 serve 的模型选择，暂不生效）
         timeout: 超时时间（秒）
     """
     try:
-        # 使用 default 格式输出（不用 --format json，避免格式兼容问题）
-        cmd_parts = [OPENCODE_CMD, "run"]
-        if model:
-            cmd_parts.extend(["--model", model])
-        cmd_parts.append(f'"{command}"')
-        cmd_str = " ".join(cmd_parts)
+        await opencode_bridge.send_message_stream(command, msg_id, websocket)
+        # 流结束，发送 ok
+        await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": 0})
 
-        logger.info(f"执行（流式）: {cmd_str}")
-
-        proc = await asyncio.create_subprocess_shell(
-            cmd_str,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        logger.info(f"子进程已启动, PID={proc.pid}")
-
-        # 流式读取
-        buffer = ""
-        start_time = time.time()
-        last_output_time = time.time()
-        last_line = ""
-        read_attempts = 0  # 统计连续超时次数
-        
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                logger.warning(f"执行超时（{timeout}秒）, 杀死进程")
-                proc.kill()
-                await send_response(websocket, msg_id, "error", {"error": f"命令执行超时（{timeout}秒）"})
-                return
-
-            try:
-                data = await asyncio.wait_for(
-                    proc.stdout.read(1024),
-                    timeout=2.0  # 2 秒超时
-                )
-                if not data:
-                    logger.info("stdout 流结束")
-                    break
-
-                read_attempts = 0
-                text = data.decode("utf-8", errors="replace")
-                logger.info(f"读到 {len(text)} 字节: {text[:100]}")
-                buffer += text
-                last_output_time = time.time()
-
-                while "\n" in buffer:
-                    line_end = buffer.index("\n")
-                    raw_line = buffer[:line_end]
-                    buffer = buffer[line_end + 1:]
-
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-
-                    cleaned = _strip_ansi(line)
-                    if cleaned == last_line:
-                        continue
-                    last_line = cleaned
-
-                    if _is_shell_line(cleaned):
-                        continue
-
-                    await send_response(websocket, msg_id, "stream", {"chunk": cleaned + "\n"})
-
-            except asyncio.TimeoutError:
-                read_attempts += 1
-                if time.time() - last_output_time > 10:
-                    logger.info("10秒无输出, 发 keepalive")
-                    await send_response(websocket, msg_id, "keepalive", {"time": time.time()})
-                    last_output_time = time.time()
-                    read_attempts = 0
-                if read_attempts % 10 == 0:
-                    logger.info(f"等待中... 已耗时 {elapsed:.0f}秒")
-                continue
-
-        # 发送剩余的缓冲内容
-        remaining = _strip_ansi(buffer.strip())
-        if remaining and remaining != last_line and not _is_shell_line(remaining):
-            await send_response(websocket, msg_id, "stream", {"chunk": remaining})
-
-        # 等待进程结束
-        try:
-            rc = await asyncio.wait_for(proc.wait(), timeout=10)
-            logger.info(f"进程结束, returncode={rc}")
-        except asyncio.TimeoutError:
-            logger.warning("进程 wait 超时, 强制杀死")
-            proc.kill()
-            rc = -1
-
-        logger.info("发送 ok 结束信号")
-        await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": rc})
-
+    except asyncio.TimeoutError:
+        logger.warning(f"SSE 流超时 ({timeout}s)")
+        await send_response(websocket, msg_id, "error", {"error": f"SSE 流超时（{timeout}秒）"})
     except FileNotFoundError:
-        logger.error(f"未找到 OpenCode CLI")
+        logger.error("未找到 OpenCode CLI")
         await send_response(websocket, msg_id, "error", {"error": f"未找到 OpenCode CLI，请确保 '{OPENCODE_CMD}' 已安装在 PATH 中"})
     except Exception as e:
-        logger.error(f"执行异常: {e}")
-        await send_response(websocket, msg_id, "error", {"error": f"执行命令异常: {str(e)}"})
+        logger.error(f"SSE 流异常: {e}")
+        await send_response(websocket, msg_id, "error", {"error": f"SSE 流异常: {str(e)}"})
 
 
 async def execute_shell(command: str, timeout: int = 60) -> dict:
