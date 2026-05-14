@@ -182,19 +182,15 @@ class OpenCodeBridge:
     # ---------- 会话管理 ----------
 
     async def create_session(self, model: str = None) -> str:
-        """创建新 session，可选指定模型"""
+        """创建新 session（model 在消息级别设置，不在 session 级别）"""
         async with aiohttp.ClientSession() as session:
-            if model and "/" in model:
-                parts = model.split("/", 1)
-                body = {"model": {"providerID": parts[0], "modelID": parts[1]}}
-                resp = await session.post(f"{self.base_url}/session", json=body)
-            else:
-                resp = await session.post(f"{self.base_url}/session")
-                if resp.status != 200:
-                    raise Exception(f"创建会话失败: {await resp.text()}")
-                data = await resp.json()
-                logger.info(f"Session: {data['id']} model={model}")
-                return data["id"]
+            resp = await session.post(f"{self.base_url}/session")
+            if resp.status != 200:
+                raise Exception(f"创建会话失败: {await resp.text()}")
+            data = await resp.json()
+            sid = data["id"]
+            logger.info(f"Session: {sid}")
+            return sid
 
     # ---------- 核心：SSE 流式消息 ----------
 
@@ -218,9 +214,12 @@ class OpenCodeBridge:
         )
 
         try:
-            # 3. 发送消息
+            # 3. 发送消息（携带模型参数）
             async with aiohttp.ClientSession() as session:
                 payload = {"parts": [{"type": "text", "text": message}]}
+                if model and "/" in model:
+                    parts = model.split("/", 1)
+                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
