@@ -207,12 +207,14 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 
 ### ⚠️ 已知限制
 
-#### OpenCode 流式非实时
-`opencode run` 的流式输出不是逐 token 实时流，而是：
-1. 先静默执行 agent 推理（20-30 秒无输出）
-2. 一次性吐出完整回答
+#### `opencode run` 非逐 token 流式（核心限制）
+已验证：不论直接终端跑还是通过 pipe，`opencode run` 的行为都是：
 
-这是因为 opencode CLI 是 agent 模式，内部会思考、执行 shell 命令、生成完整回答后再输出，而非像 ChatGPT 那样逐字生成。
+> `> build · xxx`（思考/构建） → 静默 10-30 秒 → 一次性输出完整回答
+
+它本身就不支持逐 token 流式输出。这是 `opencode run` 作为 agent 模式的固有限制。`--format json` 也无法改变这个行为。
+
+**要实现真正的流式**，需要绕过 `opencode run`，改用 `opencode serve`（HTTP/SSE）或直接调 AI API。
 
 #### bridge_server.py 的 import re
 `_strip_ansi` 函数使用 `re.sub()`，文件顶部必须有 `import re`（曾漏掉导致崩溃）。
