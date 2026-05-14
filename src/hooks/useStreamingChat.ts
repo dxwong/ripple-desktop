@@ -95,10 +95,16 @@ export function useStreamingChat() {
 
   // ===== 追加到指定对话（显式传 convId，避免闭包过期） =====
   const appendToConversation = useCallback((convId: string, chunk: string) => {
-    if (!convId) return;
-    setConversations((prev) =>
-      prev.map((conv) => {
+    if (!convId) {
+      console.warn("[appendToConversation] convId 为空");
+      return;
+    }
+    if (!chunk) return;
+    let found = false;
+    setConversations((prev) => {
+      const next = prev.map((conv) => {
         if (conv.id !== convId) return conv;
+        found = true;
         const msgs = [...conv.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === "assistant") {
@@ -112,8 +118,10 @@ export function useStreamingChat() {
           });
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
-      })
-    );
+      });
+      if (!found) console.warn("[appendToConversation] 未找到对话:", convId);
+      return next;
+    });
   }, []);
 
   // ===== 追加到当前活跃对话（由 ref 决定目标对话） =====
@@ -167,14 +175,20 @@ export function useStreamingChat() {
       abortRef.current = abort;
 
       const targetConvId = activeConversationIdRef.current;
+      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", conversations.length);
       if (!targetConvId) {
         console.warn("[sendMessage] 没有活跃对话，跳过发送");
         setIsProcessing(false);
         return;
       }
 
+      // 确认目标对话存在
+      const convExists = conversations.some(c => c.id === targetConvId);
+      console.log("[sendMessage] 目标对话存在:", convExists);
+
       // 先添加用户消息
-      addMessage("user", content);
+      const msg = addMessage("user", content);
+      console.log("[sendMessage] addMessage 结果:", msg ? msg.id : "null");
 
       try {
         // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
@@ -195,6 +209,7 @@ export function useStreamingChat() {
               // keepalive 和其他非终态消息直接忽略
               if (msg.status === "keepalive") return;
               if (settled) return; // 已结束，忽略后续消息
+              console.log("[stream callback] status:", msg.status, "targetConvId:", targetConvId);
 
               if (msg.status === "stream") {
                 const chunk = msg.data?.chunk || "";
