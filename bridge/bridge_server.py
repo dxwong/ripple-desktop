@@ -227,8 +227,7 @@ class OpenCodeBridge:
             async with aiohttp.ClientSession() as session:
                 payload = {"parts": [{"type": "text", "text": message}]}
                 if model:
-                    # 尝试通过 session setting 或 message meta 传递模型
-                    payload["model"] = model
+                    payload["model"] = {"name": model}
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
