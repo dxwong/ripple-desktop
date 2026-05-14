@@ -45,12 +45,22 @@ impl BridgeProcess {
 
     /// 启动 Python 桥接服务
     pub async fn start(&self, app_dir: &std::path::Path) {
-        let bridge_path = app_dir.join("bridge").join("bridge_server.py");
-        if !bridge_path.exists() {
-            log::warn!("未找到桥接脚本: {}", bridge_path.display());
-            self.add_log(&format!("WARN: 未找到 {}", bridge_path.display())).await;
-            return;
-        }
+        // 尝试多个路径：项目根目录、src-tauri 上级目录、当前目录
+        let candidates = [
+            app_dir.join("bridge").join("bridge_server.py"),
+            app_dir.join("../bridge").join("bridge_server.py"),
+            std::path::PathBuf::from("bridge/bridge_server.py"),
+            std::path::PathBuf::from("../bridge/bridge_server.py"),
+        ];
+        let bridge_path = candidates.iter().find(|p| p.exists()).cloned();
+        let bridge_path = match bridge_path {
+            Some(p) => p,
+            None => {
+                log::warn!("未找到 bridge/bridge_server.py，已搜索 {:?}", candidates);
+                self.add_log("WARN: 未找到桥接脚本").await;
+                return;
+            }
+        };
 
         log::info!("启动桥接: {}", bridge_path.display());
         self.add_log(&format!("启动桥接: {}", bridge_path.display())).await;

@@ -503,10 +503,10 @@ function LogViewer() {
         </div>
       </div>
 
-      {/* 日志列表 */}
+      {/* 日志列表（可选中的文本，便于复制） */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto bg-black/[0.03] dark:bg-white/[0.03] rounded-xl border border-border dark:border-border-dark font-mono text-[12px] leading-relaxed p-3 min-h-[300px] max-h-[500px]"
+        className="flex-1 overflow-y-auto bg-black/[0.03] dark:bg-white/[0.03] rounded-xl border border-border dark:border-border-dark font-mono text-[12px] leading-relaxed p-3 min-h-[300px] max-h-[500px] select-text"
       >
         {logs.length === 0 ? (
           <div className="text-center py-8 text-content-tertiary dark:text-content-tertiary-dark">
