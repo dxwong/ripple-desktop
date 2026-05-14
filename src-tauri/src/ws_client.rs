@@ -1,10 +1,8 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use futures_util::{SinkExt, StreamExt};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
@@ -37,12 +35,28 @@ pub struct BridgeResponse {
     pub data: Value,
 }
 
-/// WebSocket 客户端状态（不含 stream，stream 单独加锁）
+// ==================== 事件循环命令 ====================
+
+/// 发送给事件循环的命令
+pub enum EventLoopCommand {
+    /// 发送请求并等待响应
+    SendAndWait {
+        request: BridgeRequest,
+        /// 发送成功后将此 sender 存入 pending_requests，响应到来时通过它传回
+        sender: oneshot::Sender<Result<BridgeResponse, String>>,
+    },
+    /// 发送请求不等待响应
+    SendNoWait {
+        request: BridgeRequest,
+    },
+}
+
+// ==================== WebSocket 客户端状态 ====================
+
+/// 客户端状态（不含 stream，stream 由事件循环独占）
 pub struct WebSocketClient {
-    /// 连接状态
     pub state: WsConnectionState,
-    /// 挂起的请求映射（ID → oneshot 发送端）
-    pub(crate) pending_requests: HashMap<String, tokio::sync::oneshot::Sender<BridgeResponse>>,
+    pub(crate) pending_requests: HashMap<String, oneshot::Sender<Result<BridgeResponse, String>>>,
 }
 
 impl WebSocketClient {
@@ -54,35 +68,46 @@ impl WebSocketClient {
     }
 }
 
-/// 共享客户端：两把独立锁，互不阻塞
+// ==================== 共享客户端 ====================
+
+/// 共享客户端（线程安全）
 ///
-/// - `client` 锁：保护连接状态 + 挂起请求
-/// - `ws_stream` 锁：保护 WebSocket 流（发送/接收）
+/// 事件循环独占 WebSocket 流，通过 command_tx channel 接收发送请求。
+/// 事件循环用 select! 同时处理：收 WebSocket 消息 + 收发送命令。
 ///
-/// ws_event_loop 只锁 ws_stream 读消息，然后短暂锁 client 路由消息。
-/// send_to_bridge 锁 client 设 pending，锁 ws_stream 发消息，然后释放两把锁等响应。
+/// 关键优势：发送方不需要碰 WebSocket 流锁，事件循环持流期间不阻塞任何操作。
 #[derive(Clone)]
 pub struct SharedWsClient {
+    pub command_tx: Arc<Mutex<mpsc::UnboundedSender<EventLoopCommand>>>,
     pub client: Arc<Mutex<WebSocketClient>>,
-    pub ws_stream: Arc<Mutex<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
     bridge_url: String,
 }
 
 impl SharedWsClient {
     pub fn new(bridge_url: &str) -> Self {
+        let (tx, _rx) = mpsc::unbounded_channel();
         Self {
+            command_tx: Arc::new(Mutex::new(tx)),
             client: Arc::new(Mutex::new(WebSocketClient::new())),
-            ws_stream: Arc::new(Mutex::new(None)),
             bridge_url: bridge_url.to_string(),
         }
     }
 
-    /// 连接到 Python 桥接服务
-    pub async fn connect(&self) -> Result<(), String> {
+    /// 连接桥接服务，返回 (WebSocket流, 命令接收端)
+    /// 调用方负责将 stream 和 rx 传给事件循环
+    pub async fn connect(
+        &self,
+    ) -> Result<
+        (
+            WebSocketStream<MaybeTlsStream<TcpStream>>,
+            mpsc::UnboundedReceiver<EventLoopCommand>,
+        ),
+        String,
+    > {
         {
             let mut client = self.client.lock().await;
             if client.state == WsConnectionState::Connected {
-                return Ok(());
+                return Err("已经连接".to_string());
             }
             client.state = WsConnectionState::Connecting;
         }
@@ -91,121 +116,66 @@ impl SharedWsClient {
             .await
             .map_err(|e| format!("连接桥接服务失败: {}", e))?;
 
+        // 创建新通道（旧通道已废弃）
+        let (tx, rx) = mpsc::unbounded_channel();
+        {
+            let mut cmd_tx = self.command_tx.lock().await;
+            *cmd_tx = tx;
+        }
+
         {
             let mut client = self.client.lock().await;
             client.state = WsConnectionState::Connected;
         }
-        {
-            let mut ws = self.ws_stream.lock().await;
-            *ws = Some(stream);
-        }
 
         log::info!("WebSocket 已连接到桥接服务: {}", self.bridge_url);
-        Ok(())
+        Ok((stream, rx))
     }
 
     /// 断开连接
     pub async fn disconnect(&self) {
         {
-            let mut ws = self.ws_stream.lock().await;
-            if let Some(mut stream) = ws.take() {
-                let _ = stream.close(None).await;
-            }
-        }
-        {
             let mut client = self.client.lock().await;
             client.state = WsConnectionState::Disconnected;
             client.pending_requests.clear();
         }
+        // 清空 command_tx 使其失效
+        let (tx, _rx) = mpsc::unbounded_channel();
+        {
+            let mut cmd_tx = self.command_tx.lock().await;
+            *cmd_tx = tx;
+        }
         log::info!("WebSocket 已断开连接");
     }
 
-    /// 发送消息并等待响应
-    /// 分两阶段：持锁发送 → 释放锁 → 无锁等待 oneshot
+    /// 发送消息并等待响应（通过 channel 传给事件循环）
     pub async fn send_request(&self, request: BridgeRequest) -> Result<BridgeResponse, String> {
-        // 阶段一：锁 client 设 pending，锁 ws_stream 发消息 → 释放两把锁
-        let rx = {
-            let mut client = self.client.lock().await;
-            if client.state != WsConnectionState::Connected {
-                return Err("未连接到桥接服务".to_string());
-            }
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            client.pending_requests.insert(request.id.clone(), tx);
-            drop(client); // 释放 client 锁
+        let (tx, rx) = oneshot::channel();
 
-            let mut ws = self.ws_stream.lock().await;
-            let stream = ws.as_mut().ok_or_else(|| "WebSocket 流不可用".to_string())?;
-            let json = serde_json::to_string(&request)
-                .map_err(|e| format!("序列化请求失败: {}", e))?;
-            stream.send(Message::Text(json.into()))
-                .await
-                .map_err(|e| format!("发送消息失败: {}", e))?;
-            drop(ws); // 释放 ws_stream 锁
+        {
+            let cmd_tx = self.command_tx.lock().await;
+            cmd_tx
+                .send(EventLoopCommand::SendAndWait {
+                    request,
+                    sender: tx,
+                })
+                .map_err(|_| "事件循环已停止".to_string())?;
+        }
 
-            rx // 将 receiver 移出锁作用域
-        }; // ★ 两把锁均已释放 ★
-
-        // 阶段二：无锁等待响应
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            rx,
-        )
-        .await
-        .map_err(|_| "等待响应超时（120秒）".to_string())?
-        .map_err(|_| "响应通道已关闭".to_string())?;
-
-        Ok(response)
-    }
-
-    /// 发送消息但不等待响应（用于流式请求）
-    pub async fn send_no_wait(&self, request: BridgeRequest) -> Result<(), String> {
-        let mut ws = self.ws_stream.lock().await;
-        let stream = ws.as_mut().ok_or_else(|| "未连接到桥接服务".to_string())?;
-        let json = serde_json::to_string(&request)
-            .map_err(|e| format!("序列化请求失败: {}", e))?;
-        stream.send(Message::Text(json.into()))
+        // 无锁等待响应
+        let result = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
             .await
-            .map_err(|e| format!("发送消息失败: {}", e))?;
-        Ok(())
+            .map_err(|_| "等待响应超时（120秒）".to_string())?
+            .map_err(|_| "响应通道已关闭".to_string())?;
+
+        result
     }
 
-    /// 从 WebSocket 流读取一条消息（仅事件循环调用）
-    pub async fn read_message(&self) -> Option<Result<BridgeResponse, String>> {
-        let mut ws = self.ws_stream.lock().await;
-        let stream = ws.as_mut()?;
-        let msg = stream.next().await?;
-        match msg {
-            Ok(Message::Text(text)) => {
-                match serde_json::from_str::<BridgeResponse>(&text) {
-                    Ok(response) => Some(Ok(response)),
-                    Err(e) => Some(Err(format!("解析响应失败: {}", e))),
-                }
-            }
-            Ok(Message::Close(_)) => {
-                let mut client = self.client.lock().await;
-                client.state = WsConnectionState::Disconnected;
-                Some(Err("连接已关闭".to_string()))
-            }
-            Ok(Message::Ping(data)) => {
-                let _ = stream.send(Message::Pong(data)).await;
-                None // Ping 不需要对外响应
-            }
-            Err(e) => {
-                let mut client = self.client.lock().await;
-                client.state = WsConnectionState::Error(e.to_string());
-                Some(Err(format!("WebSocket 错误: {}", e)))
-            }
-            _ => None,
-        }
-    }
-
-    /// 处理收到的响应（路由到 pending 请求）
-    pub async fn handle_incoming(&self, response: BridgeResponse) {
-        let mut client = self.client.lock().await;
-        if let Some(sender) = client.pending_requests.remove(&response.id) {
-            let _ = sender.send(response);
-        } else {
-            log::warn!("收到未知请求 ID 的响应: {}", response.id);
-        }
+    /// 发送消息不等待响应（通过 channel 传给事件循环）
+    pub async fn send_no_wait(&self, request: BridgeRequest) -> Result<(), String> {
+        let cmd_tx = self.command_tx.lock().await;
+        cmd_tx
+            .send(EventLoopCommand::SendNoWait { request })
+            .map_err(|_| "事件循环已停止".to_string())
     }
 }
