@@ -204,7 +204,11 @@ class OpenCodeBridge:
     async def send_message_stream(self, message: str, msg_id: str, websocket):
         """
         发送消息并通过 WebSocket 逐 token 转发 SSE 流。
-        使用行缓冲 + \n\n 事件分隔符解析，处理跨 chunk 边界。
+        
+        流程：
+        1. 启动后台任务监听 /event SSE 流
+        2. POST /session/{id}/message 发送消息
+        3. SSE 事件中的 message.part.delta 包含逐 token 内容
         """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
@@ -213,43 +217,65 @@ class OpenCodeBridge:
         session_id = await self.get_or_create_session()
         logger.info(f"发送消息: {message[:60]}...")
 
-        async with aiohttp.ClientSession() as session:
-            payload = {"parts": [{"type": "text", "text": message}]}
+        # 启动后台任务监听 /event SSE 流
+        event_consumer = asyncio.create_task(
+            self._consume_events_stream(session_id, msg_id, websocket)
+        )
 
-            async with session.post(
-                f"{self.base_url}/session/{session_id}/message",
-                json=payload,
+        try:
+            # 发送消息（返回 JSON，非流式）
+            async with aiohttp.ClientSession() as session:
+                payload = {"parts": [{"type": "text", "text": message}]}
+                async with session.post(
+                    f"{self.base_url}/session/{session_id}/message",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        error = await resp.text()
+                        logger.error(f"发送消息失败: {error}")
+                        event_consumer.cancel()
+                        await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {error}"})
+                        return
+
+                    resp_text = await resp.text()
+                    logger.info(f"POST message 响应: {resp_text[:200]}")
+
+            # 等待事件流结束（由 event_consumer 负责发送 stream chunks）
+            await event_consumer
+
+        except asyncio.CancelledError:
+            logger.info("event_consumer 被取消")
+            event_consumer.cancel()
+            raise
+        except Exception as e:
+            logger.error(f"send_message_stream 异常: {e}")
+            event_consumer.cancel()
+            raise
+
+    async def _consume_events_stream(self, session_id: str, msg_id: str, websocket):
+        """监听 /event SSE 流，解析 message.part.delta 事件并转发 token"""
+        logger.info(f"连接 /event SSE 流...")
+        token_count = 0
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{self.base_url}/event",
                 timeout=aiohttp.ClientTimeout(total=300),
             ) as resp:
-                if resp.status != 200:
-                    error = await resp.text()
-                    await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {error}"})
-                    return
-
                 content_type = resp.headers.get("Content-Type", "未知")
-                logger.info(f"HTTP {resp.status} Content-Type: {content_type}")
-                logger.info("SSE 连接建立，开始读取流...")
+                logger.info(f"/event HTTP {resp.status} Content-Type: {content_type}")
 
                 buffer = ""
-                token_count = 0
-                chunk_count = 0
-
-                async for chunk, end_of_content in resp.content.iter_chunks():
-                    chunk_count += 1
+                async for chunk, _ in resp.content.iter_chunks():
                     if not chunk:
-                        if end_of_content:
-                            logger.info(f"SSE 流结束（共 {chunk_count} 个 chunk, {token_count} 个 token）")
                         continue
-
                     text = chunk.decode("utf-8", errors="replace")
-                    if chunk_count <= 3:
-                        logger.info(f"原始 chunk #{chunk_count}: {text[:200]}")
                     buffer += text
 
+                    # SSE 事件以 \n\n 分隔
                     while "\n\n" in buffer:
                         event_block, buffer = buffer.split("\n\n", 1)
-                        if token_count == 0 and chunk_count <= 3:
-                            logger.info(f"SSE 事件块: {event_block[:200]}")
                         event_type, content = self._parse_sse_event(event_block)
                         if event_type == "message.part.delta" and content:
                             token_count += 1
@@ -262,7 +288,7 @@ class OpenCodeBridge:
                         token_count += 1
                         await send_response(websocket, msg_id, "stream", {"chunk": content})
 
-                logger.info(f"SSE 流读取完毕，共 {chunk_count} 个 chunk, {token_count} 个 token")
+                logger.info(f"SSE 流结束，共 {token_count} 个 token")
 
     def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
         """解析单个 SSE 事件块，返回 (event_type, content_text)"""
