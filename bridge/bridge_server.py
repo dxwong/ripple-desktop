@@ -224,17 +224,21 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
             cmd_str,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # stderr 合并到 stdout，避免管道堵塞
+            stderr=subprocess.STDOUT,
         )
+        logger.info(f"子进程已启动, PID={proc.pid}")
 
-        # 流式读取输出
+        # 流式读取
         buffer = ""
         start_time = time.time()
         last_output_time = time.time()
-        last_line = ""  # 用于去重
+        last_line = ""
+        read_attempts = 0  # 统计连续超时次数
         
         while True:
-            if time.time() - start_time > timeout:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                logger.warning(f"执行超时（{timeout}秒）, 杀死进程")
                 proc.kill()
                 await send_response(websocket, msg_id, "error", {"error": f"命令执行超时（{timeout}秒）"})
                 return
@@ -242,15 +246,18 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
             try:
                 data = await asyncio.wait_for(
                     proc.stdout.read(1024),
-                    timeout=1.0
+                    timeout=2.0  # 2 秒超时
                 )
                 if not data:
+                    logger.info("stdout 流结束")
                     break
-                    
-                buffer += data.decode("utf-8", errors="replace")
+
+                read_attempts = 0
+                text = data.decode("utf-8", errors="replace")
+                logger.info(f"读到 {len(text)} 字节: {text[:100]}")
+                buffer += text
                 last_output_time = time.time()
 
-                # 逐行处理
                 while "\n" in buffer:
                     line_end = buffer.index("\n")
                     raw_line = buffer[:line_end]
@@ -260,26 +267,25 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
                     if not line:
                         continue
 
-                    # 清洗
                     cleaned = _strip_ansi(line)
-
-                    # 去重（连续相同行只发一次）
                     if cleaned == last_line:
                         continue
                     last_line = cleaned
 
-                    # 过滤 shell 命令回显
                     if _is_shell_line(cleaned):
                         continue
 
-                    # 发送清洗后的内容（带换行）
                     await send_response(websocket, msg_id, "stream", {"chunk": cleaned + "\n"})
 
             except asyncio.TimeoutError:
-                # 长时间没输出 → 发心跳保持连接
-                if time.time() - last_output_time > 5:
+                read_attempts += 1
+                if time.time() - last_output_time > 10:
+                    logger.info("10秒无输出, 发 keepalive")
                     await send_response(websocket, msg_id, "keepalive", {"time": time.time()})
                     last_output_time = time.time()
+                    read_attempts = 0
+                if read_attempts % 10 == 0:
+                    logger.info(f"等待中... 已耗时 {elapsed:.0f}秒")
                 continue
 
         # 发送剩余的缓冲内容
@@ -289,16 +295,21 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
 
         # 等待进程结束
         try:
-            await asyncio.wait_for(proc.wait(), timeout=10)
+            rc = await asyncio.wait_for(proc.wait(), timeout=10)
+            logger.info(f"进程结束, returncode={rc}")
         except asyncio.TimeoutError:
+            logger.warning("进程 wait 超时, 强制杀死")
             proc.kill()
+            rc = -1
 
-        # 发送结束信号
-        await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": proc.returncode or 0})
+        logger.info("发送 ok 结束信号")
+        await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": rc})
 
     except FileNotFoundError:
+        logger.error(f"未找到 OpenCode CLI")
         await send_response(websocket, msg_id, "error", {"error": f"未找到 OpenCode CLI，请确保 '{OPENCODE_CMD}' 已安装在 PATH 中"})
     except Exception as e:
+        logger.error(f"执行异常: {e}")
         await send_response(websocket, msg_id, "error", {"error": f"执行命令异常: {str(e)}"})
 
 
