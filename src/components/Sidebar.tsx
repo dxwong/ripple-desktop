@@ -250,7 +250,7 @@ function Sidebar({
                         : "sidebar-btn"
                     }`}
                   >
-                    <MessageSquare size={14} className={`shrink-0 ${
+                    <Code size={14} className={`shrink-0 ${
                       project.id === activeProjectId ? "opacity-100" : "opacity-60"
                     }`} />
                     <div className="flex-1 min-w-0">
@@ -315,7 +315,11 @@ function Sidebar({
                         : "sidebar-btn"
                     }`}
                   >
-                    <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
+                    {conv.mode === "code" ? (
+                      <Code size={14} className="shrink-0 text-amber-500 dark:text-amber-400 opacity-80" />
+                    ) : (
+                      <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
+                    )}
                     <span className="truncate flex-1">{conv.title}</span>
                   </button>
                   <button

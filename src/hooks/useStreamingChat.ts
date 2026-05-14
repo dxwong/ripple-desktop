@@ -164,29 +164,14 @@ export function useStreamingChat() {
       addMessage("user", content);
 
       try {
-        // 有 OC 模型 → 优先走桥接流式输出
-        if (openCodeModel && bridgeSend && bridgeSendStreaming) {
+        // 有 OC 模型 → 走桥接（非流式，等待完整结果）
+        if (openCodeModel && bridgeSend) {
           try {
             const payload: any = { command: content, cwd: projectDirectory, model: openCodeModel };
-            
-            // 重要: 先注册回调，再发送消息（防止竞态条件导致丢失前几帧）
-            const messageHandler = (msg: any) => {
-              if (msg.status === "stream") {
-                appendToLastAssistant(msg.data?.chunk || "");
-              } else if (msg.status === "ok") {
-                // 流式结束
-              } else if (msg.status === "error") {
-                appendToLastAssistant(`\n\n**OpenCode 执行错误**: ${msg.data?.error || "未知错误"}`);
-              }
-            };
-            if (bridgeSetCallback) {
-              bridgeSetCallback(messageHandler);
-            }
-            
-            // 再发送流式消息
-            await bridgeSendStreaming("execute_opencode_streaming", payload);
-            
-            return; // 流式响应由回调处理
+            const response = await bridgeSend("execute_opencode", payload);
+            const result = response?.stdout || response?.stderr || "（无输出）";
+            appendToLastAssistant(result);
+            return;
           } catch (e: any) {
             appendToLastAssistant(`**OpenCode 执行错误**: ${e.message || "桥接服务不可用"}`);
             return;
