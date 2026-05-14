@@ -267,28 +267,36 @@ class OpenCodeBridge:
                 logger.info(f"/event HTTP {resp.status} Content-Type: {content_type}")
 
                 buffer = ""
+                total_events = 0
                 async for chunk, _ in resp.content.iter_chunks():
                     if not chunk:
                         continue
                     text = chunk.decode("utf-8", errors="replace")
                     buffer += text
 
-                    # SSE 事件以 \n\n 分隔
                     while "\n\n" in buffer:
                         event_block, buffer = buffer.split("\n\n", 1)
+                        total_events += 1
+
+                        # 日志前 5 个事件的原始内容
+                        if total_events <= 5:
+                            logger.info(f"原始 SSE 事件 #{total_events}: {event_block[:300]}")
+
                         event_type, content = self._parse_sse_event(event_block)
-                        if event_type == "message.part.delta" and content:
+                        if content:
                             token_count += 1
                             await send_response(websocket, msg_id, "stream", {"chunk": content})
 
-                # 处理剩余 buffer
                 if buffer.strip():
+                    total_events += 1
+                    if total_events <= 5:
+                        logger.info(f"原始 SSE 事件(尾): {buffer.strip()[:300]}")
                     event_type, content = self._parse_sse_event(buffer)
-                    if event_type == "message.part.delta" and content:
+                    if content:
                         token_count += 1
                         await send_response(websocket, msg_id, "stream", {"chunk": content})
 
-                logger.info(f"SSE 流结束，共 {token_count} 个 token")
+                logger.info(f"SSE 流结束，共 {total_events} 个事件, {token_count} 个 token")
 
     def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
         """解析单个 SSE 事件块，返回 (event_type, content_text)"""
@@ -305,11 +313,19 @@ class OpenCodeBridge:
                 except json.JSONDecodeError:
                     pass
 
-        if event_type == "message.part.delta" and data:
+        if data:
+            # 尝试多种字段名提取文本内容
             part = data.get("part", {})
-            content = part.get("content") if isinstance(part, dict) else None
-            if content:
-                return (event_type, content)
+            if isinstance(part, dict):
+                content = part.get("content") or part.get("text") or part.get("delta")
+                if content:
+                    return (event_type or "unknown", content)
+
+            # 顶层字段
+            for key in ("content", "text", "delta", "message"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    return (event_type or "unknown", val)
 
         return (event_type, None)
 
