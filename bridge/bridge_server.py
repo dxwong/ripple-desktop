@@ -183,16 +183,13 @@ class OpenCodeBridge:
 
     async def create_session(self, model: str = None) -> str:
         """创建新 session，可选指定模型"""
-        body = {}
-        if model and "/" in model:
-            parts = model.split("/", 1)
-            body["model"] = {"providerID": parts[0], "modelID": parts[1]}
-
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}/session",
-                json=body if body else None,
-            ) as resp:
+            if model and "/" in model:
+                parts = model.split("/", 1)
+                body = {"model": {"providerID": parts[0], "modelID": parts[1]}}
+                resp = await session.post(f"{self.base_url}/session", json=body)
+            else:
+                resp = await session.post(f"{self.base_url}/session")
                 if resp.status != 200:
                     raise Exception(f"创建会话失败: {await resp.text()}")
                 data = await resp.json()
