@@ -254,9 +254,16 @@ class OpenCodeBridge:
             raise
 
     async def _consume_events_stream(self, session_id: str, msg_id: str, websocket):
-        """监听 /event SSE 流，解析 message.part.delta 事件并转发 token"""
+        """
+        监听 /event SSE 流，解析 message.part.delta 事件并转发 token。
+        
+        回答完毕判断：收到 session.status idle 事件，或连续 5 秒无新 delta。
+        判断到完毕后立即退出循环，让上游发 ok 信号。
+        """
         logger.info(f"连接 /event SSE 流...")
         token_count = 0
+        last_delta_time = time.time()
+        response_done = False
 
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -268,9 +275,24 @@ class OpenCodeBridge:
 
                 buffer = ""
                 total_events = 0
-                async for chunk, _ in resp.content.iter_chunks():
-                    if not chunk:
+
+                while not response_done:
+                    # 用 wait_for 实现超时检测：5 秒无新 delta 视为回答完毕
+                    try:
+                        chunk = await asyncio.wait_for(
+                            resp.content.read(4096),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        if token_count > 0 and time.time() - last_delta_time >= 5:
+                            logger.info(f"5 秒无 delta, 回答完毕（共 {token_count} token）")
+                            break
                         continue
+
+                    if not chunk:
+                        logger.info("SSE 流结束")
+                        break
+
                     text = chunk.decode("utf-8", errors="replace")
                     buffer += text
 
@@ -278,25 +300,36 @@ class OpenCodeBridge:
                         event_block, buffer = buffer.split("\n\n", 1)
                         total_events += 1
 
-                        # 日志前 5 个事件的原始内容
-                        if total_events <= 5:
-                            logger.info(f"原始 SSE 事件 #{total_events}: {event_block[:300]}")
+                        if total_events <= 3:
+                            logger.info(f"SSE 事件 #{total_events}: {event_block[:200]}")
 
                         event_type, content = self._parse_sse_event(event_block)
                         if content:
                             token_count += 1
+                            last_delta_time = time.time()
                             await send_response(websocket, msg_id, "stream", {"chunk": content})
 
-                if buffer.strip():
-                    total_events += 1
-                    if total_events <= 5:
-                        logger.info(f"原始 SSE 事件(尾): {buffer.strip()[:300]}")
-                    event_type, content = self._parse_sse_event(buffer)
-                    if content:
-                        token_count += 1
-                        await send_response(websocket, msg_id, "stream", {"chunk": content})
+                        # session.status idle → 回答完毕
+                        if event_type == "session.status":
+                            props = self._get_event_properties(event_block) or {}
+                            status = props.get("status", {})
+                            if isinstance(status, dict) and status.get("type") == "idle":
+                                logger.info("session 空闲，回答完毕")
+                                response_done = True
+                                break
 
-                logger.info(f"SSE 流结束，共 {total_events} 个事件, {token_count} 个 token")
+                logger.info(f"SSE 消费结束，共 {total_events} 事件, {token_count} token")
+
+    def _get_event_properties(self, event_block: str) -> dict | None:
+        """从 SSE 事件块中提取 properties 字段"""
+        for line in event_block.strip().split("\n"):
+            if line.startswith("data:"):
+                try:
+                    data = json.loads(line[5:].strip())
+                    return data.get("properties")
+                except json.JSONDecodeError:
+                    pass
+        return None
 
     def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
         """
