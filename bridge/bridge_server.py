@@ -209,63 +209,17 @@ class OpenCodeBridge:
     # ---------- 核心：SSE 流式消息 ----------
 
     async def send_message_stream(self, message: str, msg_id: str, websocket, model: str = None):
-        """
-        发送消息并通过 WebSocket 逐 token 转发 SSE 流。
-        
-        后台任务监听 /event，主流程 POST 消息后等待。
-        每个消息独立 session（未来可改为按对话缓存 session_id）。
-        """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
             return
 
         session_id = await self.create_session(model=model)
-        logger.info(f"session {session_id}: {message[:60]}...")
+        logger.info(f"发送: {message[:50]}...  session={session_id}")
 
-        # 后台任务监听 /event（独立 session，不与 POST 竞争）
-        token_events = []  # 收集 token
-        event_done = asyncio.Event()
-
-        async def listen_events():
-            try:
-                async with aiohttp.ClientSession() as s:
-                    async with s.get(
-                        f"{self.base_url}/event",
-                        timeout=aiohttp.ClientTimeout(total=300),
-                    ) as resp:
-                        buf = ""
-                        while True:
-                            try:
-                                chunk = await asyncio.wait_for(resp.content.read(4096), timeout=8.0)
-                            except asyncio.TimeoutError:
-                                if token_events and time.time() - last_delta >= 5:
-                                    break
-                                continue
-                            if not chunk:
-                                break
-                            buf += chunk.decode("utf-8", errors="replace")
-                            while "\n\n" in buf:
-                                block, buf = buf.split("\n\n", 1)
-                                etype, text = self._parse_sse_event(block)
-                                if text:
-                                    token_events.append(text)
-                                    last_delta = time.time()
-                                    await send_response(websocket, msg_id, "stream", {"chunk": text})
-                                if etype == "session.status":
-                                    props = self._get_event_properties(block) or {}
-                                    status = props.get("status", {})
-                                    if isinstance(status, dict) and status.get("type") == "idle":
-                                        event_done.set()
-                                        return
-            finally:
-                event_done.set()
-
-        last_delta = time.time()
-        listener = asyncio.create_task(listen_events())
-        await asyncio.sleep(0.2)  # 确保 listener 就绪
+        # 后台监听 /event（独立 ClientSession，不阻塞 POST）
+        listener = asyncio.create_task(self._listen_events(session_id, msg_id, websocket))
 
         try:
-            # POST 消息
             async with aiohttp.ClientSession() as s:
                 payload = {"parts": [{"type": "text", "text": message}]}
                 if model and "/" in model:
@@ -274,27 +228,48 @@ class OpenCodeBridge:
                 async with s.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     if resp.status != 200:
                         err = await resp.text()
                         logger.error(f"POST 失败: {err}")
                         listener.cancel()
-                        await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {err}"})
+                        await send_response(websocket, msg_id, "error", {"error": f"发消息失败: {err}"})
                         return
-                    logger.info(f"POST 成功")
 
-            # 等待回答完毕
-            await asyncio.wait_for(event_done.wait(), timeout=300)
-            logger.info(f"回答完毕（{len(token_events)} token）")
+            await listener  # 等 /event 流结束
+            logger.info("回答完毕")
 
-        except asyncio.TimeoutError:
-            logger.warning(f"回答超时")
+        except asyncio.CancelledError:
             listener.cancel()
+            raise
         except Exception as e:
             logger.error(f"异常: {e}")
             listener.cancel()
             raise
+
+    async def _listen_events(self, session_id: str, msg_id: str, websocket):
+        """监听 /event SSE，逐 token 转发。检测到 session.idle 后自动退出。"""
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{self.base_url}/event", timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                buf = ""
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(resp.content.read(4096), timeout=8.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if not chunk:
+                        break
+                    buf += chunk.decode("utf-8", errors="replace")
+                    while "\n\n" in buf:
+                        block, buf = buf.split("\n\n", 1)
+                        etype, text = self._parse_sse_event(block)
+                        if text:
+                            await send_response(websocket, msg_id, "stream", {"chunk": text})
+                        if etype == "session.status":
+                            props = self._get_event_properties(block) or {}
+                            status = props.get("status", {})
+                            if isinstance(status, dict) and status.get("type") == "idle":
+                                return
 
     def _get_event_session(self, event_block: str) -> str | None:
         """从 SSE 事件块中提取 sessionID"""
