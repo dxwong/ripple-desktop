@@ -143,6 +143,7 @@ async def execute_opencode(command: str, model: str = None, timeout: int = 300) 
 
         proc = await asyncio.create_subprocess_shell(
             cmd_str,
+            stdin=subprocess.DEVNULL,  # 关闭 stdin，防止 CLI 进入交互模式等待输入
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -199,6 +200,7 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
 
         proc = await asyncio.create_subprocess_shell(
             cmd_str,
+            stdin=subprocess.DEVNULL,  # 关闭 stdin，防止 CLI 进入交互模式等待输入
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # 将 stderr 合并到 stdout
         )
@@ -260,6 +262,7 @@ async def execute_shell(command: str, timeout: int = 60) -> dict:
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

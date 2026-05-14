@@ -175,10 +175,16 @@
 - 同步路径最稳定，加上锁修复后无死锁问题
 - 所有路径使用 `appendToConversation(targetConvId, result)` 显式指定目标对话
 
+**③ Python 桥接：关闭 stdin 防止 CLI 进入交互模式**：
+OpenCode CLI 执行完命令后因 stdin 未关闭而进入交互 shell（显示 `$` 提示符），`proc.communicate()` 永远不返回，直到超时。
+- `execute_opencode`、`execute_opencode_streaming`、`execute_shell` 均添加 `stdin=subprocess.DEVNULL`
+- CLI 执行完单条命令后自动退出，不再等待输入
+
 **涉及文件**：
 - `src-tauri/src/lib.rs`：`send_to_bridge` 分阶段执行
 - `src-tauri/src/ws_client.rs`：`stream` 字段改为 `pub(crate)`
 - `src/hooks/useStreamingChat.ts`：简化同步路径，移除流式分支
+- `bridge/bridge_server.py`：三个子进程函数加 `stdin=subprocess.DEVNULL`
 
 ### ❌ 未解决 / 待办
 
