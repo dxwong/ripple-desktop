@@ -248,10 +248,16 @@ class OpenCodeBridge:
             raise
 
     async def _listen_events(self, session_id: str, msg_id: str, websocket):
-        """监听 /event SSE，逐 token 转发。检测到 session.idle 后自动退出。"""
+        """
+        监听 /event SSE，逐 token 转发。
+        delta 是累积内容，需要去重：只转发新增部分。
+        检测到 session.idle 后自动退出。
+        """
         async with aiohttp.ClientSession() as s:
             async with s.get(f"{self.base_url}/event", timeout=aiohttp.ClientTimeout(total=300)) as resp:
                 buf = ""
+                last_for_part: dict[str, str] = {}  # partID → 上次已发内容
+
                 while True:
                     try:
                         chunk = await asyncio.wait_for(resp.content.read(4096), timeout=8.0)
@@ -262,14 +268,43 @@ class OpenCodeBridge:
                     buf += chunk.decode("utf-8", errors="replace")
                     while "\n\n" in buf:
                         block, buf = buf.split("\n\n", 1)
-                        etype, text = self._parse_sse_event(block)
-                        if text:
+                        etype, text, part_id = self._parse_sse_event_detailed(block)
+                        if text and part_id:
+                            # 去重：delta 是累积的，只发新增部分
+                            prev = last_for_part.get(part_id, "")
+                            if text.startswith(prev):
+                                new_text = text[len(prev):]
+                            else:
+                                new_text = text  # 不匹配就全发（兜底）
+                            last_for_part[part_id] = text
+                            if new_text:
+                                await send_response(websocket, msg_id, "stream", {"chunk": new_text})
+                        elif text:
+                            # 没有 partID 的老格式，直接发
                             await send_response(websocket, msg_id, "stream", {"chunk": text})
                         if etype == "session.status":
                             props = self._get_event_properties(block) or {}
                             status = props.get("status", {})
                             if isinstance(status, dict) and status.get("type") == "idle":
                                 return
+
+    def _parse_sse_event_detailed(self, event_block: str) -> tuple[str | None, str | None, str | None]:
+        """解析 SSE 事件，返回 (event_type, content, partID)"""
+        for line in event_block.strip().split("\n"):
+            if not line.startswith("data:"):
+                continue
+            try:
+                data = json.loads(line[5:].strip())
+                etype = data.get("type")
+                props = data.get("properties", {})
+                if not isinstance(props, dict):
+                    return (etype, None, None)
+                delta = props.get("delta") or props.get("text") or props.get("content")
+                part_id = props.get("partID")
+                return (etype, delta, part_id)
+            except json.JSONDecodeError:
+                pass
+        return (None, None, None)
 
     def _get_event_session(self, event_block: str) -> str | None:
         """从 SSE 事件块中提取 sessionID"""
