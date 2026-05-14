@@ -182,53 +182,26 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
 
 
-def _try_parse_json_line(line: str) -> str | None:
-    """
-    尝试将行解析为 JSON 事件，提取其中的文本内容。
-    opencode --format json 输出的每行是一个 JSON 事件，格式可能为：
-      {"type":"text","content":"..."}
-      {"type":"delta","text":"..."}
-      {"type":"tool_call","name":"...","arguments":"..."}  ← 跳过
-      {"choices":[{"delta":{"content":"..."}}]}            ← OpenAI 兼容
-    如果解析失败或不是文本事件，返回 None。
-    """
-    try:
-        data = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    # 跳过明确的非文本事件
-    event_type = data.get("type", "")
-    if event_type in ("tool_call", "tool_result", "status", "error"):
-        return None
-
-    # 尝试提取文本字段
-    for key in ("text", "content", "delta"):
-        val = data.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-
-    # 尝试 choices[0].delta.content (OpenAI 流式格式)
-    choices = data.get("choices")
-    if isinstance(choices, list) and len(choices) > 0:
-        delta = choices[0].get("delta", {})
-        if isinstance(delta, dict):
-            text = delta.get("content", "")
-            if text:
-                return text
-
-    return None
+def _is_shell_line(line: str) -> bool:
+    """判断是否是 shell 命令提示行（如 $ echo xxx）"""
+    stripped = line.strip()
+    if stripped.startswith("$ "):
+        return True
+    if stripped.startswith(">"):
+        return True
+    # PowerShell 错误行
+    if ("CategoryInfo" in stripped or "FullyQualifiedErrorId" in stripped
+        or "+" in stripped and "~" in stripped):
+        return True
+    return False
 
 
 async def execute_opencode_streaming(websocket, msg_id: str, command: str, model: str = None, timeout: int = 300):
     """
-    执行 OpenCode CLI 命令（流式输出，JSON 事件格式）
+    执行 OpenCode CLI 命令（流式输出）
     
-    使用 --format json 获取结构化事件，提取文本内容实时推送到前端。
-    如果 JSON 解析失败，降级为清洗后的原始文本。
+    清洗输出内容：去 ANSI 码、去 shell 命令回显、去重复行，
+    只推送有意义的文本内容到前端。
     
     Args:
         websocket: WebSocket 连接对象
@@ -238,26 +211,27 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
         timeout: 超时时间（秒）
     """
     try:
-        # 构建命令: opencode run --format json [--model <name>] "<command>"
-        cmd_parts = [OPENCODE_CMD, "run", "--format", "json"]
+        # 使用 default 格式输出（不用 --format json，避免格式兼容问题）
+        cmd_parts = [OPENCODE_CMD, "run"]
         if model:
             cmd_parts.extend(["--model", model])
         cmd_parts.append(f'"{command}"')
         cmd_str = " ".join(cmd_parts)
 
-        logger.info(f"执行（流式·JSON）: {cmd_str}")
+        logger.info(f"执行（流式）: {cmd_str}")
 
         proc = await asyncio.create_subprocess_shell(
             cmd_str,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,  # stderr 分开捕获，不混入 stdout
+            stderr=subprocess.STDOUT,  # stderr 合并到 stdout，避免管道堵塞
         )
 
-        # 流式读取 stdout
+        # 流式读取输出
         buffer = ""
         start_time = time.time()
-        last_text_time = time.time()
+        last_output_time = time.time()
+        last_line = ""  # 用于去重
         
         while True:
             if time.time() - start_time > timeout:
@@ -268,50 +242,50 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
             try:
                 data = await asyncio.wait_for(
                     proc.stdout.read(1024),
-                    timeout=0.5  # 500ms 超时，更及时的响应
+                    timeout=1.0
                 )
                 if not data:
                     break
                     
                 buffer += data.decode("utf-8", errors="replace")
-                last_text_time = time.time()
+                last_output_time = time.time()
 
                 # 逐行处理
                 while "\n" in buffer:
                     line_end = buffer.index("\n")
-                    raw_line = buffer[:line_end].strip()
+                    raw_line = buffer[:line_end]
                     buffer = buffer[line_end + 1:]
 
-                    if not raw_line:
+                    line = raw_line.strip()
+                    if not line:
                         continue
 
-                    # 优先解析 JSON 事件
-                    text = _try_parse_json_line(raw_line)
-                    if text:
-                        await send_response(websocket, msg_id, "stream", {"chunk": text})
-                    else:
-                        # JSON 解析失败 → 降级：去 ANSI 码后发送
-                        cleaned = _strip_ansi(raw_line).strip()
-                        if cleaned:
-                            await send_response(websocket, msg_id, "stream", {"chunk": cleaned + "\n"})
+                    # 清洗
+                    cleaned = _strip_ansi(line)
+
+                    # 去重（连续相同行只发一次）
+                    if cleaned == last_line:
+                        continue
+                    last_line = cleaned
+
+                    # 过滤 shell 命令回显
+                    if _is_shell_line(cleaned):
+                        continue
+
+                    # 发送清洗后的内容（带换行）
+                    await send_response(websocket, msg_id, "stream", {"chunk": cleaned + "\n"})
 
             except asyncio.TimeoutError:
-                # 长时间没输出 → 发心跳保活
-                if time.time() - last_text_time > 5:
+                # 长时间没输出 → 发心跳保持连接
+                if time.time() - last_output_time > 5:
                     await send_response(websocket, msg_id, "keepalive", {"time": time.time()})
-                    last_text_time = time.time()
+                    last_output_time = time.time()
                 continue
 
         # 发送剩余的缓冲内容
-        remaining = buffer.strip()
-        if remaining:
-            text = _try_parse_json_line(remaining)
-            if text:
-                await send_response(websocket, msg_id, "stream", {"chunk": text})
-            else:
-                cleaned = _strip_ansi(remaining).strip()
-                if cleaned:
-                    await send_response(websocket, msg_id, "stream", {"chunk": cleaned})
+        remaining = _strip_ansi(buffer.strip())
+        if remaining and remaining != last_line and not _is_shell_line(remaining):
+            await send_response(websocket, msg_id, "stream", {"chunk": remaining})
 
         # 等待进程结束
         try:

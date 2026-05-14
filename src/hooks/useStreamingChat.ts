@@ -180,16 +180,34 @@ export function useStreamingChat() {
         // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
         if (openCodeModel && bridgeSendStreaming && bridgeSetCallback) {
           await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const done = () => { settled = true; };
+            // 5 分钟超时，防止流永远不结束
+            const timer = setTimeout(() => {
+              if (!settled) {
+                bridgeSetCallback(null);
+                reject(new Error("OpenCode 执行超时（5分钟）"));
+              }
+            }, 300000);
+
             // 先注册回调，再发送（避免竞态）
             bridgeSetCallback((msg: any) => {
+              // keepalive 和其他非终态消息直接忽略
+              if (msg.status === "keepalive") return;
+              if (settled) return; // 已结束，忽略后续消息
+
               if (msg.status === "stream") {
                 const chunk = msg.data?.chunk || "";
                 if (chunk) appendToConversation(targetConvId, chunk);
               } else if (msg.status === "ok") {
+                clearTimeout(timer);
                 bridgeSetCallback(null);
+                done();
                 resolve();
               } else if (msg.status === "error") {
+                clearTimeout(timer);
                 bridgeSetCallback(null);
+                done();
                 reject(new Error(msg.data?.error || "执行失败"));
               }
             });
@@ -200,7 +218,9 @@ export function useStreamingChat() {
               model: openCodeModel,
             };
             bridgeSendStreaming("execute_opencode_streaming", payload).catch((e: any) => {
+              clearTimeout(timer);
               bridgeSetCallback(null);
+              done();
               reject(e);
             });
           });
