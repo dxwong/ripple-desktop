@@ -223,140 +223,69 @@ class OpenCodeBridge:
         logger.info(f"发送消息到 session {session_id}: {message[:60]}...")
 
         # 同一个 ClientSession，避免连接池竞争
-        async with aiohttp.ClientSession() as aio:
-            # 1. POST 消息
-            payload = {"parts": [{"type": "text", "text": message}]}
-            if model and "/" in model:
-                parts = model.split("/", 1)
-                payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
+        try:
+            async with aiohttp.ClientSession() as aio:
+                # 1. POST 消息
+                payload = {"parts": [{"type": "text", "text": message}]}
+                if model and "/" in model:
+                    parts = model.split("/", 1)
+                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
 
-            async with aio.post(
-                f"{self.base_url}/session/{session_id}/message",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    err = await resp.text()
-                    logger.error(f"发送消息失败: {err}")
-                    await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {err}"})
-                    return
-                logger.info(f"POST 成功: {resp.status} {resp.content_type}")
+                async with aio.post(
+                    f"{self.base_url}/session/{session_id}/message",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        err = await resp.text()
+                        logger.error(f"发送消息失败: {err}")
+                        await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {err}"})
+                        return
+                    logger.info(f"POST 成功: {resp.status} {resp.content_type}")
 
-            # 2. 连接 /event 接收 SSE
-            async with aio.get(
-                f"{self.base_url}/event",
-                timeout=aiohttp.ClientTimeout(total=300),
-            ) as event_resp:
-                logger.info(f"/event 已连接: {event_resp.status} {event_resp.content_type}")
-                token_count = 0
-                last_delta = time.time()
-                buf = ""
+                # 2. 连接 /event 接收 SSE
+                async with aio.get(
+                    f"{self.base_url}/event",
+                    timeout=aiohttp.ClientTimeout(total=300),
+                ) as event_resp:
+                    logger.info(f"/event 已连接: {event_resp.status} {event_resp.content_type}")
+                    token_count = 0
+                    last_delta = time.time()
+                    buf = ""
 
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(event_resp.content.read(4096), timeout=8.0)
-                    except asyncio.TimeoutError:
-                        if token_count > 0 and time.time() - last_delta >= 5:
-                            logger.info(f"回答完毕（{token_count} token）")
-                            break
-                        continue
-
-                    if not chunk:
-                        logger.info("/event 流结束")
-                        break
-
-                    buf += chunk.decode("utf-8", errors="replace")
-                    while "\n\n" in buf:
-                        block, buf = buf.split("\n\n", 1)
-                        etype, text = self._parse_sse_event(block)
-                        if text:
-                            token_count += 1
-                            last_delta = time.time()
-                            await send_response(websocket, msg_id, "stream", {"chunk": text})
-                        if etype == "session.status":
-                            props = self._get_event_properties(block) or {}
-                            status = props.get("status", {})
-                            if isinstance(status, dict) and status.get("type") == "idle":
-                                logger.info(f"session idle（{token_count} token）")
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(event_resp.content.read(4096), timeout=8.0)
+                        except asyncio.TimeoutError:
+                            if token_count > 0 and time.time() - last_delta >= 5:
+                                logger.info(f"回答完毕（{token_count} token）")
                                 break
-                    else:
-                        # \n\n 不完整，等待更多数据
-                        continue
-                    break  # session idle 时退出外层循环
-        except Exception as e:
-            logger.error(f"send_message_stream 异常: {e}")
-            event_consumer.cancel()
-            raise
-
-    async def _consume_events_stream(self, session_id: str, msg_id: str, websocket):
-        """
-        监听 /event SSE 流，解析 message.part.delta 事件并转发 token。
-        
-        只处理与 session_id 匹配的事件（过滤其他 session 的干扰）。
-        回答完毕判断：收到 session.status idle 事件，或连续 5 秒无新 delta。
-        """
-        logger.info(f"连接 /event SSE 流...")
-        token_count = 0
-        last_delta_time = time.time()
-        response_done = False
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{self.base_url}/event",
-                timeout=aiohttp.ClientTimeout(total=300),
-            ) as resp:
-                content_type = resp.headers.get("Content-Type", "未知")
-                logger.info(f"/event HTTP {resp.status} Content-Type: {content_type}")
-
-                buffer = ""
-                total_events = 0
-                skipped_events = 0
-
-                while not response_done:
-                    try:
-                        chunk = await asyncio.wait_for(
-                            resp.content.read(4096),
-                            timeout=5.0
-                        )
-                    except asyncio.TimeoutError:
-                        if token_count > 0 and time.time() - last_delta_time >= 5:
-                            logger.info(f"5 秒无 delta, 回答完毕（共 {token_count} token）")
-                            break
-                        continue
-
-                    if not chunk:
-                        logger.info("SSE 流结束")
-                        break
-
-                    text = chunk.decode("utf-8", errors="replace")
-                    buffer += text
-
-                    while "\n\n" in buffer:
-                        event_block, buffer = buffer.split("\n\n", 1)
-                        total_events += 1
-
-                        # 提取 sessionID，只处理当前 session 的事件
-                        event_session = self._get_event_session(event_block)
-                        if event_session and event_session != session_id:
-                            skipped_events += 1
                             continue
 
-                        event_type, content = self._parse_sse_event(event_block)
-                        if content:
-                            token_count += 1
-                            last_delta_time = time.time()
-                            await send_response(websocket, msg_id, "stream", {"chunk": content})
+                        if not chunk:
+                            logger.info("/event 流结束")
+                            break
 
-                        # session.status idle → 回答完毕
-                        if event_type == "session.status":
-                            props = self._get_event_properties(event_block) or {}
-                            status = props.get("status", {})
-                            if isinstance(status, dict) and status.get("type") == "idle":
-                                logger.info("session 空闲，回答完毕")
-                                response_done = True
-                                break
-
-                logger.info(f"SSE 消费结束: {total_events} 事件, {skipped_events} 跳过, {token_count} token")
+                        buf += chunk.decode("utf-8", errors="replace")
+                        while "\n\n" in buf:
+                            block, buf = buf.split("\n\n", 1)
+                            etype, text = self._parse_sse_event(block)
+                            if text:
+                                token_count += 1
+                                last_delta = time.time()
+                                await send_response(websocket, msg_id, "stream", {"chunk": text})
+                            if etype == "session.status":
+                                props = self._get_event_properties(block) or {}
+                                status = props.get("status", {})
+                                if isinstance(status, dict) and status.get("type") == "idle":
+                                    logger.info(f"session idle（{token_count} token）")
+                                    break
+                        else:
+                            continue
+                        break
+        except Exception as e:
+            logger.error(f"send_message_stream 异常: {e}")
+            raise
 
     def _get_event_session(self, event_block: str) -> str | None:
         """从 SSE 事件块中提取 sessionID"""
