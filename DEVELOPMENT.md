@@ -82,34 +82,21 @@
 
 ### 🐛 已知问题
 
-#### 问题 1：项目点击后下方新建普通对话（项目对话模型待澄清）
+#### 问题 1：项目点击后下方新建普通对话 ✅ 已修复
 
-**现象**：点击左侧项目名称，侧边栏对话列表下方会多出一条普通（chat 模式）对话。
+**现象**：点击左侧项目名称，侧边栏对话列表下方会多出一条普通对话。
 
-**根因分析**：`Sidebar.handleSelectProjectConversation` 调用 `chat.newConversation("code", projectId)` 创建开发对话。但此操作与其他对话创建逻辑可能存在冲突，导致额外生成一条 mode="chat" 的普通对话。
+**根因**：项目被设计为"先添加项目实体，点击时再创建对话"，但实际上**项目本身就应该是一条对话**。添加项目时没有同时创建聊天记录，导致点击项目时创建的新对话与项目列表中的项目实体重复展示。
 
-**核心设计澄清**：
+**核心设计**：
 ```
-项目对话 ≠ 特殊实体
-项目对话 = 普通对话 + 可选的 OpenCode 执行能力
+项目 = 一条聊天记录（带 projectId 的 chat 对话）
+项目列表中的条目 = 对话列表的快捷入口（不是独立实体）
 ```
-
-即项目本身就是一个聊天记录，和普通对话完全一样，唯一区别在于：
-- 输入框底部多一个 **OpenCode 模型选择器**
-- 选中 OC 模型后发送的消息走 `opencode run --model <id> "<command>"` 执行
-- 不选 OC 模型时和普通对话行为完全一致
-
-**当前表现与预期差异**：
-| 预期 | 当前 |
-|------|------|
-| 点击项目 → 打开该项目的聊天（已有则切换，无则新建） | 会额外生成普通对话 |
-| 项目对话列表只显示一条记录 | 显示多条（普通 + 开发） |
-| 项目对话的输入框底部有 OC 模型选择器 | 有 ✅ |
-
-**待修复方向**：
-- 排查 `handleSelectProjectConversation` 与 `chat.conversations` 的交互
-- 确保 `chat.newConversation("code", projectId)` 不触发副作用创建普通对话
-- 考虑改用 find-or-create 模式：只在没有关联对话时新建
+- 添加项目时**立即创建一条 chat 对话**，标题=项目名，关联 projectId
+- 对话列表**过滤掉有关联项目的对话**（避免重复展示）
+- 项目列表中的条目点击时直接切换到内部对话
+- 有 projectId 的对话，输入框自动显示 OC 模型选择器
 
 #### 问题 2：OpenCode 模型选择后发送，UI 无数据显示
 
@@ -149,15 +136,53 @@
 - 使用 ref 而非 state 管理回调，确保闭包始终指向最新值
 - 添加日志追踪消息流转路径（前端→IPC→Rust→WS→Python→WS→Rust→事件→前端）
 
+### ✅ 已修复
+
+#### 问题 1：项目点击后下方新建普通对话
+
+**修复**（v0.2.0）：
+
+**核心逻辑修正**：项目本身就是一条聊天记录，不是"先加项目再为它创建对话"。
+
+**改动**：
+1. **`handleAddProject` 添加时立即创建对话**：`projects.addProject` 后立即 `chat.newConversation("chat", projectId, projectName)`，项目名就是对话标题。
+2. **`Sidebar` 对话列表过滤掉项目对话**：`conversations.filter(c => !c.projectId && ...)`，避免项目在下方对话列表重复出现。
+3. **`handleSelectProjectConversation` 只切换不创建**：点击项目名直接 `find` 已有对话 → `switchConversation`，仅兼容旧数据时兜底创建。
+4. **OC 选择器按 `hasProject` 显示**：`MessageInput.isCodeMode = chatMode==="code" || hasProject`，使有项目的 chat 对话也能出现 OC 模型选择器。
+5. **`ChatView` UI 条件扩展**：头部徽标、空状态、快捷建议统一改为 `chatMode === "code" || project`。
+
+**涉及文件**：
+- `src/App.tsx`：`handleAddProject` 添加时创建对话；`handleSelectProjectConversation` 仅切换
+- `src/components/Sidebar.tsx`：对话列表过滤 `!c.projectId`
+- `src/components/MessageInput.tsx`：新增 `hasProject` prop
+- `src/components/ChatView.tsx`：UI 条件扩展
+
+#### 问题 2：OpenCode 命令结果在前端显示
+
+**修复**（v0.2.0）：
+
+**① Rust 后端死锁修复（根因）**：
+`send_to_bridge` 原实现持有 `SharedWsClient` 锁等待响应 → `ws_event_loop` 无法读取 WebSocket 回包和 ping → 桥接超时断开。
+- 改为**两阶段执行**：
+  ```
+  阶段一：持锁 → 插入 pending 记录 → 发送消息 → 释放锁
+  阶段二：无锁等待 oneshot 响应（ws_event_loop 可正常读消息和响应 ping）
+  ```
+- 后台事件循环在等待期间可正常接收数据、响应 WebSocket ping
+
+**② 简化前端逻辑**：
+- 放弃复杂的流式路径，统一使用**同步路径**（`bridge.sendMessage` + `send_to_bridge`）
+- 同步路径最稳定，加上锁修复后无死锁问题
+- 所有路径使用 `appendToConversation(targetConvId, result)` 显式指定目标对话
+
+**涉及文件**：
+- `src-tauri/src/lib.rs`：`send_to_bridge` 分阶段执行
+- `src-tauri/src/ws_client.rs`：`stream` 字段改为 `pub(crate)`
+- `src/hooks/useStreamingChat.ts`：简化同步路径，移除流式分支
+
 ### ❌ 未解决 / 待办
 
 #### 高优先级
-- [ ] **问题 1 修复**：项目点击不产生多余普通对话
-  - 排查 `handleSelectProjectConversation` 的副作用
-  - 确保 projectId 关联正确
-- [ ] **问题 2 修复**：OpenCode 命令结果在前端显示
-  - 解决 WebSocket keepalive 超时
-  - 修复回调时序与 activeConversationId 匹配
 - [ ] 桥接服务与 Tauri 自动联动
   - 目前需手动启动 `npm run bridge`
   - 期望 Tauri 启动时自动拉起 Python 桥接进程

@@ -25,14 +25,13 @@ function App() {
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
-  // OpenCode 模型列表（从 opencode models 命令获取）
+  // OpenCode 模型列表
   const [openCodeModels, setOpenCodeModels] = useState<{ id: string; name: string }[]>([
     { id: "opencode/deepseek-v4-flash-free", name: "DeepSeek V4 Flash (免费)" },
     { id: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 (免费)" },
     { id: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super (免费)" },
     { id: "opencode/ring-2.6-1t-free", name: "Ring 2.6 1T (免费)" },
   ]);
-  // 当前选择的 OpenCode 模型
   const [openCodeModel, setOpenCodeModel] = useState("");
 
   // 获取当前会话关联的项目和模式
@@ -41,44 +40,50 @@ function App() {
     : null;
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
-
-  // 离开代码模式时清空 OpenCode 模型选择
-  if (!isCodeMode && openCodeModel) setOpenCodeModel("");
+  // 是否有关联项目（决定 OC 模型选择器是否显示）
+  const hasProject = !!currentProject;
 
   // 发送消息
   const handleSendMessage = useCallback(async (content: string) => {
     const isOnline = bridge.status === "connected";
     const projectDirectory = currentProject?.directory;
-    const ocModel = isCodeMode ? openCodeModel : undefined;
+    // 有关联项目且选中了 OC 模型才传 model
+    const ocModel = hasProject && openCodeModel ? openCodeModel : undefined;
     await chat.sendMessage(
       content,
       isOnline ? "bridge" : "simulate",
       isOnline ? bridge.sendMessage : undefined,
-      undefined, // streaming not used currently
-      undefined, // streaming callback not used currently
+      undefined, // 暂不使用流式路径
+      undefined,
       projectDirectory,
       ocModel
     );
-  }, [bridge.status, bridge.sendMessage, chat.sendMessage, currentProject?.directory, isCodeMode, openCodeModel]);
+  }, [bridge.status, bridge.sendMessage, chat.sendMessage, currentProject?.directory, hasProject, openCodeModel]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
     chat.newConversation(mode, projectId);
   };
 
-  // 添加项目
+  // 添加项目 = 创建一条聊天记录（项目本身就是一条对话）
   const handleAddProject = (name: string, directory: string) => {
-    projects.addProject(name, directory);
+    const newProject = projects.addProject(name, directory);
+    // 创建立刻创建关联的聊天记录，标题 = 项目名，mode = chat
+    chat.newConversation("chat", newProject.id, name);
   };
 
-  // 点击项目 → 打开关联对话
+  // 点击项目 → 切换到关联的聊天记录（不会创建新对话）
   const handleSelectProjectConversation = (projectId: string) => {
     projects.setActiveProject(projectId);
-    const existingConv = chat.conversations.find((c) => c.projectId === projectId);
+    const existingConv = chat.conversations.find(
+      (c) => c.projectId === projectId
+    );
     if (existingConv) {
       chat.switchConversation(existingConv.id);
     } else {
-      chat.newConversation("code", projectId);
+      // 兜底：兼容旧数据（升级前添加的项目没有对应对话）
+      const project = projects.projects.find((p) => p.id === projectId);
+      chat.newConversation("chat", projectId, project?.name || "项目对话");
     }
   };
 

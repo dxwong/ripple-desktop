@@ -40,7 +40,7 @@ pub struct BridgeResponse {
     /// WebSocket 客户端
 pub struct WebSocketClient {
     /// WebSocket 流（连接后才有值）
-    stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    pub(crate) stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     /// 连接状态
     pub state: WsConnectionState,
     /// 桥接服务地址
@@ -88,6 +88,9 @@ impl WebSocketClient {
     }
 
     /// 发送消息并等待响应
+    /// 注意：此方法持有锁等待，不适用于需要保持锁可用性的场景。
+    /// 建议改用 `send_to_bridge` 的分阶段模式。
+    #[allow(dead_code)]
     pub async fn send_request(&mut self, request: BridgeRequest) -> Result<BridgeResponse, String> {
         let stream = self.stream.as_mut()
             .ok_or_else(|| "未连接到桥接服务".to_string())?;

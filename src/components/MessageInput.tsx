@@ -20,6 +20,8 @@ interface MessageInputProps {
   onSwitchModel?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
+  /** 是否有关联项目（项目对话显示 OC 模型选择器） */
+  hasProject?: boolean;
   /** OpenCode 可用模型列表 */
   openCodeModels?: OpenCodeModel[];
   /** 当前选中的 OpenCode 模型 */
@@ -57,6 +59,7 @@ function MessageInput({
   modelConfigs = [],
   onSwitchModel,
   chatMode = "chat",
+  hasProject = false,
   openCodeModels = [],
   openCodeModel = "",
   onSwitchOpenCodeModel,
@@ -71,7 +74,7 @@ function MessageInput({
   const ocDropdownRef = useRef<HTMLDivElement>(null);
   const manualInputRef = useRef<HTMLInputElement>(null);
 
-  const isCodeMode = chatMode === "code";
+  const isCodeMode = chatMode === "code" || hasProject;
   /** 已选了 OpenCode 模型 → 对话模型禁用；未选 → 对话模型可用 */
   const chatDisabled = isCodeMode && !!openCodeModel;
   const hasOCModels = openCodeModels.length > 0;

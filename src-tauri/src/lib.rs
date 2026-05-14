@@ -1,6 +1,8 @@
 mod ws_client;
 
+use futures_util::SinkExt;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio_tungstenite::tungstenite::Message;
 use ws_client::{BridgeRequest, SharedWsClient, WsConnectionState};
 
 /// 桥接服务默认地址
@@ -256,28 +258,55 @@ async fn get_bridge_status(
 }
 
 /// 发送消息到桥接服务并等待响应
+///
+/// ⚠️ 关键设计：分两阶段执行，避免持有锁等待响应。
+/// - 阶段一：持锁，插入 pending 记录，发送消息 → 立即释放锁
+/// - 阶段二：无锁等待 oneshot 响应（ws_event_loop 可正常读消息和响应 ping）
 #[tauri::command]
 async fn send_to_bridge(
     state: State<'_, SharedWsClient>,
     msg_type: String,
     data: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let mut client = state.lock().await;
-    
-    // 检查连接状态
-    if client.state != WsConnectionState::Connected {
-        return Err("未连接到桥接服务，请先调用 connect_bridge".to_string());
-    }
+    // ===== 阶段一：持锁发送，不等待 =====
+    let rx = {
+        let mut client = state.lock().await;
 
-    // 创建请求
-    let request = BridgeRequest {
-        id: uuid::Uuid::new_v4().to_string(),
-        msg_type,
-        data,
-    };
+        // 检查连接状态
+        if client.state != WsConnectionState::Connected {
+            return Err("未连接到桥接服务，请先调用 connect_bridge".to_string());
+        }
 
-    // 发送并等待响应
-    let response = client.send_request(request).await?;
+        let request = BridgeRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            msg_type,
+            data,
+        };
+
+        // 创建 oneshot channel
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        client.pending_requests.insert(request.id.clone(), tx);
+
+        // 发送消息
+        let stream = client.stream.as_mut()
+            .ok_or_else(|| "WebSocket 流不可用".to_string())?;
+        let json = serde_json::to_string(&request)
+            .map_err(|e| format!("序列化请求失败: {}", e))?;
+        stream.send(Message::Text(json.into()))
+            .await
+            .map_err(|e| format!("发送消息失败: {}", e))?;
+
+        rx // 将 receiver 移出锁作用域
+    }; // ★ 锁在此处释放，ws_event_loop 可继续运行 ★
+
+    // ===== 阶段二：无锁等待响应 =====
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        rx,
+    )
+    .await
+    .map_err(|_| "等待响应超时（120秒）".to_string())?
+    .map_err(|_| "响应通道已关闭".to_string())?;
 
     // 返回响应数据
     Ok(serde_json::json!({

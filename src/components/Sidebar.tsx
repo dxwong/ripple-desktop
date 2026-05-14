@@ -87,8 +87,9 @@ function Sidebar({
   const isOnline = bridgeStatus === "connected";
   const isConnecting = bridgeStatus === "connecting";
 
+  // 对话列表：只显示普通对话（有关联项目的对话已在项目列表中展示，避免重复）
   const filteredConversations = conversations.filter((c) =>
-    c.title.toLowerCase().includes(searchQuery.toLowerCase())
+    !c.projectId && c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   /** 新建对话：+号始终创建普通对话模式（项目对话通过点击项目名称进入） */
