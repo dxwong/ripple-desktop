@@ -201,7 +201,7 @@ class OpenCodeBridge:
 
     # ---------- 核心：SSE 流式消息 ----------
 
-    async def send_message_stream(self, message: str, msg_id: str, websocket):
+    async def send_message_stream(self, message: str, msg_id: str, websocket, model: str = None):
         """
         发送消息并通过 WebSocket 逐 token 转发 SSE 流。
         
@@ -226,6 +226,9 @@ class OpenCodeBridge:
             # 发送消息（返回 JSON，非流式）
             async with aiohttp.ClientSession() as session:
                 payload = {"parts": [{"type": "text", "text": message}]}
+                if model:
+                    # 尝试通过 session setting 或 message meta 传递模型
+                    payload["model"] = model
                 async with session.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
@@ -257,8 +260,8 @@ class OpenCodeBridge:
         """
         监听 /event SSE 流，解析 message.part.delta 事件并转发 token。
         
+        只处理与 session_id 匹配的事件（过滤其他 session 的干扰）。
         回答完毕判断：收到 session.status idle 事件，或连续 5 秒无新 delta。
-        判断到完毕后立即退出循环，让上游发 ok 信号。
         """
         logger.info(f"连接 /event SSE 流...")
         token_count = 0
@@ -275,9 +278,9 @@ class OpenCodeBridge:
 
                 buffer = ""
                 total_events = 0
+                skipped_events = 0
 
                 while not response_done:
-                    # 用 wait_for 实现超时检测：5 秒无新 delta 视为回答完毕
                     try:
                         chunk = await asyncio.wait_for(
                             resp.content.read(4096),
@@ -300,8 +303,11 @@ class OpenCodeBridge:
                         event_block, buffer = buffer.split("\n\n", 1)
                         total_events += 1
 
-                        if total_events <= 3:
-                            logger.info(f"SSE 事件 #{total_events}: {event_block[:200]}")
+                        # 提取 sessionID，只处理当前 session 的事件
+                        event_session = self._get_event_session(event_block)
+                        if event_session and event_session != session_id:
+                            skipped_events += 1
+                            continue
 
                         event_type, content = self._parse_sse_event(event_block)
                         if content:
@@ -318,7 +324,20 @@ class OpenCodeBridge:
                                 response_done = True
                                 break
 
-                logger.info(f"SSE 消费结束，共 {total_events} 事件, {token_count} token")
+                logger.info(f"SSE 消费结束: {total_events} 事件, {skipped_events} 跳过, {token_count} token")
+
+    def _get_event_session(self, event_block: str) -> str | None:
+        """从 SSE 事件块中提取 sessionID"""
+        for line in event_block.strip().split("\n"):
+            if line.startswith("data:"):
+                try:
+                    data = json.loads(line[5:].strip())
+                    props = data.get("properties", {})
+                    if isinstance(props, dict):
+                        return props.get("sessionID")
+                except json.JSONDecodeError:
+                    pass
+        return None
 
     def _get_event_properties(self, event_block: str) -> dict | None:
         """从 SSE 事件块中提取 properties 字段"""
@@ -463,7 +482,7 @@ async def execute_opencode_streaming(websocket, msg_id: str, command: str, model
         timeout: 超时时间（秒）
     """
     try:
-        await opencode_bridge.send_message_stream(command, msg_id, websocket)
+        await opencode_bridge.send_message_stream(command, msg_id, websocket, model=model)
         # 流结束，发送 ok
         await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": 0})
 
