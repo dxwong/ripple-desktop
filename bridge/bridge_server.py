@@ -212,49 +212,77 @@ class OpenCodeBridge:
         """
         发送消息并通过 WebSocket 逐 token 转发 SSE 流。
         
-        每个消息使用独立 session，避免上下文延续和事件流冲突。
+        先 POST 消息创建 message，再连 /event 接收 SSE 事件。
+        用同一个 aiohttp session 避免连接池竞争。
         """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
             return
 
-        # 1. 在 session 层面设置模型（create_session 时传 model）
         session_id = await self.create_session(model=model)
-        logger.info(f"消息 session: {session_id} 模型: {model}")
+        logger.info(f"发送消息到 session {session_id}: {message[:60]}...")
 
-        # 2. 启动后台任务监听 /event SSE 流
-        event_consumer = asyncio.create_task(
-            self._consume_events_stream(session_id, msg_id, websocket)
-        )
+        # 同一个 ClientSession，避免连接池竞争
+        async with aiohttp.ClientSession() as aio:
+            # 1. POST 消息
+            payload = {"parts": [{"type": "text", "text": message}]}
+            if model and "/" in model:
+                parts = model.split("/", 1)
+                payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
 
-        try:
-            # 3. 发送消息（携带模型参数）
-            async with aiohttp.ClientSession() as session:
-                payload = {"parts": [{"type": "text", "text": message}]}
-                if model and "/" in model:
-                    parts = model.split("/", 1)
-                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
-                async with session.post(
-                    f"{self.base_url}/session/{session_id}/message",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status != 200:
-                        error = await resp.text()
-                        logger.error(f"发送消息失败: {error}")
-                        event_consumer.cancel()
-                        await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {error}"})
-                        return
+            async with aio.post(
+                f"{self.base_url}/session/{session_id}/message",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    logger.error(f"发送消息失败: {err}")
+                    await send_response(websocket, msg_id, "error", {"error": f"发送消息失败: {err}"})
+                    return
+                logger.info(f"POST 成功: {resp.status} {resp.content_type}")
 
-                    resp_text = await resp.text()
-                    logger.info(f"POST message 响应: {resp_text[:200]}")
+            # 2. 连接 /event 接收 SSE
+            async with aio.get(
+                f"{self.base_url}/event",
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as event_resp:
+                logger.info(f"/event 已连接: {event_resp.status} {event_resp.content_type}")
+                token_count = 0
+                last_delta = time.time()
+                buf = ""
 
-            # 4. 等待事件流结束
-            await event_consumer
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(event_resp.content.read(4096), timeout=8.0)
+                    except asyncio.TimeoutError:
+                        if token_count > 0 and time.time() - last_delta >= 5:
+                            logger.info(f"回答完毕（{token_count} token）")
+                            break
+                        continue
 
-        except asyncio.CancelledError:
-            event_consumer.cancel()
-            raise
+                    if not chunk:
+                        logger.info("/event 流结束")
+                        break
+
+                    buf += chunk.decode("utf-8", errors="replace")
+                    while "\n\n" in buf:
+                        block, buf = buf.split("\n\n", 1)
+                        etype, text = self._parse_sse_event(block)
+                        if text:
+                            token_count += 1
+                            last_delta = time.time()
+                            await send_response(websocket, msg_id, "stream", {"chunk": text})
+                        if etype == "session.status":
+                            props = self._get_event_properties(block) or {}
+                            status = props.get("status", {})
+                            if isinstance(status, dict) and status.get("type") == "idle":
+                                logger.info(f"session idle（{token_count} token）")
+                                break
+                    else:
+                        # \n\n 不完整，等待更多数据
+                        continue
+                    break  # session idle 时退出外层循环
         except Exception as e:
             logger.error(f"send_message_stream 异常: {e}")
             event_consumer.cancel()
