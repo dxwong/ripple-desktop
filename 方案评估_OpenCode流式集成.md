@@ -21,7 +21,15 @@
 
 `opencode run` 命令本身不支持逐 token 流式。无论是直接在终端跑、通过管道跑、还是加 `--format json` 参数，行为都一样——构建后静默处理，一次性输出。
 
-## 修正方案
+## 当前状态（2026-05-14 ✅ 已实现）
+
+桥接已改用 `opencode serve` HTTP/SSE 方案：
+- `bridge/bridge_server.py` 新增 `OpenCodeBridge` 类
+- 通过 `POST /session/{id}/message` 获取 SSE 流
+- `\n\n` 事件分隔 + 行缓冲解析，逐 token 转发到前端
+- 依赖新增 `aiohttp`
+
+## 修正方案（历史记录）
 
 改用 **`opencode serve`** 启动 headless HTTP 服务，通过 SSE（Server-Sent Events）获取实时流式回复。
 

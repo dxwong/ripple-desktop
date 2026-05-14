@@ -1,6 +1,6 @@
 # 开发进展
 
-> 版本: 0.2.1 | 更新: 2026-05-14
+> 版本: 0.3.0 | 更新: 2026-05-14
 
 ---
 
@@ -207,14 +207,12 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 
 ### ⚠️ 已知限制
 
-#### `opencode run` 非逐 token 流式（核心限制）
-已验证：不论直接终端跑还是通过 pipe，`opencode run` 的行为都是：
-
-> `> build · xxx`（思考/构建） → 静默 10-30 秒 → 一次性输出完整回答
-
-它本身就不支持逐 token 流式输出。这是 `opencode run` 作为 agent 模式的固有限制。`--format json` 也无法改变这个行为。
-
-**要实现真正的流式**，需要绕过 `opencode run`，改用 `opencode serve`（HTTP/SSE）或直接调 AI API。
+#### `opencode run` 非逐 token 流式（已解决 ✅）
+改用 `opencode serve` HTTP/SSE 方案替代 `opencode run`：
+- 桥接通过 `POST /session/{id}/message` 获取 SSE 流
+- 逐 token 解析 `event: message.part.delta` 中的 `part.content`
+- 实时转发到前端，实现打字机效果
+- 依赖新增 `aiohttp`
 
 #### bridge_server.py 的 import re
 `_strip_ansi` 函数使用 `re.sub()`，文件顶部必须有 `import re`（曾漏掉导致崩溃）。
@@ -252,6 +250,7 @@ WebSocket 事件循环独占 stream，通过 mpsc channel 接收发送命令，`
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
 | v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择、流式输出 |
+| v0.3.0 | 2026-05-14 | opencode serve SSE 流式集成（真实逐 token 打字机效果） |
 | v0.2.1 | 2026-05-14 | Bug 修复：项目即对话、Rust 锁死锁（channel+select! 架构）、桥接流式清洗输出 |
 | v0.1.0 | - | 初始版本：基础聊天、多模型配置、双主题、流式对话 |
 
