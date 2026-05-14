@@ -31,12 +31,10 @@ except ImportError:
     print("请先安装依赖: pip install -r requirements.txt")
     sys.exit(1)
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format="[Bridge] %(asctime)s %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+# 配置日志（输出到 stdout，避免 Rust 侧误标为 ERR）
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter("[Bridge] %(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
@@ -648,32 +646,38 @@ async def handler(websocket):
         logger.error(f"连接异常: {e}")
 
 
-async def try_start_server():
-    """尝试启动 WebSocket 服务器，端口冲突时杀死旧进程重试"""
+async def ensure_port_free(port: int):
+    """确保端口空闲：检测占用进程并杀掉"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        return await websockets.serve(handler, HOST, PORT)
-    except OSError as e:
-        if "10048" in str(e) or "Address already in use" in str(e):
-            logger.warning(f"端口 {PORT} 被占用，尝试清理...")
-            # Windows: 杀死占用端口的进程
-            subprocess.run(f"netstat -ano | findstr :{PORT} | findstr LISTEN", shell=True, capture_output=True)
-            # 尝试用 taskkill 清理
-            result = subprocess.run(
-                f"for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{PORT} ^| findstr LISTEN') do taskkill /f /pid %a",
-                shell=True, capture_output=True, text=True,
+        s.bind(("127.0.0.1", port))
+        s.close()
+        return True  # 端口空闲
+    except OSError:
+        s.close()
+        logger.warning(f"端口 {port} 被占用，尝试清理...")
+        if os.name == "nt":
+            # PowerShell 检测并杀死占用进程
+            ps_cmd = (
+                f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue "
+                f"| Select-Object -ExpandProperty OwningProcess "
+                f"| ForEach-Object {{ Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }}"
             )
-            logger.info(f"端口清理结果: {result.stdout.strip() or '无'} {result.stderr.strip() or ''}")
-            await asyncio.sleep(1)
-            return await websockets.serve(handler, HOST, PORT)
-        raise
+            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+        else:
+            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
+        await asyncio.sleep(1)
+        return False
 
 
 async def main():
-    """启动 WebSocket 服务器"""
+    """启动 WebSocket 服务器（端口冲突时自动清理）"""
+    await ensure_port_free(PORT)
     logger.info(f"启动桥接服务: ws://{HOST}:{PORT}")
     logger.info("等待 Tauri 后端连接...")
 
-    async with await try_start_server():
+    async with websockets.serve(handler, HOST, PORT):
         await asyncio.Future()
 
 
