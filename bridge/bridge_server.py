@@ -226,23 +226,39 @@ class OpenCodeBridge:
                     return
 
                 # SSE 流式解析：行缓冲 + \n\n 事件分隔
+                logger.info("SSE 连接建立，开始读取流...")
                 buffer = ""
-                async for chunk, _ in resp.content.iter_chunks():
-                    if not chunk:
-                        continue
-                    buffer += chunk.decode("utf-8", errors="replace")
+                token_count = 0
+                chunk_count = 0
 
-                    # SSE 事件以 \n\n 分隔
+                async for chunk, end_of_content in resp.content.iter_chunks():
+                    chunk_count += 1
+                    if not chunk:
+                        if end_of_content:
+                            logger.info(f"SSE 流结束（共 {chunk_count} 个 chunk, {token_count} 个 token）")
+                        continue
+
+                    text = chunk.decode("utf-8", errors="replace")
+                    buffer += text
+
                     while "\n\n" in buffer:
                         event_block, buffer = buffer.split("\n\n", 1)
-                        await self._emit_sse_event(event_block, websocket, msg_id)
+                        event_type, content = self._parse_sse_event(event_block)
+                        if event_type == "message.part.delta" and content:
+                            token_count += 1
+                            await send_response(websocket, msg_id, "stream", {"chunk": content})
 
                 # 处理剩余 buffer
                 if buffer.strip():
-                    await self._emit_sse_event(buffer, websocket, msg_id)
+                    event_type, content = self._parse_sse_event(buffer)
+                    if event_type == "message.part.delta" and content:
+                        token_count += 1
+                        await send_response(websocket, msg_id, "stream", {"chunk": content})
 
-    async def _emit_sse_event(self, event_block: str, websocket, msg_id: str):
-        """解析单个 SSE 事件块，提取 token 并发送到前端"""
+                logger.info(f"SSE 流读取完毕，共 {chunk_count} 个 chunk, {token_count} 个 token")
+
+    def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
+        """解析单个 SSE 事件块，返回 (event_type, content_text)"""
         lines = event_block.strip().split("\n")
         event_type = None
         data = None
@@ -256,12 +272,13 @@ class OpenCodeBridge:
                 except json.JSONDecodeError:
                     pass
 
-        # 只处理文本 delta 事件
         if event_type == "message.part.delta" and data:
             part = data.get("part", {})
             content = part.get("content") if isinstance(part, dict) else None
             if content:
-                await send_response(websocket, msg_id, "stream", {"chunk": content})
+                return (event_type, content)
+
+        return (event_type, None)
 
 
 # 全局桥接实例
