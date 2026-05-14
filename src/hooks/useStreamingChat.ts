@@ -149,14 +149,14 @@ export function useStreamingChat() {
     [] // 使用 ref 无依赖
   );
 
-  // ===== 发送消息（仅同步路径，最稳定） =====
+  // ===== 发送消息（流式优先，同步降级） =====
   const sendMessage = useCallback(
     async (
       content: string,
       mode: "simulate" | "bridge" = "simulate",
       bridgeSend?: (type: string, data: any) => Promise<any>,
-      _bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
-      _bridgeSetCallback?: (callback: ((msg: any) => void) | null) => void,
+      bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
+      bridgeSetCallback?: (callback: ((msg: any) => void) | null) => void,
       projectDirectory?: string,
       openCodeModel?: string
     ) => {
@@ -166,7 +166,6 @@ export function useStreamingChat() {
       const abort = new AbortController();
       abortRef.current = abort;
 
-      // 记录发送时的目标对话 ID
       const targetConvId = activeConversationIdRef.current;
       if (!targetConvId) {
         console.warn("[sendMessage] 没有活跃对话，跳过发送");
@@ -174,11 +173,41 @@ export function useStreamingChat() {
         return;
       }
 
-      // 先添加用户消息（确保 UI 立即显示用户输入）
+      // 先添加用户消息
       addMessage("user", content);
 
       try {
-        // ===== 有 OC 模型 + 桥接已连接 → 同步执行 =====
+        // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
+        if (openCodeModel && bridgeSendStreaming && bridgeSetCallback) {
+          await new Promise<void>((resolve, reject) => {
+            // 先注册回调，再发送（避免竞态）
+            bridgeSetCallback((msg: any) => {
+              if (msg.status === "stream") {
+                const chunk = msg.data?.chunk || "";
+                if (chunk) appendToConversation(targetConvId, chunk);
+              } else if (msg.status === "ok") {
+                bridgeSetCallback(null);
+                resolve();
+              } else if (msg.status === "error") {
+                bridgeSetCallback(null);
+                reject(new Error(msg.data?.error || "执行失败"));
+              }
+            });
+
+            const payload: any = {
+              command: content,
+              cwd: projectDirectory,
+              model: openCodeModel,
+            };
+            bridgeSendStreaming("execute_opencode_streaming", payload).catch((e: any) => {
+              bridgeSetCallback(null);
+              reject(e);
+            });
+          });
+          return;
+        }
+
+        // ===== 同步路径（降级）：OC 模型 + 同步桥接 =====
         if (openCodeModel && bridgeSend) {
           try {
             const payload: any = {
@@ -199,8 +228,8 @@ export function useStreamingChat() {
           return;
         }
 
-        // ===== 有 OC 模型但桥接未连接 → 提示 =====
-        if (openCodeModel && !bridgeSend) {
+        // ===== OC 模型但桥接未连接 → 提示 =====
+        if (openCodeModel && !bridgeSend && !bridgeSendStreaming) {
           appendToConversation(targetConvId, "> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。\n\n");
           appendToConversation(targetConvId, "请先连接桥接服务，并确保 Python 桥接已启动 (`npm run bridge`)\n");
           return;

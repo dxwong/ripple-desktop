@@ -53,12 +53,12 @@ function App() {
       content,
       isOnline ? "bridge" : "simulate",
       isOnline ? bridge.sendMessage : undefined,
-      undefined, // 暂不使用流式路径
-      undefined,
+      isOnline ? bridge.sendStreamingMessage : undefined,
+      isOnline ? bridge.setMessageCallback : undefined,
       projectDirectory,
       ocModel
     );
-  }, [bridge.status, bridge.sendMessage, chat.sendMessage, currentProject?.directory, hasProject, openCodeModel]);
+  }, [bridge.status, bridge.sendMessage, bridge.sendStreamingMessage, bridge.setMessageCallback, chat.sendMessage, currentProject?.directory, hasProject, openCodeModel]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
