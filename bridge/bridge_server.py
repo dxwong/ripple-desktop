@@ -253,126 +253,97 @@ class OpenCodeBridge:
 
     async def _listen_events(self, session_id: str, msg_id: str, websocket):
         """
-        监听 /event SSE，逐 token 转发。
-        delta 是累积内容，用 (messageID, field) 去重，只发增量。
+        通过 aiohttp readline 逐行读取 SSE 流，避免手写 buffer 解析的边界问题。
+        使用全局累计内容去重，消除多 part 切换时的字词重复。
         """
         async with aiohttp.ClientSession() as s:
-            async with s.get(f"{self.base_url}/event", timeout=aiohttp.ClientTimeout(total=300)) as resp:
-                buf = ""
-                last_for_key: dict[str, str] = {}  # "msgID:field" → 上次已发内容
+            async with s.get(
+                f"{self.base_url}/event",
+                timeout=aiohttp.ClientTimeout(total=300)
+            ) as resp:
+                accumulated = ""   # 全局累计内容
+                event_lines = []   # 当前 SSE 事件的原始行
 
                 while True:
                     try:
-                        chunk = await asyncio.wait_for(resp.content.read(4096), timeout=8.0)
+                        raw = await asyncio.wait_for(
+                            resp.content.readline(), timeout=30.0
+                        )
                     except asyncio.TimeoutError:
-                        continue
-                    if not chunk:
-                        break
-                    buf += chunk.decode("utf-8", errors="replace")
-                    while "\n\n" in buf:
-                        block, buf = buf.split("\n\n", 1)
-                        etype, text, msg_id_field = self._parse_sse_event_detailed(block)
-                        if not text:
-                            # 检查 session idle
-                            if etype == "session.status":
-                                props = self._get_event_properties(block) or {}
-                                status = props.get("status", {})
-                                if isinstance(status, dict) and status.get("type") == "idle":
-                                    return
+                        break  # 30 秒无数据，认为流结束
+
+                    if not raw:
+                        break  # 连接关闭
+
+                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+
+                    if line == "":
+                        # 空行 = SSE 事件结束
+                        if not event_lines:
                             continue
 
-                        # 去重：delta 是累积的，只发新增部分
-                        key = msg_id_field or f"default_{etype}"
-                        prev = last_for_key.get(key, "")
-                        if text.startswith(prev):
-                            new_text = text[len(prev):]
-                        else:
-                            new_text = text  # 不匹配就全发（兜底）
-                        last_for_key[key] = text
-                        if new_text:
-                            await send_response(websocket, msg_id, "stream", {"chunk": new_text})
+                        # 提取显示内容
+                        content = self._extract_content(event_lines)
 
-    def _parse_sse_event_detailed(self, event_block: str) -> tuple[str | None, str | None, str | None]:
+                        if content is not None:
+                            # 全局累计去重：只发新增部分
+                            if content.startswith(accumulated):
+                                new_text = content[len(accumulated):]
+                            else:
+                                # 不连续的内容段（新 part），直接发送
+                                new_text = content
+
+                            if new_text:
+                                accumulated = content
+                                await send_response(
+                                    websocket, msg_id, "stream", {"chunk": new_text}
+                                )
+                        else:
+                            # 非内容事件 → 检查 session 是否结束
+                            if self._is_session_idle(event_lines):
+                                return
+
+                        event_lines = []
+                    else:
+                        event_lines.append(line)
+
+    def _extract_content(self, event_lines: list[str]) -> str | None:
         """
-        解析 SSE 事件，返回 (event_type, delta_text, dedup_key)。
-        dedup_key = "messageID:field" 或 "partID" 或 None。
+        从 SSE 事件行中提取显示文本。
+        按优先级取：properties.content > properties.delta > properties.text
         """
-        for line in event_block.strip().split("\n"):
+        for line in event_lines:
             if not line.startswith("data:"):
                 continue
             try:
                 data = json.loads(line[5:].strip())
-                etype = data.get("type")
                 props = data.get("properties", {})
                 if not isinstance(props, dict):
-                    return (etype, None, None)
-                delta = props.get("delta") or props.get("text") or props.get("content")
-                mid = props.get("messageID") or ""
-                fld = props.get("field") or ""
-                pid = props.get("partID") or ""
-                # 优先用 messageID:field，其次用 partID
-                dedup_key = f"{mid}:{fld}" if mid else (pid or None)
-                return (etype, delta, dedup_key)
+                    continue
+                # 按优先级取内容
+                text = props.get("content") or props.get("delta") or props.get("text")
+                if isinstance(text, str) and text:
+                    return text
             except json.JSONDecodeError:
-                pass
-        return (None, None, None)
+                continue
+        return None
 
-    def _get_event_session(self, event_block: str) -> str | None:
-        """从 SSE 事件块中提取 sessionID"""
-        for line in event_block.strip().split("\n"):
-            if line.startswith("data:"):
-                try:
-                    data = json.loads(line[5:].strip())
+    def _is_session_idle(self, event_lines: list[str]) -> bool:
+        """判断事件是否是「session 空闲」信号"""
+        for line in event_lines:
+            if not line.startswith("data:"):
+                continue
+            try:
+                data = json.loads(line[5:].strip())
+                if data.get("type") == "session.status":
                     props = data.get("properties", {})
                     if isinstance(props, dict):
-                        return props.get("sessionID")
-                except json.JSONDecodeError:
-                    pass
-        return None
-
-    def _get_event_properties(self, event_block: str) -> dict | None:
-        """从 SSE 事件块中提取 properties 字段"""
-        for line in event_block.strip().split("\n"):
-            if line.startswith("data:"):
-                try:
-                    data = json.loads(line[5:].strip())
-                    return data.get("properties")
-                except json.JSONDecodeError:
-                    pass
-        return None
-
-    def _parse_sse_event(self, event_block: str) -> tuple[str | None, str | None]:
-        """
-        解析 SSE 事件块，返回 (event_type, content_text)。
-        
-        实际 SSE 格式（无 event: 行，类型在 JSON data 中）：
-          data: {"type":"message.part.delta","properties":{"delta":"token"}}
-        """
-        lines = event_block.strip().split("\n")
-        event_type = None
-        raw_data = None
-
-        for line in lines:
-            if line.startswith("data:"):
-                try:
-                    raw_data = json.loads(line[5:].strip())
-                except json.JSONDecodeError:
-                    pass
-
-        if not raw_data:
-            return (None, None)
-
-        # 事件类型在 data.type 中（区别于 SSE 的 event: 行）
-        event_type = raw_data.get("type") or raw_data.get("event")
-
-        # 内容在 data.properties.delta 中
-        props = raw_data.get("properties", {})
-        if isinstance(props, dict):
-            delta = props.get("delta") or props.get("text") or props.get("content")
-            if delta:
-                return (event_type, delta)
-
-        return (event_type, None)
+                        status = props.get("status", {})
+                        if isinstance(status, dict) and status.get("type") == "idle":
+                            return True
+            except json.JSONDecodeError:
+                continue
+        return False
 
 
 # 全局桥接实例
