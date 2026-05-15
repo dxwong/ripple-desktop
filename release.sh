@@ -44,7 +44,14 @@ fi
 
 # 发布流程
 git checkout master                     # 切换到主分支
-git merge --squash dev --allow-unrelated-histories  # 合并 dev 的所有改动（压缩成一个提交，允许不相关的历史）
+# 合并 dev 的所有改动（压缩成一个提交）
+# 使用 --allow-unrelated-histories 支持首次发布（不共享历史的分支）
+# 冲突（add/add）是预期的，后续强制取 dev 版本即可
+git merge --squash dev --allow-unrelated-histories 2>&1 || echo "⚠️ 合并冲突自动处理中..."
+# 自动解决所有冲突：以 dev（--theirs）为准，覆盖 master 的全部文件状态
+git checkout --theirs . 2>/dev/null || true
+git reset HEAD -- . 2>/dev/null || true
+git add .
 git commit -m "Release: $VERSION"       # 提交并标注版本号
 git tag "$VERSION"                      # 打上版本标签
 git checkout dev                        # 切回 dev 分支（dev 保持不动，提交历史完整保留）
