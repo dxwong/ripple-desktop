@@ -34,7 +34,7 @@ except ImportError:
 # 配置日志（输出到 stdout，避免 Rust 侧误标为 ERR）
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(logging.Formatter("[Bridge] %(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
-logging.basicConfig(level=logging.DEBUG, handlers=[_handler])
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
@@ -213,6 +213,10 @@ class OpenCodeBridge:
     # ---------- 核心：SSE 流式消息 ----------
 
     async def send_message_stream(self, message: str, msg_id: str, websocket, model: str = None):
+        """
+        流式发送消息 — 从 POST 响应 body 中直接读取 SSE 流，逐 token 转发。
+        不再使用 /event 全局事件总线，避免 session 间 event 混入导致字词重复。
+        """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
             return
@@ -220,141 +224,62 @@ class OpenCodeBridge:
         session_id = await self.create_session(model=model)
         logger.info(f"发送: {message[:50]}...  session={session_id}")
 
-        # 后台监听 /event（独立 ClientSession，不阻塞 POST）
-        listener = asyncio.create_task(self._listen_events(session_id, msg_id, websocket))
-
         try:
             async with aiohttp.ClientSession() as s:
                 payload = {"parts": [{"type": "text", "text": message}]}
                 if model and "/" in model:
-                    parts = model.split("/", 1)
-                    payload["model"] = {"providerID": parts[0], "modelID": parts[1]}
+                    provider, model_id = model.split("/", 1)
+                    payload["model"] = {"providerID": provider, "modelID": model_id}
+
                 async with s.post(
                     f"{self.base_url}/session/{session_id}/message",
                     json=payload,
                 ) as resp:
                     if resp.status != 200:
                         err = await resp.text()
-                        logger.error(f"POST 失败: {err}")
-                        listener.cancel()
-                        await send_response(websocket, msg_id, "error", {"error": f"发消息失败: {err}"})
+                        logger.error(f"POST 失败 ({resp.status}): {err[:200]}")
+                        await send_response(websocket, msg_id, "error",
+                                           {"error": f"发消息失败: {err[:100]}"})
                         return
 
-            await listener  # 等 /event 流结束
-            logger.info("回答完毕")
+                    # 从 POST 响应体中逐行读取 SSE 流（核心改动）
+                    while True:
+                        raw = await resp.content.readline()
+                        if not raw:
+                            break  # 流结束
 
-        except asyncio.CancelledError:
-            listener.cancel()
-            raise
-        except Exception as e:
-            logger.error(f"异常: {e}")
-            listener.cancel()
-            raise
+                        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
-    async def _listen_events(self, session_id: str, msg_id: str, websocket):
-        """
-        通过 aiohttp readline 逐行读取 SSE 流，避免手写 buffer 解析的边界问题。
-        使用全局累计内容去重，消除多 part 切换时的字词重复。
-        """
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                f"{self.base_url}/event",
-                timeout=aiohttp.ClientTimeout(total=300)
-            ) as resp:
-                accumulated = ""   # 全局累计内容
-                event_lines = []   # 当前 SSE 事件的原始行
-
-                while True:
-                    try:
-                        raw = await asyncio.wait_for(
-                            resp.content.readline(), timeout=30.0
-                        )
-                    except asyncio.TimeoutError:
-                        break  # 30 秒无数据，认为流结束
-
-                    if not raw:
-                        break  # 连接关闭
-
-                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-
-                    if line == "":
-                        # 空行 = SSE 事件结束
-                        if not event_lines:
+                        if not line.startswith("data:"):
                             continue
 
-                        # 提取显示内容
-                        content = self._extract_content(event_lines)
+                        data_str = line[5:].lstrip()
+                        if data_str == "[DONE]":
+                            break
 
-                        if content is not None:
-                            # 调试：打印原始事件和 accumulated 状态
-                            logger.debug(
-                                "SSE event:\n  lines: %s\n  content=%r\n  accumulated=%r",
-                                " | ".join(event_lines),
-                                content[:80] if content else None,
-                                accumulated[-80:] if accumulated else "(空)",
+                        try:
+                            data = json.loads(data_str)
+                            # token 提取：opencode serve 返回格式为 part.content
+                            token = (
+                                data.get("part", {}).get("content")
+                                or data.get("delta")
+                                or data.get("content")
                             )
-
-                            # 全局累计去重：只发新增部分
-                            if content.startswith(accumulated):
-                                new_text = content[len(accumulated):]
-                            else:
-                                # 不连续的内容段（新 part），直接发送
-                                new_text = content
-
-                            if new_text:
-                                accumulated = content
+                            if token:
                                 await send_response(
-                                    websocket, msg_id, "stream", {"chunk": new_text}
+                                    websocket, msg_id, "stream", {"chunk": token}
                                 )
-                                logger.debug("  → sent: %r", new_text[:80])
-                            else:
-                                logger.debug("  → skipped (dup)")
-                        else:
-                            # 非内容事件 → 检查 session 是否结束
-                            if self._is_session_idle(event_lines):
-                                return
+                        except json.JSONDecodeError:
+                            continue
 
-                        event_lines = []
-                    else:
-                        event_lines.append(line)
+            logger.info("回答完毕")
+            await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": 0})
 
-    def _extract_content(self, event_lines: list[str]) -> str | None:
-        """
-        从 SSE 事件行中提取显示文本。
-        按优先级取：properties.content > properties.delta > properties.text
-        """
-        for line in event_lines:
-            if not line.startswith("data:"):
-                continue
-            try:
-                data = json.loads(line[5:].strip())
-                props = data.get("properties", {})
-                if not isinstance(props, dict):
-                    continue
-                # 按优先级取内容
-                text = props.get("content") or props.get("delta") or props.get("text")
-                if isinstance(text, str) and text:
-                    return text
-            except json.JSONDecodeError:
-                continue
-        return None
-
-    def _is_session_idle(self, event_lines: list[str]) -> bool:
-        """判断事件是否是「session 空闲」信号"""
-        for line in event_lines:
-            if not line.startswith("data:"):
-                continue
-            try:
-                data = json.loads(line[5:].strip())
-                if data.get("type") == "session.status":
-                    props = data.get("properties", {})
-                    if isinstance(props, dict):
-                        status = props.get("status", {})
-                        if isinstance(status, dict) and status.get("type") == "idle":
-                            return True
-            except json.JSONDecodeError:
-                continue
-        return False
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"流式请求异常: {e}")
+            await send_response(websocket, msg_id, "error", {"error": str(e)})
 
 
 # 全局桥接实例
