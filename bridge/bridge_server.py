@@ -214,18 +214,22 @@ class OpenCodeBridge:
 
     async def send_message_stream(self, message: str, msg_id: str, websocket, model: str = None):
         """
-        流式发送消息 — 通过 /event 接收 SSE，用 readline 逐行解析（避免 buffer 边界问题），
-        加超时防止死等，加简易去重跳过连续相同 token。
+        流式发送消息：
+        1. POST 触发模型处理
+        2. 连 /event 收 SSE（readline + 超时）
+        3. 解析 event 类型：delta 转发、idle 结束
+        4. 全流程日志
         """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
             return
 
         session_id = await self.create_session(model=model)
-        logger.info(f"发送: {message[:50]}...  session={session_id}")
+        logger.info(f"[流式] session={session_id}  msg={message[:60]}")
 
-        # 先发 POST 触发模型开始处理，不等待响应体
         try:
+            # === 阶段一：POST 触发 ===
+            logger.info(f"[流式] POST /session/{session_id}/message")
             async with aiohttp.ClientSession() as s:
                 payload = {"parts": [{"type": "text", "text": message}]}
                 if model and "/" in model:
@@ -237,65 +241,102 @@ class OpenCodeBridge:
                     json=payload,
                 ) as resp:
                     if resp.status != 200:
-                        err = await resp.text()
-                        logger.error(f"POST 失败 ({resp.status}): {err[:200]}")
+                        err_body = await resp.text()
+                        logger.error(f"[流式] POST 失败 status={resp.status} body={err_body[:200]}")
                         await send_response(websocket, msg_id, "error",
-                                           {"error": f"发消息失败: {err[:100]}"})
+                                           {"error": f"发消息失败: {err_body[:100]}"})
                         return
+                    logger.info(f"[流式] POST 成功 status=200")
 
-            # 连接 /event 接收流式输出（readline + 超时，不手写 buffer）
+            # === 阶段二：连 /event 收 SSE ===
+            logger.info(f"[流式] 连接 /event (timeout=300s)")
             async with aiohttp.ClientSession() as s:
                 async with s.get(
                     f"{self.base_url}/event",
                     timeout=aiohttp.ClientTimeout(total=300)
                 ) as resp:
-                    last_token = ""  # 简易去重：跳过连续相同的 token
+                    logger.info(f"[流式] /event 已连接")
+
+                    last_token = ""          # 简易去重
+                    total_tokens = 0         # 统计
+                    idle_received = False    # session idle 标记
+
                     while True:
+                        # ------ 读一行 ------
                         try:
                             raw = await asyncio.wait_for(
                                 resp.content.readline(), timeout=30.0
                             )
                         except asyncio.TimeoutError:
-                            logger.info("/event 30s 无数据，流结束")
+                            logger.info(f"[流式] readline 超时(30s)，主动结束 (已收 {total_tokens} tokens)")
                             break
 
                         if not raw:
+                            logger.info(f"[流式] /event 连接关闭 (已收 {total_tokens} tokens)")
                             break
 
                         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
+                        # 非 data: 行（event:, 空行, 注释行等）
                         if not line.startswith("data:"):
                             continue
 
                         data_str = line[5:].lstrip()
+
+                        # SSE 结束标记
                         if data_str == "[DONE]":
+                            logger.info(f"[流式] 收到 [DONE] (已收 {total_tokens} tokens)")
                             break
 
+                        # 解析 JSON
                         try:
                             data = json.loads(data_str)
-                            # 从 properties.delta 取增量 token（/event 的格式）
-                            props = data.get("properties", {})
-                            if not isinstance(props, dict):
-                                continue
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"[流式] JSON 解析失败: {e} line={data_str[:80]}")
+                            continue
+
+                        etype = data.get("type", "")
+                        props = data.get("properties", {})
+                        if not isinstance(props, dict):
+                            props = {}
+
+                        # ------ session idle → 结束 ------
+                        if etype == "session.status":
+                            status = props.get("status", {})
+                            if isinstance(status, dict) and status.get("type") == "idle":
+                                logger.info(f"[流式] session idle，结束 (已收 {total_tokens} tokens)")
+                                idle_received = True
+                                break
+                            continue
+
+                        # ------ content token → 转发 ------
+                        if etype == "message.part.delta":
                             token = props.get("delta") or props.get("content") or props.get("text")
                             if isinstance(token, str) and token:
-                                # 简易去重：跳过与上一次完全相同的 token
                                 if token == last_token:
+                                    logger.debug(f"[流式] 跳过重复 token={token!r}")
                                     continue
                                 last_token = token
+                                total_tokens += 1
                                 await send_response(
                                     websocket, msg_id, "stream", {"chunk": token}
                                 )
-                        except json.JSONDecodeError:
                             continue
 
-            logger.info("回答完毕")
-            await send_response(websocket, msg_id, "ok", {"stdout": "", "returncode": 0})
+                        # 其他事件类型（log）
+                        logger.debug(f"[流式] 未知事件 type={etype}")
+
+            # === 阶段三：结束 ===
+            reason = "idle" if idle_received else "stream_end"
+            logger.info(f"[流式] 回答完毕 reason={reason} total_tokens={total_tokens}")
+            await send_response(websocket, msg_id, "ok",
+                               {"stdout": "", "returncode": 0, "tokens": total_tokens})
 
         except asyncio.CancelledError:
+            logger.info(f"[流式] 被取消 session={session_id}")
             raise
         except Exception as e:
-            logger.error(f"流式请求异常: {e}")
+            logger.error(f"[流式] 异常 session={session_id} {e}")
             await send_response(websocket, msg_id, "error", {"error": str(e)})
 
 
