@@ -1,0 +1,3 @@
+ python bridge/bridge_server.py
+
+npm run tauri:dev

@@ -87,17 +87,14 @@ function Sidebar({
   const isOnline = bridgeStatus === "connected";
   const isConnecting = bridgeStatus === "connecting";
 
+  // 对话列表：只显示普通对话（有关联项目的对话已在项目列表中展示，避免重复）
   const filteredConversations = conversations.filter((c) =>
-    c.title.toLowerCase().includes(searchQuery.toLowerCase())
+    !c.projectId && c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  /** 新建对话：有激活项目时创建编程模式，否则普通对话 */
+  /** 新建对话：+号始终创建普通对话模式（项目对话通过点击项目名称进入） */
   const handleNewConversation = () => {
-    if (activeProjectId && activeProjectId !== "default") {
-      onNewConversation("code", activeProjectId);
-    } else {
-      onNewConversation("chat");
-    }
+    onNewConversation("chat");
   };
 
   /** 打开新建项目弹窗 */
@@ -254,7 +251,7 @@ function Sidebar({
                         : "sidebar-btn"
                     }`}
                   >
-                    <MessageSquare size={14} className={`shrink-0 ${
+                    <Code size={14} className={`shrink-0 ${
                       project.id === activeProjectId ? "opacity-100" : "opacity-60"
                     }`} />
                     <div className="flex-1 min-w-0">
@@ -319,7 +316,11 @@ function Sidebar({
                         : "sidebar-btn"
                     }`}
                   >
-                    <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
+                    {conv.mode === "code" ? (
+                      <Code size={14} className="shrink-0 text-amber-500 dark:text-amber-400 opacity-80" />
+                    ) : (
+                      <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
+                    )}
                     <span className="truncate flex-1">{conv.title}</span>
                   </button>
                   <button

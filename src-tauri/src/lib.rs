@@ -1,361 +1,392 @@
 mod ws_client;
 
+use futures_util::StreamExt;
+use std::io::BufRead;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
-use ws_client::{BridgeRequest, SharedWsClient, WsConnectionState};
+use tokio_tungstenite::tungstenite::Message;
+use ws_client::{BridgeRequest, BridgeResponse, EventLoopCommand, SharedWsClient, WsConnectionState, WebSocketClient};
 
-/// 桥接服务默认地址
 const DEFAULT_BRIDGE_URL: &str = "ws://127.0.0.1:9876";
+
+// ==================== 桥接进程管理 ====================
+
+#[derive(Clone, serde::Serialize)]
+pub struct BridgeLogEntry {
+    pub line: String,
+    pub timestamp: String,
+}
+
+#[derive(Clone)]
+pub struct BridgeProcess {
+    pub child: Arc<Mutex<Option<std::process::Child>>>,
+    pub logs: Arc<Mutex<Vec<BridgeLogEntry>>>,
+}
+
+/// 退出时自动清理桥接进程
+impl Drop for BridgeProcess {
+    fn drop(&mut self) {
+        let mut guard = self.child.blocking_lock();
+        if let Some(ref mut child) = *guard {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl BridgeProcess {
+    pub fn new() -> Self {
+        Self {
+            child: Arc::new(Mutex::new(None)),
+            logs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// 启动 Python 桥接服务
+    pub async fn start(&self, app_dir: &std::path::Path) {
+        // 尝试多个路径：项目根目录、src-tauri 上级目录、当前目录
+        let candidates = [
+            app_dir.join("bridge").join("bridge_server.py"),
+            app_dir.join("../bridge").join("bridge_server.py"),
+            std::path::PathBuf::from("bridge/bridge_server.py"),
+            std::path::PathBuf::from("../bridge/bridge_server.py"),
+        ];
+        let bridge_path = candidates.iter().find(|p| p.exists()).cloned();
+        let bridge_path = match bridge_path {
+            Some(p) => p,
+            None => {
+                log::warn!("未找到 bridge/bridge_server.py，已搜索 {:?}", candidates);
+                self.add_log("WARN: 未找到桥接脚本").await;
+                return;
+            }
+        };
+
+        log::info!("启动桥接: {}", bridge_path.display());
+        self.add_log(&format!("启动桥接: {}", bridge_path.display())).await;
+
+        match std::process::Command::new("python")
+            .arg(&bridge_path)
+            .current_dir(app_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let logs_arc = self.logs.clone();
+
+                // 读 stdout
+                if let Some(stdout) = child.stdout.take() {
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stdout);
+                        for line in reader.lines().flatten() {
+                            let ts = format_ts();
+                            let mut logs = logs_arc.blocking_lock();
+                            logs.push(BridgeLogEntry { timestamp: ts, line });
+                            if logs.len() > 1000 { logs.remove(0); }
+                        }
+                    });
+                }
+
+                // 读 stderr
+                if let Some(stderr) = child.stderr.take() {
+                    let logs_arc = self.logs.clone();
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stderr);
+                        for line in reader.lines().flatten() {
+                            let ts = format_ts();
+                            let mut logs = logs_arc.blocking_lock();
+                            logs.push(BridgeLogEntry { timestamp: ts, line: format!("[ERR] {}", line) });
+                            if logs.len() > 1000 { logs.remove(0); }
+                        }
+                    });
+                }
+
+                let mut guard = self.child.blocking_lock();
+                *guard = Some(child);
+                log::info!("桥接已启动");
+                self.add_log("桥接已启动").await;
+            }
+            Err(e) => {
+                log::error!("启动桥接失败: {}", e);
+                self.add_log(&format!("启动失败: {}", e)).await;
+            }
+        }
+    }
+
+    pub async fn stop(&self) {
+        let mut guard = self.child.lock().await;
+        if let Some(ref mut child) = *guard {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        *guard = None;
+    }
+
+    async fn add_log(&self, line: &str) {
+        let mut logs = self.logs.lock().await;
+        logs.push(BridgeLogEntry { timestamp: format_ts(), line: line.to_string() });
+        if logs.len() > 1000 { logs.remove(0); }
+    }
+}
+
+fn format_ts() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() % 86400;
+    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+}
+
+#[tauri::command]
+async fn get_bridge_logs(state: State<'_, BridgeProcess>) -> Result<Vec<BridgeLogEntry>, String> {
+    Ok(state.logs.lock().await.clone())
+}
 
 // ==================== Tauri 命令 ====================
 
-/// 连接到 Python 桥接服务
 #[tauri::command]
-async fn connect_bridge(
-    state: State<'_, SharedWsClient>,
-    app: AppHandle,
-) -> Result<String, String> {
-    let mut client = state.lock().await;
-    
-    if client.state == WsConnectionState::Connected {
-        return Ok("already_connected".to_string());
+async fn connect_bridge(state: State<'_, SharedWsClient>, app: AppHandle) -> Result<String, String> {
+    {
+        let client = state.client.lock().await;
+        if client.state == WsConnectionState::Connected {
+            return Ok("already_connected".to_string());
+        }
     }
 
-    // 如果之前连接过但断开了，先重置
-    if client.state != WsConnectionState::Disconnected {
-        client.disconnect().await;
-    }
-
-    match client.connect().await {
-        Ok(()) => {
-            // 启动后台事件循环，接收来自桥接服务的消息
-            let client_clone = state.inner().clone();
+    match state.connect().await {
+        Ok((stream, command_rx)) => {
+            let client_arc = state.client.clone();
             let app_clone = app.clone();
             tokio::spawn(async move {
-                ws_event_loop(client_clone, app_clone).await;
+                event_loop(stream, command_rx, client_arc, app_clone).await;
             });
-            
-            // 发送连接状态事件到前端
-            let _ = app.emit("bridge-status", serde_json::json!({
-                "status": "connected",
-                "url": DEFAULT_BRIDGE_URL,
-            }));
-            
+            let _ = app.emit("bridge-status", serde_json::json!({"status": "connected", "url": DEFAULT_BRIDGE_URL}));
             Ok("connected".to_string())
         }
         Err(e) => {
-            let _ = app.emit("bridge-status", serde_json::json!({
-                "status": "error",
-                "error": e,
-            }));
+            let _ = app.emit("bridge-status", serde_json::json!({"status": "error", "error": e.clone()}));
             Err(e)
         }
     }
 }
 
-/// 断开与桥接服务的连接
 #[tauri::command]
-async fn disconnect_bridge(
-    state: State<'_, SharedWsClient>,
-    app: AppHandle,
-) -> Result<String, String> {
-    let mut client = state.lock().await;
-    client.disconnect().await;
-    let _ = app.emit("bridge-status", serde_json::json!({
-        "status": "disconnected",
-    }));
+async fn disconnect_bridge(state: State<'_, SharedWsClient>, app: AppHandle) -> Result<String, String> {
+    state.disconnect().await;
+    let _ = app.emit("bridge-status", serde_json::json!({"status": "disconnected"}));
     Ok("disconnected".to_string())
 }
 
-// ==================== JSON 配置持久化 ====================
+// ==================== 事件循环 ====================
 
-/// 配置文件路径（应用数据目录下的 config.json）
+async fn event_loop(
+    mut stream: impl futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+    mut command_rx: tokio::sync::mpsc::UnboundedReceiver<EventLoopCommand>,
+    client_arc: Arc<tokio::sync::Mutex<WebSocketClient>>,
+    app: AppHandle,
+) {
+    use futures_util::SinkExt;
+    loop {
+        tokio::select! {
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<BridgeResponse>(&text) {
+                            Ok(response) => {
+                                let is_pending = { client_arc.lock().await.pending_requests.contains_key(&response.id) };
+                                if is_pending {
+                                    let mut client = client_arc.lock().await;
+                                    if let Some(sender) = client.pending_requests.remove(&response.id) {
+                                        let _ = sender.send(Ok(response));
+                                    }
+                                } else {
+                                    let _ = app.emit("bridge-message", serde_json::json!({
+                                        "id": response.id, "type": response.msg_type,
+                                        "status": response.status, "data": response.data,
+                                    }));
+                                }
+                            }
+                            Err(e) => log::error!("解析桥接响应失败: {}", e),
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        let mut client = client_arc.lock().await;
+                        client.state = WsConnectionState::Disconnected;
+                        let _ = app.emit("bridge-status", serde_json::json!({"status": "disconnected"}));
+                        break;
+                    }
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = stream.send(Message::Pong(data)).await;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        let mut client = client_arc.lock().await;
+                        client.state = WsConnectionState::Error(e.to_string());
+                        let _ = app.emit("bridge-status", serde_json::json!({"status": "error", "error": e.to_string()}));
+                        break;
+                    }
+                    None => { break; }
+                }
+            }
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(EventLoopCommand::SendAndWait { request, sender }) => {
+                        let json = match serde_json::to_string(&request) {
+                            Ok(j) => j,
+                            Err(e) => { let _ = sender.send(Err(format!("序列化失败: {}", e))); continue; }
+                        };
+                        match stream.send(Message::Text(json.into())).await {
+                            Ok(_) => { client_arc.lock().await.pending_requests.insert(request.id.clone(), sender); }
+                            Err(e) => { let _ = sender.send(Err(format!("发送失败: {}", e))); }
+                        }
+                    }
+                    Some(EventLoopCommand::SendNoWait { request }) => {
+                        if let Ok(json) = serde_json::to_string(&request) {
+                            let _ = stream.send(Message::Text(json.into())).await;
+                        }
+                    }
+                    None => { break; }
+                }
+            }
+        }
+    }
+    let mut client = client_arc.lock().await;
+    client.pending_requests.clear();
+    client.state = WsConnectionState::Disconnected;
+}
+
+// ==================== 配置持久化 ====================
+
 fn get_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let app_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {}", e))?;
-    std::fs::create_dir_all(&app_dir).map_err(|e| format!("无法创建数据目录: {}", e))?;
+    let app_dir = app.path().app_data_dir().map_err(|e| format!("{e}"))?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| format!("{e}"))?;
     Ok(app_dir.join("config.json"))
 }
 
-/// 保存配置项到本地 JSON 文件
 #[tauri::command]
 fn save_config(app: AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
     let config_path = get_config_path(&app)?;
-    
-    // 读取现有配置（如果文件存在）
     let mut config: serde_json::Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("读取配置文件失败: {}", e))?;
+        let content = std::fs::read_to_string(&config_path).map_err(|e| format!("{e}"))?;
         serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
-    
-    // 更新指定键
-    if let serde_json::Value::Object(ref mut map) = config {
-        map.insert(key, value);
-    }
-    
-    // 写回文件
-    let content = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("序列化配置失败: {}", e))?;
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("写入配置文件失败: {}", e))?;
-    
+    if let serde_json::Value::Object(ref mut map) = config { map.insert(key, value); }
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config).map_err(|e| format!("{e}"))?)
+        .map_err(|e| format!("{e}"))?;
     Ok(())
 }
 
-/// 从本地 JSON 文件加载配置项
 #[tauri::command]
 fn load_config(app: AppHandle, key: String) -> Result<serde_json::Value, String> {
     let config_path = get_config_path(&app)?;
-    
-    if !config_path.exists() {
-        return Ok(serde_json::Value::Null);
-    }
-    
-    let content = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("读取配置文件失败: {}", e))?;
-    let config: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("解析配置文件失败: {}", e))?;
-    
+    if !config_path.exists() { return Ok(serde_json::Value::Null); }
+    let content = std::fs::read_to_string(&config_path).map_err(|e| format!("{e}"))?;
+    let config: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("{e}"))?;
     Ok(config.get(&key).cloned().unwrap_or(serde_json::Value::Null))
 }
 
 // ==================== OpenCode 配置读取 ====================
 
-/// 读取 OpenCode CLI 的配置文件，返回可用模型列表
 #[tauri::command]
 fn read_opencode_config() -> Result<serde_json::Value, String> {
-    // 搜索路径（按优先级）
     let search_paths = [
-        // Windows: %APPDATA%/opencode/config.json (最常见)
-        std::env::var("APPDATA").ok()
-            .map(|p| std::path::PathBuf::from(p).join("opencode").join("config.json")),
-        // Windows: %APPDATA%/opencode/settings.json
-        std::env::var("APPDATA").ok()
-            .map(|p| std::path::PathBuf::from(p).join("opencode").join("settings.json")),
-        // Windows: %USERPROFILE%/.config/opencode/config.json
-        std::env::var("USERPROFILE").ok()
-            .map(|p| std::path::PathBuf::from(p).join(".config").join("opencode").join("config.json")),
-        // Windows: %USERPROFILE%/.opencode/config.json
-        std::env::var("USERPROFILE").ok()
-            .map(|p| std::path::PathBuf::from(p).join(".opencode").join("config.json")),
-        // Linux/Mac: ~/.config/opencode/config.json
-        std::env::var("HOME").ok()
-            .map(|p| std::path::PathBuf::from(p).join(".config").join("opencode").join("config.json")),
-        // Linux/Mac: ~/.opencode/config.json
-        std::env::var("HOME").ok()
-            .map(|p| std::path::PathBuf::from(p).join(".opencode").join("config.json")),
+        std::env::var("APPDATA").ok().map(|p| std::path::PathBuf::from(p).join("opencode").join("config.json")),
+        std::env::var("APPDATA").ok().map(|p| std::path::PathBuf::from(p).join("opencode").join("settings.json")),
+        std::env::var("USERPROFILE").ok().map(|p| std::path::PathBuf::from(p).join(".config").join("opencode").join("config.json")),
+        std::env::var("USERPROFILE").ok().map(|p| std::path::PathBuf::from(p).join(".opencode").join("config.json")),
     ];
-
-    let mut tried_paths: Vec<String> = Vec::new();
-
     for path_opt in &search_paths {
         if let Some(ref path) = path_opt {
-            tried_paths.push(path.to_string_lossy().to_string());
             if path.exists() {
-                match std::fs::read_to_string(path) {
-                    Ok(content) => {
-                        match serde_json::from_str::<serde_json::Value>(&content) {
-                            Ok(config) => {
-                                let mut models = Vec::new();
-                                
-                                // 格式1: { "providers": { "openai": { "models": { "gpt-4o": {...} } } } }
-                                if let Some(providers) = config.get("providers").and_then(|p| p.as_object()) {
-                                    for (provider_name, provider_cfg) in providers {
-                                        if let Some(provider_models) = provider_cfg.get("models") {
-                                            if let Some(models_obj) = provider_models.as_object() {
-                                                for (model_name, _model_cfg) in models_obj {
-                                                    models.push(serde_json::json!({
-                                                        "name": model_name,
-                                                        "provider": provider_name,
-                                                    }));
-                                                }
-                                            }
-                                            if let Some(models_arr) = provider_models.as_array() {
-                                                for m in models_arr {
-                                                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                                                        let mut entry = serde_json::json!({
-                                                            "name": name, "provider": provider_name,
-                                                        });
-                                                        if let Some(obj) = entry.as_object_mut() {
-                                                            if let Some(m_obj) = m.as_object() {
-                                                                for (k, v) in m_obj {
-                                                                    if k != "name" && (v.is_string() || v.is_number() || v.is_boolean()) {
-                                                                        obj.insert(k.clone(), v.clone());
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        models.push(entry);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                // 格式2: { "models": [ { "name": "...", ... } ] }
-                                if let Some(top_models) = config.get("models").and_then(|m| m.as_array()) {
-                                    for m in top_models {
-                                        if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                                            if !models.iter().any(|existing| existing.get("name").and_then(|n| n.as_str()) == Some(name)) {
-                                                models.push(m.clone());
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // 格式3: { "selectedModel": "gpt-4o", ... } 单模型格式
-                                if let Some(selected) = config.get("selectedModel").and_then(|s| s.as_str()) {
-                                    if !models.iter().any(|m| m.get("name").and_then(|n| n.as_str()) == Some(selected)) {
-                                        models.push(serde_json::json!({ "name": selected }));
-                                    }
-                                }
-
-                                if models.is_empty() {
-                                    // 配置存在但没解析出模型，加个诊断
-                                    log::warn!("OpenCode 配置存在但未解析出模型: {}", path.display());
-                                }
-
-                                return Ok(serde_json::json!({
-                                    "models": models,
-                                    "config_path": path.to_string_lossy().to_string(),
-                                }));
-                            }
-                            Err(e) => {
-                                log::warn!("解析 OpenCode 配置文件失败 ({}): {}", path.display(), e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("读取 OpenCode 配置文件失败 ({}): {}", path.display(), e);
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let models = extract_models(&config);
+                        return Ok(serde_json::json!({"models": models, "config_path": path.to_string_lossy().to_string()}));
                     }
                 }
             }
         }
     }
-
-    // 没找到配置 → 返回常见默认模型，用户可在下拉中手动输入
-    log::info!("未找到 OpenCode 配置文件，已扫描路径: {:?}", tried_paths);
-    Ok(serde_json::json!({
-        "models": [],
-        "note": "未找到配置文件，可在下拉菜单中手动输入模型名",
-        "scanned_paths": tried_paths,
-    }))
+    Ok(serde_json::json!({"models": [], "note": "未找到配置文件"}))
 }
 
-/// 获取桥接服务连接状态
-#[tauri::command]
-async fn get_bridge_status(
-    state: State<'_, SharedWsClient>,
-) -> Result<WsConnectionState, String> {
-    let client = state.lock().await;
-    Ok(client.state.clone())
-}
-
-/// 发送消息到桥接服务并等待响应
-#[tauri::command]
-async fn send_to_bridge(
-    state: State<'_, SharedWsClient>,
-    msg_type: String,
-    data: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let mut client = state.lock().await;
-    
-    // 检查连接状态
-    if client.state != WsConnectionState::Connected {
-        return Err("未连接到桥接服务，请先调用 connect_bridge".to_string());
-    }
-
-    // 创建请求
-    let request = BridgeRequest {
-        id: uuid::Uuid::new_v4().to_string(),
-        msg_type,
-        data,
-    };
-
-    // 发送并等待响应
-    let response = client.send_request(request).await?;
-
-    // 返回响应数据
-    Ok(serde_json::json!({
-        "status": response.status,
-        "data": response.data,
-    }))
-}
-
-/// 后台事件循环：持续读取 WebSocket 消息并转发到前端
-async fn ws_event_loop(client: SharedWsClient, app: AppHandle) {
-    loop {
-        let mut client_guard = client.lock().await;
-        
-        // 检查连接是否已断开
-        if client_guard.state == WsConnectionState::Disconnected
-            || client_guard.state == WsConnectionState::Error("".to_string())
-        {
-            break;
-        }
-
-        match client_guard.read_message().await {
-            Some(Ok(response)) => {
-                // 如果是 pending request 的响应，直接处理
-                if client_guard.pending_requests.contains_key(&response.id) {
-                    client_guard.handle_incoming(response).await;
-                } else {
-                    // 否则作为事件转发到前端
-                    let _ = app.emit("bridge-message", serde_json::json!({
-                        "id": response.id,
-                        "type": response.msg_type,
-                        "status": response.status,
-                        "data": response.data,
-                    }));
+fn extract_models(config: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut models = Vec::new();
+    if let Some(providers) = config.get("providers").and_then(|p| p.as_object()) {
+        for (pn, pc) in providers {
+            if let Some(ms) = pc.get("models").and_then(|m| m.as_object()) {
+                for (mn, _) in ms {
+                    models.push(serde_json::json!({"name": mn, "provider": pn}));
                 }
             }
-            Some(Err(e)) => {
-                let err_msg = e.clone();
-                log::error!("WebSocket 接收错误: {}", e);
-                client_guard.state = WsConnectionState::Error(e);
-                let _ = app.emit("bridge-status", serde_json::json!({
-                    "status": "error",
-                    "error": err_msg,
-                }));
-                break;
-            }
-            None => {
-                // 流已结束
-                break;
+        }
+    }
+    if let Some(top) = config.get("models").and_then(|m| m.as_array()) {
+        for m in top {
+            if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                if !models.iter().any(|e| e.get("name").and_then(|n| n.as_str()) == Some(name)) {
+                    models.push(m.clone());
+                }
             }
         }
     }
+    models
+}
+
+#[tauri::command]
+async fn get_bridge_status(state: State<'_, SharedWsClient>) -> Result<WsConnectionState, String> {
+    Ok(state.client.lock().await.state.clone())
+}
+
+#[tauri::command]
+async fn send_to_bridge(state: State<'_, SharedWsClient>, msg_type: String, data: serde_json::Value) -> Result<serde_json::Value, String> {
+    let request = BridgeRequest { id: uuid::Uuid::new_v4().to_string(), msg_type, data };
+    let response = state.send_request(request).await?;
+    Ok(serde_json::json!({"status": response.status, "data": response.data}))
+}
+
+#[tauri::command]
+async fn send_to_bridge_no_wait(state: State<'_, SharedWsClient>, msg_type: String, data: serde_json::Value) -> Result<String, String> {
+    let request = BridgeRequest { id: uuid::Uuid::new_v4().to_string(), msg_type, data };
+    state.send_no_wait(request).await?;
+    Ok("ok".to_string())
 }
 
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志
     env_logger::init();
 
-    // 创建共享的 WebSocket 客户端
-    let ws_client = ws_client::create_shared_client(DEFAULT_BRIDGE_URL);
+    let ws_client = SharedWsClient::new(DEFAULT_BRIDGE_URL);
+    let bridge_process = BridgeProcess::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // 注册共享状态
         .manage(ws_client)
-        // 注册 IPC 命令
+        .manage(bridge_process)
         .invoke_handler(tauri::generate_handler![
-            connect_bridge,
-            disconnect_bridge,
-            get_bridge_status,
-            send_to_bridge,
-            save_config,
-            load_config,
-            read_opencode_config,
+            connect_bridge, disconnect_bridge, get_bridge_status,
+            send_to_bridge, send_to_bridge_no_wait,
+            save_config, load_config, read_opencode_config,
+            get_bridge_logs,
         ])
+        .setup(|app| {
+            let bp: BridgeProcess = app.state::<BridgeProcess>().inner().clone();
+            let app_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all().build().unwrap();
+                rt.block_on(bp.start(&app_dir));
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
-        .expect("启动 Tauri 应用失败");
+        .expect("启动失败");
 }

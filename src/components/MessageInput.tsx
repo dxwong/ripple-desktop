@@ -3,6 +3,7 @@ import { ArrowUp, ChevronDown, Cpu, Lock } from "lucide-react";
 import type { ModelConfig, ChatMode } from "../types";
 
 interface OpenCodeModel {
+  id: string;
   name: string;
   provider?: string;
 }
@@ -19,6 +20,8 @@ interface MessageInputProps {
   onSwitchModel?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
+  /** 是否有关联项目（项目对话显示 OC 模型选择器） */
+  hasProject?: boolean;
   /** OpenCode 可用模型列表 */
   openCodeModels?: OpenCodeModel[];
   /** 当前选中的 OpenCode 模型 */
@@ -56,6 +59,7 @@ function MessageInput({
   modelConfigs = [],
   onSwitchModel,
   chatMode = "chat",
+  hasProject = false,
   openCodeModels = [],
   openCodeModel = "",
   onSwitchOpenCodeModel,
@@ -70,7 +74,7 @@ function MessageInput({
   const ocDropdownRef = useRef<HTMLDivElement>(null);
   const manualInputRef = useRef<HTMLInputElement>(null);
 
-  const isCodeMode = chatMode === "code";
+  const isCodeMode = chatMode === "code" || hasProject;
   /** 已选了 OpenCode 模型 → 对话模型禁用；未选 → 对话模型可用 */
   const chatDisabled = isCodeMode && !!openCodeModel;
   const hasOCModels = openCodeModels.length > 0;
@@ -265,15 +269,15 @@ function MessageInput({
                     {/* 从配置读取的模型列表 */}
                     {hasOCModels && openCodeModels.map((m) => (
                       <button
-                        key={m.name}
-                        onClick={() => handleSelectOC(m.name)}
+                        key={m.id}
+                        onClick={() => handleSelectOC(m.id)}
                         className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-all duration-100
-                          ${openCodeModel === m.name
+                          ${openCodeModel === m.id
                             ? "bg-accent/10 text-accent font-medium"
                             : "text-content dark:text-content-dark hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
                           }`}
                       >
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${openCodeModel === m.name ? "bg-accent" : "bg-transparent"}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${openCodeModel === m.id ? "bg-accent" : "bg-transparent"}`} />
                         <div className="flex-1 min-w-0">
                           <div className="truncate">{m.name}</div>
                           {m.provider && (

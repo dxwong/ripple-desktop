@@ -82,28 +82,64 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
 }
 
 export function useStreamingChat() {
-  const [conversations, setConversations] = useState<Conversation[]>([
-    {
-      id: "default",
-      title: "新对话",
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      mode: "chat",
-    },
-  ]);
-  const [activeConversationId, setActiveConversationId] = useState("default");
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  // 用 ref 跟踪 activeConversationId，避免闭包捕获过期值
+  const activeConversationIdRef = useRef(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
 
+  const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
+
+  // ===== 追加到指定对话（显式传 convId，避免闭包过期） =====
+  const appendToConversation = useCallback((convId: string, chunk: string) => {
+    if (!convId) {
+      console.warn("[appendToConversation] convId 为空");
+      return;
+    }
+    if (!chunk) return;
+    let found = false;
+    setConversations((prev) => {
+      const next = prev.map((conv) => {
+        if (conv.id !== convId) return conv;
+        found = true;
+        const msgs = [...conv.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
+        } else {
+          msgs.push({
+            id: genId(),
+            role: "assistant",
+            content: chunk,
+            timestamp: Date.now(),
+          });
+        }
+        return { ...conv, messages: msgs, updatedAt: Date.now() };
+      });
+      if (!found) console.warn("[appendToConversation] 未找到对话:", convId);
+      return next;
+    });
+  }, []);
+
+  // ===== 追加到当前活跃对话（由 ref 决定目标对话） =====
+  const appendToLastAssistant = useCallback((chunk: string) => {
+    const convId = activeConversationIdRef.current;
+    if (!convId) return;
+    appendToConversation(convId, chunk);
+  }, []);
+
+  // ===== 添加用户/助手消息 =====
   const addMessage = useCallback(
     (role: "user" | "assistant", content: string) => {
+      const convId = activeConversationIdRef.current;
+      if (!convId) return null;
       const msg: Message = { id: genId(), role, content, timestamp: Date.now() };
       setConversations((prev) =>
         prev.map((conv) =>
-          conv.id === activeConversationId
+          conv.id === convId
             ? {
                 ...conv,
                 messages: [...conv.messages, msg],
@@ -118,38 +154,17 @@ export function useStreamingChat() {
       );
       return msg;
     },
-    [activeConversationId]
+    [] // 使用 ref 无依赖
   );
 
-  const appendToLastAssistant = useCallback(
-    (chunk: string) => {
-      setConversations((prev) =>
-        prev.map((conv) => {
-          if (conv.id !== activeConversationId) return conv;
-          const msgs = [...conv.messages];
-          const last = msgs[msgs.length - 1];
-          if (last && last.role === "assistant") {
-            msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
-          } else {
-            msgs.push({
-              id: genId(),
-              role: "assistant",
-              content: chunk,
-              timestamp: Date.now(),
-            });
-          }
-          return { ...conv, messages: msgs, updatedAt: Date.now() };
-        })
-      );
-    },
-    [activeConversationId]
-  );
-
+  // ===== 发送消息（流式优先，同步降级） =====
   const sendMessage = useCallback(
     async (
       content: string,
       mode: "simulate" | "bridge" = "simulate",
       bridgeSend?: (type: string, data: any) => Promise<any>,
+      bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
+      bridgeSetCallback?: (callback: ((msg: any) => void) | null) => void,
       projectDirectory?: string,
       openCodeModel?: string
     ) => {
@@ -159,57 +174,139 @@ export function useStreamingChat() {
       const abort = new AbortController();
       abortRef.current = abort;
 
-      addMessage("user", content);
+      const targetConvId = activeConversationIdRef.current;
+      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", conversations.length);
+      if (!targetConvId) {
+        console.warn("[sendMessage] 没有活跃对话，跳过发送");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 确认目标对话存在
+      const convExists = conversations.some(c => c.id === targetConvId);
+      console.log("[sendMessage] 目标对话存在:", convExists);
+
+      // 先添加用户消息
+      const msg = addMessage("user", content);
+      console.log("[sendMessage] addMessage 结果:", msg ? msg.id : "null");
 
       try {
-        // 有 OC 模型 → 优先走桥接
+        // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
+        if (openCodeModel && bridgeSendStreaming && bridgeSetCallback) {
+          await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const done = () => { settled = true; };
+            // 5 分钟超时，防止流永远不结束
+            const timer = setTimeout(() => {
+              if (!settled) {
+                bridgeSetCallback(null);
+                reject(new Error("OpenCode 执行超时（5分钟）"));
+              }
+            }, 300000);
+
+            // 先注册回调，再发送（避免竞态）
+            bridgeSetCallback((msg: any) => {
+              // keepalive 和其他非终态消息直接忽略
+              if (msg.status === "keepalive") return;
+              if (settled) return; // 已结束，忽略后续消息
+              console.log("[stream callback] status:", msg.status, "targetConvId:", targetConvId);
+
+              if (msg.status === "stream") {
+                const chunk = msg.data?.chunk || "";
+                if (chunk) appendToConversation(targetConvId, chunk);
+              } else if (msg.status === "ok") {
+                clearTimeout(timer);
+                bridgeSetCallback(null);
+                done();
+                resolve();
+              } else if (msg.status === "error") {
+                clearTimeout(timer);
+                bridgeSetCallback(null);
+                done();
+                reject(new Error(msg.data?.error || "执行失败"));
+              }
+            });
+
+            const payload: any = {
+              command: content,
+              cwd: projectDirectory,
+              model: openCodeModel,
+            };
+            bridgeSendStreaming("execute_opencode_streaming", payload).catch((e: any) => {
+              clearTimeout(timer);
+              bridgeSetCallback(null);
+              done();
+              reject(e);
+            });
+          });
+          return;
+        }
+
+        // ===== 同步路径（降级）：OC 模型 + 同步桥接 =====
         if (openCodeModel && bridgeSend) {
           try {
-            const payload: any = { command: content, cwd: projectDirectory, model: openCodeModel };
+            const payload: any = {
+              command: content,
+              cwd: projectDirectory,
+              model: openCodeModel,
+            };
             const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout || response?.stderr || "（无输出）";
-            appendToLastAssistant(result);
-            return; // 成功则结束
+            const result = response?.stdout
+              || response?.stderr
+              || "（无输出）";
+            appendToConversation(targetConvId, result);
           } catch (e: any) {
-            appendToLastAssistant(`**OpenCode 执行错误**: ${e.message || "桥接服务不可用"}`);
-            return;
+            const errMsg = e?.message || "桥接服务不可用";
+            console.error("[sendMessage] OpenCode 执行错误:", errMsg);
+            appendToConversation(targetConvId, `**OpenCode 执行错误**: ${errMsg}`);
           }
+          return;
         }
 
-        // 有 OC 模型但桥接未连接 → 降级模拟，提示需要桥接
-        if (openCodeModel && !bridgeSend) {
-          appendToLastAssistant("> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。当前返回模拟回复。\n\n");
+        // ===== OC 模型但桥接未连接 → 提示 =====
+        if (openCodeModel && !bridgeSend && !bridgeSendStreaming) {
+          appendToConversation(targetConvId, "> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。\n\n");
+          appendToConversation(targetConvId, "请先连接桥接服务，并确保 Python 桥接已启动 (`npm run bridge`)\n");
+          return;
         }
 
-        // 模拟模式（无 OC 模型 或 OC 模型降级）
+        // ===== 模拟模式 =====
         if (mode === "simulate" || !bridgeSend) {
           const currentMode = activeConversation?.mode || "chat";
           let assistantContent = "";
           for await (const chunk of simulateStreamResponse(content, currentMode)) {
             if (abort.signal.aborted) break;
             assistantContent += chunk;
-            appendToLastAssistant(chunk);
+            appendToConversation(targetConvId, chunk);
           }
           if (!abort.signal.aborted && !assistantContent) {
-            appendToLastAssistant("（模拟回复为空）");
+            appendToConversation(targetConvId, "（模拟回复为空）");
           }
-        } else if (bridgeSend) {
-          // 普通桥接模式（无 OC 模型）
+          return;
+        }
+
+        // ===== 普通桥接模式（无 OC 模型） =====
+        if (bridgeSend) {
           try {
             const payload: any = { command: content, cwd: projectDirectory };
             const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout || response?.stderr || "（无输出）";
-            appendToLastAssistant(result);
+            const result = response?.stdout
+              || response?.stderr
+              || "（无输出）";
+            appendToConversation(targetConvId, result);
           } catch (e: any) {
-            appendToLastAssistant(`**错误**: ${e.message || "请求失败"}`);
+            const errMsg = e?.message || "请求失败";
+            console.error("[sendMessage] 桥接错误:", errMsg);
+            appendToConversation(targetConvId, `**错误**: ${errMsg}`);
           }
+          return;
         }
       } finally {
         setIsProcessing(false);
         abortRef.current = null;
       }
     },
-    [isProcessing, addMessage, appendToLastAssistant, activeConversation?.mode]
+    [isProcessing, activeConversation?.mode, appendToConversation, addMessage]
   );
 
   const stopStreaming = useCallback(() => {
@@ -217,10 +314,11 @@ export function useStreamingChat() {
     setIsProcessing(false);
   }, []);
 
-  const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string) => {
+  /** 新建对话 */
+  const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string) => {
     const newConv: Conversation = {
       id: genId(),
-      title: mode === "code" ? "新开发会话" : "新对话",
+      title: title || (mode === "code" ? "新开发会话" : "新对话"),
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -241,7 +339,7 @@ export function useStreamingChat() {
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (id === activeConversationId) {
         const remaining = conversations.filter((c) => c.id !== id);
-        setActiveConversationId(remaining[remaining.length - 1]?.id || "default");
+        setActiveConversationId(remaining.length > 0 ? remaining[remaining.length - 1].id : "");
       }
     },
     [activeConversationId, conversations]

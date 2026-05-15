@@ -4,6 +4,14 @@ import { isTauri } from "./useTauri";
 /** 桥接服务连接状态 */
 export type BridgeStatus = "disconnected" | "connecting" | "connected" | "error";
 
+/** 桥接消息类型 */
+export interface BridgeMessage {
+  id: string;
+  type: string;
+  status: string;
+  data: any;
+}
+
 /**
  * 桥接服务 Hook
  * - Tauri 环境：通过 IPC 调用 Rust 后端的 WebSocket 客户端
@@ -14,6 +22,12 @@ export function useBridge() {
   const [error, setError] = useState<string>("");
   const unlistenRef = useRef<(() => void)[]>([]);
   const inTauri = isTauri();
+  const messageCallbackRef = useRef<((message: BridgeMessage) => void) | null>(null);
+
+  // 设置消息回调
+  const setMessageCallback = useCallback((callback: ((message: BridgeMessage) => void) | null) => {
+    messageCallbackRef.current = callback;
+  }, []);
 
   // 监听桥接服务状态事件（仅 Tauri 环境）
   useEffect(() => {
@@ -25,6 +39,8 @@ export function useBridge() {
     const setupListeners = async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
+        
+        // 监听连接状态
         const unlistenStatus = await listen<{ status: string; error?: string }>(
           "bridge-status",
           (event) => {
@@ -45,6 +61,17 @@ export function useBridge() {
           }
         );
         unlistenRef.current.push(unlistenStatus);
+
+        // 监听桥接消息（用于流式响应）
+        const unlistenMessage = await listen<BridgeMessage>(
+          "bridge-message",
+          (event) => {
+            if (messageCallbackRef.current) {
+              messageCallbackRef.current(event.payload);
+            }
+          }
+        );
+        unlistenRef.current.push(unlistenMessage);
       } catch (e) {
         console.warn("桥接事件监听初始化失败:", e);
       }
@@ -100,10 +127,14 @@ export function useBridge() {
       }
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const result = await invoke<{ status: string; data: any }>(
-          "send_to_bridge",
-          { msgType: type, data }
-        );
+        // 使用 Promise.race 实现超时，因为 Tauri 2.x invoke 不支持 timeout 选项
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("请求超时 (180秒)")), 180000);
+        });
+        const result = await Promise.race([
+          invoke<{ status: string; data: any }>("send_to_bridge", { msgType: type, data }),
+          timeoutPromise
+        ]) as { status: string; data: any };
         if (result.status === "ok") {
           return result.data;
         } else {
@@ -128,12 +159,31 @@ export function useBridge() {
     }
   }, [inTauri]);
 
+  /** 发送流式消息（不等待响应，响应通过事件回调接收） */
+  const sendStreamingMessage = useCallback(
+    async (type: string, data: Record<string, unknown>): Promise<void> => {
+      if (!inTauri) {
+        throw new Error("浏览器模式不支持桥接服务");
+      }
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        // 使用不等待响应的命令，避免超时断开
+        await invoke("send_to_bridge_no_wait", { msgType: type, data });
+      } catch (e: any) {
+        throw new Error(typeof e === "string" ? e : e.message || "请求失败");
+      }
+    },
+    [inTauri]
+  );
+
   return {
     status,
     error,
     connect,
     disconnect,
     sendMessage,
+    sendStreamingMessage,
+    setMessageCallback,
     getStatus,
     isConnected: status === "connected",
   };
