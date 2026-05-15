@@ -214,8 +214,8 @@ class OpenCodeBridge:
 
     async def send_message_stream(self, message: str, msg_id: str, websocket, model: str = None):
         """
-        流式发送消息 — 从 POST 响应 body 中直接读取 SSE 流，逐 token 转发。
-        不再使用 /event 全局事件总线，避免 session 间 event 混入导致字词重复。
+        流式发送消息 — 通过 /event 接收 SSE，用 readline 逐行解析（避免 buffer 边界问题），
+        加超时防止死等，加简易去重跳过连续相同 token。
         """
         if not await self.ensure_server():
             await send_response(websocket, msg_id, "error", {"error": "opencode serve 服务不可用"})
@@ -224,6 +224,7 @@ class OpenCodeBridge:
         session_id = await self.create_session(model=model)
         logger.info(f"发送: {message[:50]}...  session={session_id}")
 
+        # 先发 POST 触发模型开始处理，不等待响应体
         try:
             async with aiohttp.ClientSession() as s:
                 payload = {"parts": [{"type": "text", "text": message}]}
@@ -242,11 +243,24 @@ class OpenCodeBridge:
                                            {"error": f"发消息失败: {err[:100]}"})
                         return
 
-                    # 从 POST 响应体中逐行读取 SSE 流（核心改动）
+            # 连接 /event 接收流式输出（readline + 超时，不手写 buffer）
+            async with aiohttp.ClientSession() as s:
+                async with s.get(
+                    f"{self.base_url}/event",
+                    timeout=aiohttp.ClientTimeout(total=300)
+                ) as resp:
+                    last_token = ""  # 简易去重：跳过连续相同的 token
                     while True:
-                        raw = await resp.content.readline()
+                        try:
+                            raw = await asyncio.wait_for(
+                                resp.content.readline(), timeout=30.0
+                            )
+                        except asyncio.TimeoutError:
+                            logger.info("/event 30s 无数据，流结束")
+                            break
+
                         if not raw:
-                            break  # 流结束
+                            break
 
                         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
@@ -259,13 +273,16 @@ class OpenCodeBridge:
 
                         try:
                             data = json.loads(data_str)
-                            # token 提取：opencode serve 返回格式为 part.content
-                            token = (
-                                data.get("part", {}).get("content")
-                                or data.get("delta")
-                                or data.get("content")
-                            )
-                            if token:
+                            # 从 properties.delta 取增量 token（/event 的格式）
+                            props = data.get("properties", {})
+                            if not isinstance(props, dict):
+                                continue
+                            token = props.get("delta") or props.get("content") or props.get("text")
+                            if isinstance(token, str) and token:
+                                # 简易去重：跳过与上一次完全相同的 token
+                                if token == last_token:
+                                    continue
+                                last_token = token
                                 await send_response(
                                     websocket, msg_id, "stream", {"chunk": token}
                                 )
