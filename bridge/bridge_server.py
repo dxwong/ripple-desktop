@@ -34,7 +34,7 @@ except ImportError:
 # 配置日志（输出到 stdout，避免 Rust 侧误标为 ERR）
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(logging.Formatter("[Bridge] %(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
-logging.basicConfig(level=logging.INFO, handlers=[_handler])
+logging.basicConfig(level=logging.DEBUG, handlers=[_handler])
 logger = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
@@ -286,6 +286,14 @@ class OpenCodeBridge:
                         content = self._extract_content(event_lines)
 
                         if content is not None:
+                            # 调试：打印原始事件和 accumulated 状态
+                            logger.debug(
+                                "SSE event:\n  lines: %s\n  content=%r\n  accumulated=%r",
+                                " | ".join(event_lines),
+                                content[:80] if content else None,
+                                accumulated[-80:] if accumulated else "(空)",
+                            )
+
                             # 全局累计去重：只发新增部分
                             if content.startswith(accumulated):
                                 new_text = content[len(accumulated):]
@@ -298,6 +306,9 @@ class OpenCodeBridge:
                                 await send_response(
                                     websocket, msg_id, "stream", {"chunk": new_text}
                                 )
+                                logger.debug("  → sent: %r", new_text[:80])
+                            else:
+                                logger.debug("  → skipped (dup)")
                         else:
                             # 非内容事件 → 检查 session 是否结束
                             if self._is_session_idle(event_lines):
