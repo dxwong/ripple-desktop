@@ -131,46 +131,50 @@ class OpenCodeBridge:
         self.base_url = f"http://{host}:{port}"
         self._server_process: subprocess.Popen | None = None
         self._session_id: str | None = None
+        # 保护 ensure_server 的并发安全（预热 + 首次请求可能同时调用）
+        self._server_lock = asyncio.Lock()
 
     # ---------- 服务生命周期 ----------
 
     async def ensure_server(self) -> bool:
-        """确保 serve 服务运行，未运行则启动"""
-        if await self._health_check():
-            return True
-
-        # 清理残留的 opencode serve 进程（防止端口冲突）
-        logger.info(f"清理残留 opencode 进程...")
-        if os.name == "nt":
-            subprocess.run(
-                "taskkill /f /im node.exe 2>nul | findstr opencode >nul",
-                shell=True, capture_output=True,
-            )
-        else:
-            subprocess.run("pkill -f 'opencode serve' 2>/dev/null", shell=True)
-        await asyncio.sleep(1)
-
-        logger.info(f"启动 opencode serve :{self.port}...")
-        self._server_process = subprocess.Popen(
-            f"{OPENCODE_CMD} serve --port {self.port}",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            shell=True,
-        )
-
-        for _ in range(30):
-            await asyncio.sleep(0.5)
+        """确保 serve 服务运行，未运行则启动（线程安全，支持并发调用）"""
+        async with self._server_lock:
+            # 双重检查：获取锁后再次检查，避免并发重复启动
             if await self._health_check():
-                logger.info("opencode serve 就绪")
                 return True
 
-            # 检查进程是否已退出
-            if self._server_process.poll() is not None:
-                logger.error(f"opencode serve 进程异常退出, code={self._server_process.returncode}")
-                break
+            # 清理残留的 opencode serve 进程（防止端口冲突）
+            logger.info(f"清理残留 opencode 进程...")
+            if os.name == "nt":
+                subprocess.run(
+                    "taskkill /f /im node.exe 2>nul | findstr opencode >nul",
+                    shell=True, capture_output=True,
+                )
+            else:
+                subprocess.run("pkill -f 'opencode serve' 2>/dev/null", shell=True)
+            await asyncio.sleep(1)
 
-        logger.error("opencode serve 启动失败")
-        return False
+            logger.info(f"启动 opencode serve :{self.port}...")
+            self._server_process = subprocess.Popen(
+                f"{OPENCODE_CMD} serve --port {self.port}",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=True,
+            )
+
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                if await self._health_check():
+                    logger.info("opencode serve 就绪")
+                    return True
+
+                # 检查进程是否已退出
+                if self._server_process.poll() is not None:
+                    logger.error(f"opencode serve 进程异常退出, code={self._server_process.returncode}")
+                    break
+
+            logger.error("opencode serve 启动失败")
+            return False
 
     async def _health_check(self) -> bool:
         try:
@@ -654,9 +658,23 @@ async def ensure_port_free(port: int):
         return False
 
 
+async def _warmup_opencode_serve():
+    """后台预热 opencode serve，确保第一次请求时不卡顿"""
+    logger.info("正在预热 opencode serve...")
+    success = await opencode_bridge.ensure_server()
+    if success:
+        logger.info("opencode serve 预热完成，已就绪")
+    else:
+        logger.warning("opencode serve 预热失败，首次请求时将重试")
+
+
 async def main():
     """启动 WebSocket 服务器（端口冲突时自动清理）"""
     await ensure_port_free(PORT)
+
+    # 后台预热 opencode serve（不阻塞桥接服务启动）
+    asyncio.create_task(_warmup_opencode_serve())
+
     logger.info(f"启动桥接服务: ws://{HOST}:{PORT}")
     logger.info("等待 Tauri 后端连接...")
 

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
@@ -24,6 +24,19 @@ function App() {
   const chat = useStreamingChat();
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
+
+  // ===== 启动时自动连接桥接服务 =====
+  useEffect(() => {
+    // 延迟1秒自动连接（给 Python 桥接服务充足的启动时间）
+    const t1 = setTimeout(() => bridge.connect(), 1000);
+    // 5秒后重试一次兜底（桥接启动较慢的情况）
+    const t2 = setTimeout(() => bridge.connect(), 5000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // OpenCode 模型列表
   const [openCodeModels, setOpenCodeModels] = useState<{ id: string; name: string }[]>([
