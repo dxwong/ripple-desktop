@@ -21,6 +21,8 @@ export interface Message {
   id: string;
   role: MessageRole;
   content: string;
+  /** 模型的思考/推理过程（如有），在前端可折叠展示 */
+  thinking: string;
   timestamp: number;
 }
 

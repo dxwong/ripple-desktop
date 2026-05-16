@@ -30,16 +30,25 @@ export function useBridge() {
   }, []);
 
   // 监听桥接服务状态事件（仅 Tauri 环境）
+  // 
+  // ⚠️ setupListeners 是 async 的，但 useEffect cleanup 是同步的。
+  // React StrictMode 下会触发 挂载→清理→挂载 的 double-invoke。
+  // 如果第一个 setupListeners 的 await 还没完成，cleanup 就已经执行了，
+  // 那么第一个的 listener 会"泄漏"下来，和第二个的 listener 叠加 → 双重监听。
+  // 用 cancelled 标志防止此竞态。
   useEffect(() => {
     if (!inTauri) {
       setStatus("disconnected");
       return;
     }
 
+    let cancelled = false;
+
     const setupListeners = async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        
+        if (cancelled) return;
+
         // 监听连接状态
         const unlistenStatus = await listen<{ status: string; error?: string }>(
           "bridge-status",
@@ -60,9 +69,11 @@ export function useBridge() {
             }
           }
         );
+        if (cancelled) { unlistenStatus(); return; }
         unlistenRef.current.push(unlistenStatus);
 
         // 监听桥接消息（用于流式响应）
+        console.log("[useBridge] 注册 bridge-message 监听器");
         const unlistenMessage = await listen<BridgeMessage>(
           "bridge-message",
           (event) => {
@@ -71,15 +82,18 @@ export function useBridge() {
             }
           }
         );
+        if (cancelled) { unlistenMessage(); return; }
         unlistenRef.current.push(unlistenMessage);
+        console.log("[useBridge] bridge-message 监听器已注册, 总数:", unlistenRef.current.length);
       } catch (e) {
-        console.warn("桥接事件监听初始化失败:", e);
+        if (!cancelled) console.warn("桥接事件监听初始化失败:", e);
       }
     };
 
     setupListeners();
 
     return () => {
+      cancelled = true;
       unlistenRef.current.forEach((fn) => fn());
       unlistenRef.current = [];
     };

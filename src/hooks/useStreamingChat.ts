@@ -87,11 +87,15 @@ export function useStreamingChat() {
   const [isProcessing, setIsProcessing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 用 ref 跟踪 activeConversationId，避免闭包捕获过期值
+  // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
+  const activeModeRef = useRef(activeConversation?.mode || "chat");
+  activeModeRef.current = activeConversation?.mode || "chat";
 
   // ===== 追加到指定对话（显式传 convId，避免闭包过期） =====
   const appendToConversation = useCallback((convId: string, chunk: string) => {
@@ -114,12 +118,41 @@ export function useStreamingChat() {
             id: genId(),
             role: "assistant",
             content: chunk,
+            thinking: "",
             timestamp: Date.now(),
           });
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
       });
       if (!found) console.warn("[appendToConversation] 未找到对话:", convId);
+      return next;
+    });
+  }, []);
+
+  // ===== 追加思考内容到指定对话的最后一个 assistant 消息 =====
+  const appendThinkingToConversation = useCallback((convId: string, chunk: string) => {
+    if (!convId || !chunk) return;
+    let found = false;
+    setConversations((prev) => {
+      const next = prev.map((conv) => {
+        if (conv.id !== convId) return conv;
+        found = true;
+        const msgs = [...conv.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          msgs[msgs.length - 1] = { ...last, thinking: (last.thinking || "") + chunk };
+        } else {
+          msgs.push({
+            id: genId(),
+            role: "assistant",
+            content: "",
+            thinking: chunk,
+            timestamp: Date.now(),
+          });
+        }
+        return { ...conv, messages: msgs, updatedAt: Date.now() };
+      });
+      if (!found) console.warn("[appendThinkingToConversation] 未找到对话:", convId);
       return next;
     });
   }, []);
@@ -136,7 +169,7 @@ export function useStreamingChat() {
     (role: "user" | "assistant", content: string) => {
       const convId = activeConversationIdRef.current;
       if (!convId) return null;
-      const msg: Message = { id: genId(), role, content, timestamp: Date.now() };
+      const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now() };
       setConversations((prev) =>
         prev.map((conv) =>
           conv.id === convId
@@ -175,15 +208,16 @@ export function useStreamingChat() {
       abortRef.current = abort;
 
       const targetConvId = activeConversationIdRef.current;
-      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", conversations.length);
+      const currentConversations = conversationsRef.current;
+      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", currentConversations.length);
       if (!targetConvId) {
         console.warn("[sendMessage] 没有活跃对话，跳过发送");
         setIsProcessing(false);
         return;
       }
 
-      // 确认目标对话存在
-      const convExists = conversations.some(c => c.id === targetConvId);
+      // 确认目标对话存在（使用 ref 避免闭包过期）
+      const convExists = currentConversations.some(c => c.id === targetConvId);
       console.log("[sendMessage] 目标对话存在:", convExists);
 
       // 先添加用户消息
@@ -213,7 +247,14 @@ export function useStreamingChat() {
 
               if (msg.status === "stream") {
                 const chunk = msg.data?.chunk || "";
-                if (chunk) appendToConversation(targetConvId, chunk);
+                if (chunk) {
+                  const count = (window as any).__chunkCount = ((window as any).__chunkCount || 0) + 1;
+                  console.log(`[bridge→UI] #${count} chunk:`, JSON.stringify(chunk));
+                  appendToConversation(targetConvId, chunk);
+                }
+              } else if (msg.status === "thinking") {
+                const chunk = msg.data?.chunk || "";
+                if (chunk) appendThinkingToConversation(targetConvId, chunk);
               } else if (msg.status === "ok") {
                 clearTimeout(timer);
                 bridgeSetCallback(null);
@@ -272,7 +313,7 @@ export function useStreamingChat() {
 
         // ===== 模拟模式 =====
         if (mode === "simulate" || !bridgeSend) {
-          const currentMode = activeConversation?.mode || "chat";
+          const currentMode = activeModeRef.current;
           let assistantContent = "";
           for await (const chunk of simulateStreamResponse(content, currentMode)) {
             if (abort.signal.aborted) break;
@@ -306,7 +347,7 @@ export function useStreamingChat() {
         abortRef.current = null;
       }
     },
-    [isProcessing, activeConversation?.mode, appendToConversation, addMessage]
+    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage]
   );
 
   const stopStreaming = useCallback(() => {
