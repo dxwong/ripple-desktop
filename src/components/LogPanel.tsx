@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Terminal, ChevronUp, ChevronDown, Trash2 } from "lucide-react";
+import { Terminal, ChevronUp, ChevronDown, Trash2, Copy } from "lucide-react";
 
 export interface LogEntry {
   id: number;
@@ -97,6 +97,16 @@ function LogPanel() {
     setLogs([]);
   };
 
+  const handleCopyAll = () => {
+    const text = logs
+      .map((e) => `[${e.timestamp}] ${e.level.toUpperCase()} ${e.message}`)
+      .join("\n");
+    navigator.clipboard.writeText(text).then(
+      () => logger.success("日志已复制到剪贴板"),
+      () => logger.error("复制失败")
+    );
+  };
+
   const levelColor: Record<string, string> = {
     info: "text-content-tertiary dark:text-content-tertiary-dark",
     warn: "text-amber-500 dark:text-amber-400",
@@ -144,6 +154,13 @@ function LogPanel() {
         <div className="relative">
           {/* 工具栏 */}
           <div className="absolute top-0 right-0 z-10 flex items-center gap-1 p-1">
+            <button
+              onClick={handleCopyAll}
+              className="p-1 rounded-md text-content-tertiary hover:text-accent hover:bg-accent/10 transition-all"
+              title="复制全部日志"
+            >
+              <Copy size={12} />
+            </button>
             <button
               onClick={handleClear}
               className="p-1 rounded-md text-content-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
