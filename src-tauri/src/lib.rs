@@ -1,6 +1,8 @@
 use tauri::{AppHandle, Emitter, Manager};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 // ==================== 配置持久化 ====================
 
@@ -83,13 +85,16 @@ fn start_backend(app: AppHandle, state: tauri::State<BackendProcess>) -> Result<
     }));
 
     // 启动 Node 子进程
-    let child = Command::new("node")
-        .arg(&server_entry)
+    let mut cmd = Command::new("node");
+    cmd.arg(&server_entry)
         .current_dir(&backend_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW (Windows)
-        .spawn()
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = cmd.spawn()
         .map_err(|e| {
             let _ = app.emit("backend-log", serde_json::json!({
                 "level": "error",
