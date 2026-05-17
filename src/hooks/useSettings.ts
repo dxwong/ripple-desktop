@@ -129,18 +129,18 @@ export function useSettings() {
           // 编辑已有配置
           configs = configs.map((c) =>
             c.id === editId
-              ? { ...c, name: form.name, provider: form.provider, endpoint: form.endpoint, apiKey: form.apiKey, model: form.model }
+              ? { ...c, name: form.name.trim(), provider: form.provider, endpoint: form.endpoint.trim(), apiKey: form.apiKey.trim(), model: form.model.trim() }
               : c
           );
         } else {
           // 新建配置
           const newConfig: ModelConfig = {
             id: genId(),
-            name: form.name,
+            name: form.name.trim(),
             provider: form.provider,
-            endpoint: form.endpoint,
-            apiKey: form.apiKey,
-            model: form.model,
+            endpoint: form.endpoint.trim(),
+            apiKey: form.apiKey.trim(),
+            model: form.model.trim(),
             createdAt: Date.now(),
           };
           configs = [...configs, newConfig];
