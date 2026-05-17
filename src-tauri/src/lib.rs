@@ -67,6 +67,41 @@ fn start_backend(app: AppHandle, state: tauri::State<BackendProcess>) -> Result<
         }
     }
 
+    // 启动前检查并清理 3002 端口（Windows）
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app.emit("backend-log", serde_json::json!({
+            "level": "info",
+            "message": "检查端口 3002..."
+        }));
+        
+        let output = Command::new("cmd")
+            .args(&["/C", "netstat -ano | findstr :3002"])
+            .output()
+            .ok();
+        
+        if let Some(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                // 解析 PID（最后一列）
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    if let Ok(pid) = parts[4].parse::<u32>() {
+                        let _ = app.emit("backend-log", serde_json::json!({
+                            "level": "warn",
+                            "message": format!("发现端口冲突，正在终止进程 PID={}", pid)
+                        }));
+                        let _ = Command::new("taskkill")
+                            .args(&["/F", "/PID", &pid.to_string()])
+                            .output();
+                        // 等待端口释放
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                }
+            }
+        }
+    }
+
     // 查找后端路径：优先使用配置，否则使用默认路径
     let backend_dir = find_backend_dir(&app)?;
     let server_entry = backend_dir.join("packages").join("server").join("dist").join("index.js");
