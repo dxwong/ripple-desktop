@@ -301,7 +301,8 @@ function ChatView({
               />
             </div>
           )}
-          {/* Auto 确认开关 */}
+          {/* Auto 确认开关 — 弹窗时隐藏 */}
+          {!(pendingToolRequests.length > 0 && !autoConfirm) && (
           <div className="flex justify-end mb-1.5">
             <button
               onClick={onToggleAutoConfirm}
@@ -324,6 +325,7 @@ function ChatView({
               </span>
             </button>
           </div>
+          )}
           <MessageInput
             onSend={onSendMessage}
             disabled={isProcessing}
