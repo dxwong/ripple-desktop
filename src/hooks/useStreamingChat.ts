@@ -1,8 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Message, Conversation, ChatMode, ModelConfig } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchModels, fetchSessions, saveSession, deleteSession as apiDeleteSession } from "../services/api";
-import { streamChat } from "../services/llm";
+import { checkHealth, fetchModels } from "../services/api";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -189,7 +188,7 @@ export function useStreamingChat() {
   const sendMessage = useCallback(
     async (
       content: string,
-      mode: "simulate" | "backend" | "direct" = "simulate",
+      useBackend = false,
       modelConfig?: ModelConfig
     ) => {
       if (isProcessing) return;
@@ -210,7 +209,7 @@ export function useStreamingChat() {
 
       try {
         // ===== 后端模式（Ripple-Agent SSE） =====
-        if (mode === "backend") {
+        if (useBackend) {
           const sseClient = new SSEClient();
           sseClientRef.current = sseClient;
 
@@ -262,43 +261,7 @@ export function useStreamingChat() {
           return;
         }
 
-        // ===== 直连模式（客户端 API 直接调用） =====
-        if (mode === "direct" && modelConfig) {
-          // 构建消息历史
-          const conv = conversationsRef.current.find(
-            (c) => c.id === targetConvId
-          );
-          const history = conv?.messages
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({
-              role: m.role as "user" | "assistant",
-              content: m.content,
-            })) || [{ role: "user" as const, content }];
-
-          await streamChat(
-            modelConfig,
-            history,
-            {
-              onText: (text) => {
-                appendToConversation(targetConvId, text);
-              },
-              onDone: () => {
-                // 完成
-              },
-              onError: (error) => {
-                appendToConversation(
-                  targetConvId,
-                  `\n\n> ❌ **错误**: ${error}\n\n`
-                );
-              },
-            },
-            abort.signal
-          );
-
-          return;
-        }
-
-        // ===== 模拟模式 =====
+        // ===== 模拟模式（仅开发测试用） =====
         const currentMode = activeModeRef.current;
         let assistantContent = "";
         for await (const chunk of simulateStreamResponse(content, currentMode)) {

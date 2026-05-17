@@ -130,3 +130,29 @@ export async function resetSession(
     body: JSON.stringify({ sessionId }),
   });
 }
+
+// ============================================
+// API 连接测试
+// ============================================
+
+export interface TestConnectionResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  latency?: number;
+  model?: string;
+}
+
+/**
+ * 通过后端测试 API 连接
+ */
+export async function testConnection(config: {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+}): Promise<ApiResponse<TestConnectionResult>> {
+  return request<TestConnectionResult>("/api/test-connection", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}

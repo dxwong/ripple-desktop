@@ -4,7 +4,7 @@ import {
   Server, Palette, Trash2, Plus, Edit3, Save, Loader2,
 } from "lucide-react";
 import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
-import { testApiConnection } from "../services/llm";
+import { testConnection } from "../services/api";
 
 interface SettingsPanelProps {
   settings: AppSettings;
@@ -131,17 +131,24 @@ function SettingsPanel({
     setEditId(undefined);
   };
 
-  /** 测试当前表单配置的连接 */
+  /** 测试当前表单配置的连接（通过后端） */
   const handleTestConnection = async () => {
     if (!formEndpoint || !formKey || !formModel) return;
     setTesting(true);
     setTestResult(null);
-    const result = await testApiConnection({
+    const result = await testConnection({
       endpoint: formEndpoint,
       apiKey: formKey,
       model: formModel,
     });
-    setTestResult({ ok: result.success, msg: result.message });
+    if (result.error) {
+      setTestResult({ ok: false, msg: result.error });
+    } else if (result.data) {
+      setTestResult({
+        ok: result.data.success,
+        msg: result.data.message || result.data.error || "未知结果",
+      });
+    }
     setTesting(false);
   };
 

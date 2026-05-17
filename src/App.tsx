@@ -2,12 +2,15 @@ import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
+import LogPanel from "./components/LogPanel";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
 import { useFolderPicker } from "./hooks/useFolderPicker";
 import { ChatMode } from "./types";
 import { fetchModels } from "./services/api";
+import { logger } from "./components/LogPanel";
+import { isTauri } from "./hooks/useTauri";
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
@@ -28,16 +31,60 @@ function App() {
   // 启动时检查后端连接
   useEffect(() => {
     const init = async () => {
+      // Tauri 环境下自动启动后端
+      if (isTauri()) {
+        try {
+          logger.info("Tauri 环境，正在启动后端服务...");
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("start_backend");
+          // 等待后端启动
+          await new Promise((r) => setTimeout(r, 2000));
+        } catch (e: any) {
+          logger.warn(`自动启动后端失败: ${e}`);
+        }
+      }
+
+      logger.info("正在检查后端连接...");
       const connected = await chat.checkBackendConnection();
       if (connected) {
-        // 获取后端模型列表
+        logger.success("后端服务已连接 (localhost:3002)");
         const result = await fetchModels();
         if (result.data) {
           setBackendModels(result.data);
+          logger.info(`获取到 ${result.data.length} 个模型: ${result.data.map(m => m.name).join(", ")}`);
         }
+      } else {
+        logger.warn("后端服务未连接，使用模拟模式（仅开发测试）");
       }
     };
     init();
+  }, []);
+
+  // Tauri 环境下监听后端日志事件
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ level: string; message: string }>("backend-log", (event) => {
+          const { level, message } = event.payload;
+          switch (level) {
+            case "error": logger.error(message); break;
+            case "warn": logger.warn(message); break;
+            case "success": logger.success(message); break;
+            default: logger.info(message);
+          }
+        });
+      } catch (e) {
+        console.warn("监听后端日志失败:", e);
+      }
+    })();
+
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   // 获取当前会话关联的项目和模式
@@ -47,16 +94,9 @@ function App() {
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
 
-  // 发送消息 - 自动选择模式
+  // 发送消息 - 后端可用走后端，否则走模拟（仅开发测试）
   const handleSendMessage = useCallback(async (content: string) => {
-    // 优先级: 后端 > 直连 > 模拟
-    if (chat.backendConnected) {
-      await chat.sendMessage(content, "backend", activeConfig);
-    } else if (activeConfig?.apiKey) {
-      await chat.sendMessage(content, "direct", activeConfig);
-    } else {
-      await chat.sendMessage(content, "simulate");
-    }
+    await chat.sendMessage(content, chat.backendConnected, activeConfig);
   }, [chat.sendMessage, chat.backendConnected, activeConfig]);
 
   // 新建对话
@@ -137,6 +177,9 @@ function App() {
           onSetActiveModel={setActiveModel}
         />
       )}
+
+      {/* 底部日志面板 */}
+      <LogPanel />
     </div>
   );
 }
