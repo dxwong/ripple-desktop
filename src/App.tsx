@@ -3,6 +3,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
+import { ToolConfirmModal } from "./components/ToolConfirmModal";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
@@ -179,6 +180,14 @@ function App() {
           onSaveModelConfig={saveModelConfig}
           onDeleteModelConfig={deleteModelConfig}
           onSetActiveModel={setActiveModel}
+        />
+      )}
+
+      {/* 工具执行确认弹窗 */}
+      {chat.pendingToolRequests.length > 0 && (
+        <ToolConfirmModal
+          request={chat.pendingToolRequests[0]}
+          onConfirm={chat.handleToolConfirm}
         />
       )}
     </div>
