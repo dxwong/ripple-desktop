@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
-import { ToolConfirmModal } from "./components/ToolConfirmModal";
+import { ToolConfirmBanner } from "./components/ToolConfirmBanner";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
@@ -183,13 +183,11 @@ function App() {
         />
       )}
 
-      {/* 工具执行确认弹窗 */}
-      {chat.pendingToolRequests.length > 0 && (
-        <ToolConfirmModal
-          request={chat.pendingToolRequests[0]}
-          onConfirm={chat.handleToolConfirm}
-        />
-      )}
+      {/* 工具执行确认横幅 */}
+      <ToolConfirmBanner
+        requests={chat.pendingToolRequests}
+        onConfirm={chat.handleToolConfirm}
+      />
     </div>
   );
 }

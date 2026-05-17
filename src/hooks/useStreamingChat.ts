@@ -316,8 +316,16 @@ export function useStreamingChat() {
 
   // ===== 切换对话 =====
   const switchConversation = useCallback((id: string) => {
+    // 切换对话时，如果当前有进行中的请求，停止它并清理状态
+    if (isProcessing) {
+      abortRef.current?.abort();
+      sseClientRef.current?.abort();
+      setIsProcessing(false);
+    }
+    // 清理当前对话的待确认工具请求
+    setPendingToolRequests([]);
     setActiveConversationId(id);
-  }, []);
+  }, [isProcessing]);
 
   // ===== 删除对话 =====
   const deleteConversation = useCallback(
