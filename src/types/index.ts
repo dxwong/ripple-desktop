@@ -119,4 +119,10 @@ export interface SSEEvent {
   name?: string;
   error?: string;
   toolRequest?: ToolRequestData;
+  // tool-request 事件的扁平字段（后端直接发送）
+  toolCallId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  description?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
 }

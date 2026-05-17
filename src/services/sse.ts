@@ -171,7 +171,15 @@ export class SSEClient {
                 if (event.name) callbacks.onToolEnd?.(event.name);
                 break;
               case "tool-request":
-                if (event.toolRequest) callbacks.onToolRequest?.(event.toolRequest);
+                if (event.toolCallId && event.toolName) {
+                  callbacks.onToolRequest?.({
+                    toolCallId: event.toolCallId as string,
+                    toolName: event.toolName as string,
+                    args: (event.args as Record<string, unknown>) || {},
+                    description: (event.description as string) || "",
+                    riskLevel: (event.riskLevel as "low" | "medium" | "high") || "medium",
+                  });
+                }
                 break;
               case "done":
                 this._status = "done";
