@@ -189,7 +189,8 @@ export function useStreamingChat() {
     async (
       content: string,
       useBackend = false,
-      modelConfig?: ModelConfig
+      modelConfig?: ModelConfig,
+      cwd?: string
     ) => {
       if (isProcessing) return;
       setIsProcessing(true);
@@ -224,6 +225,7 @@ export function useStreamingChat() {
                 model: modelConfig?.model,
                 endpoint: modelConfig?.endpoint,
                 apiKey: modelConfig?.apiKey,
+                cwd,
               },
               {
                 onText: (text) => {

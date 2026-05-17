@@ -96,8 +96,8 @@ function App() {
 
   // 发送消息 - 后端可用走后端，否则走模拟（仅开发测试）
   const handleSendMessage = useCallback(async (content: string) => {
-    await chat.sendMessage(content, chat.backendConnected, activeConfig);
-  }, [chat.sendMessage, chat.backendConnected, activeConfig]);
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentProject?.directory);
+  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentProject?.directory]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {

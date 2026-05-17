@@ -80,6 +80,8 @@ export class SSEClient {
       apiKey?: string;
       /** 实际模型名（如 gpt-4o、deepseek-chat） */
       model?: string;
+      /** 项目工作目录（限制文件操作范围） */
+      cwd?: string;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -110,6 +112,7 @@ export class SSEClient {
           endpoint: params.endpoint,
           apiKey: params.apiKey,
           systemPrompt: params.systemPrompt,
+          cwd: params.cwd,
         }),
         signal,
       });
