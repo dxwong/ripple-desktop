@@ -27,6 +27,10 @@ interface ChatViewProps {
   pendingToolRequests?: ToolRequestData[];
   /** 确认/拒绝工具执行 */
   onToolConfirm?: (toolCallId: string, approved: boolean, reason?: string) => void;
+  /** 自动确认模式 */
+  autoConfirm?: boolean;
+  /** 切换自动确认 */
+  onToggleAutoConfirm?: () => void;
 }
 
 function TypingIndicator() {
@@ -135,6 +139,8 @@ function ChatView({
   backendModels,
   pendingToolRequests = [],
   onToolConfirm,
+  autoConfirm = false,
+  onToggleAutoConfirm,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -287,7 +293,7 @@ function ChatView({
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           {/* 工具确认横幅 — 输入框上方靠右 */}
-          {pendingToolRequests.length > 0 && onToolConfirm && (
+          {pendingToolRequests.length > 0 && onToolConfirm && !autoConfirm && (
             <div className="flex justify-end mb-2">
               <ToolConfirmBanner
                 requests={pendingToolRequests}
@@ -295,6 +301,29 @@ function ChatView({
               />
             </div>
           )}
+          {/* Auto 确认开关 */}
+          <div className="flex justify-end mb-1.5">
+            <button
+              onClick={onToggleAutoConfirm}
+              title={autoConfirm ? "Auto 模式：工具自动执行，无需确认" : "手动模式：每次工具执行需要用户确认"}
+              className={`group relative flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-all duration-200 ${
+                autoConfirm
+                  ? "bg-accent/15 text-accent hover:bg-accent/25"
+                  : "bg-message-ai dark:bg-message-ai-dark text-content-tertiary hover:text-content-secondary"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full transition-colors duration-200 ${
+                autoConfirm ? "bg-accent shadow-[0_0_4px_rgba(217,119,87,0.5)]" : "bg-content-tertiary"
+              }`} />
+              auto
+              {/* Tooltip */}
+              <span className="absolute -top-8 right-0 px-2 py-1 rounded bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[10px] text-content-secondary whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                {autoConfirm
+                  ? "已开启 Auto，工具将自动执行"
+                  : "点击开启 Auto 模式，工具将自动执行"}
+              </span>
+            </button>
+          </div>
           <MessageInput
             onSend={onSendMessage}
             disabled={isProcessing}

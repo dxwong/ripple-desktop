@@ -164,6 +164,8 @@ function App() {
             backendModels={backendModels}
             pendingToolRequests={chat.pendingToolRequests}
             onToolConfirm={chat.handleToolConfirm}
+            autoConfirm={chat.autoConfirm}
+            onToggleAutoConfirm={() => chat.setAutoConfirm(!chat.autoConfirm)}
           />
         </div>
 

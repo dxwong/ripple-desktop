@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
@@ -89,6 +89,7 @@ export function useStreamingChat() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [backendConnected, setBackendConnected] = useState(false);
   const [pendingToolRequests, setPendingToolRequests] = useState<ToolRequestData[]>([]);
+  const [autoConfirm, setAutoConfirm] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
 
@@ -239,13 +240,13 @@ export function useStreamingChat() {
                 onToolStart: (name) => {
                   appendToConversation(
                     targetConvId,
-                    `\n🔧 ${name}...\n`
+                    `\n> 🔧 ${name}...\n`
                   );
                 },
                 onToolEnd: (name) => {
                   appendToConversation(
                     targetConvId,
-                    `✅ ${name} 完成\n`
+                    `> ✅ ${name} 完成\n`
                   );
                 },
                 onToolRequest: (data) => {
@@ -356,6 +357,17 @@ export function useStreamingChat() {
     []
   );
 
+  // ===== Auto 确认：队列变化时自动批准 =====
+  useEffect(() => {
+    if (!autoConfirm || pendingToolRequests.length === 0) return;
+    const req = pendingToolRequests[0];
+    // 延迟一小段时间再确认，让 UI 有时间反应
+    const timer = setTimeout(() => {
+      handleToolConfirm(req.toolCallId, true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [pendingToolRequests, autoConfirm, handleToolConfirm]);
+
   return {
     conversations,
     activeConversation,
@@ -363,6 +375,8 @@ export function useStreamingChat() {
     isProcessing,
     backendConnected,
     pendingToolRequests,
+    autoConfirm,
+    setAutoConfirm,
     sendMessage,
     stopStreaming,
     addMessage,
