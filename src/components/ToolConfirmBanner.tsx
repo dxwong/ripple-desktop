@@ -44,7 +44,7 @@ export function ToolConfirmBanner({ requests, onConfirm }: ToolConfirmBannerProp
   if (requests.length === 0) return null;
 
   return (
-    <div className="absolute top-0 left-0 right-0 z-30 flex flex-col gap-2 p-3 pointer-events-none">
+    <div className="flex flex-col gap-2 w-full max-w-md">
       {requests.map((req) => {
         const { toolCallId, toolName, args, riskLevel } = req;
         const Icon = TOOL_ICONS[toolName] || FileText;
@@ -56,7 +56,7 @@ export function ToolConfirmBanner({ requests, onConfirm }: ToolConfirmBannerProp
         return (
           <div
             key={toolCallId}
-            className={`pointer-events-auto mx-auto max-w-2xl w-full rounded-lg border shadow-lg backdrop-blur-sm animate-slide-down ${RISK_COLORS[riskLevel]} bg-surface/95 dark:bg-surface-dark/95`}
+            className={`rounded-lg border shadow-lg backdrop-blur-sm animate-slide-down ${RISK_COLORS[riskLevel]} bg-surface/95 dark:bg-surface-dark/95`}
           >
             {/* 紧凑视图 */}
             <div className="flex items-center gap-3 px-4 py-2">

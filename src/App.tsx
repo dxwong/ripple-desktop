@@ -3,7 +3,6 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
-import { ToolConfirmBanner } from "./components/ToolConfirmBanner";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
@@ -163,6 +162,8 @@ function App() {
             project={currentProject}
             backendConnected={chat.backendConnected}
             backendModels={backendModels}
+            pendingToolRequests={chat.pendingToolRequests}
+            onToolConfirm={chat.handleToolConfirm}
           />
         </div>
 
@@ -182,12 +183,6 @@ function App() {
           onSetActiveModel={setActiveModel}
         />
       )}
-
-      {/* 工具执行确认横幅 */}
-      <ToolConfirmBanner
-        requests={chat.pendingToolRequests}
-        onConfirm={chat.handleToolConfirm}
-      />
     </div>
   );
 }

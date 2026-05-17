@@ -2,7 +2,8 @@ import { useRef, useEffect, useState } from "react";
 import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
-import { Message, ModelConfig, ChatMode, Project } from "../types";
+import { ToolConfirmBanner } from "./ToolConfirmBanner";
+import { Message, ModelConfig, ChatMode, Project, ToolRequestData } from "../types";
 import { isTauri } from "../hooks/useTauri";
 
 interface ChatViewProps {
@@ -22,6 +23,10 @@ interface ChatViewProps {
   backendConnected?: boolean;
   /** 后端可用模型列表 */
   backendModels?: { id: string; name: string }[];
+  /** 待确认的工具请求 */
+  pendingToolRequests?: ToolRequestData[];
+  /** 确认/拒绝工具执行 */
+  onToolConfirm?: (toolCallId: string, approved: boolean, reason?: string) => void;
 }
 
 function TypingIndicator() {
@@ -128,6 +133,8 @@ function ChatView({
   project,
   backendConnected = false,
   backendModels,
+  pendingToolRequests = [],
+  onToolConfirm,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -279,6 +286,15 @@ function ChatView({
 
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
+          {/* 工具确认横幅 — 输入框上方靠右 */}
+          {pendingToolRequests.length > 0 && onToolConfirm && (
+            <div className="flex justify-end mb-2">
+              <ToolConfirmBanner
+                requests={pendingToolRequests}
+                onConfirm={onToolConfirm}
+              />
+            </div>
+          )}
           <MessageInput
             onSend={onSendMessage}
             disabled={isProcessing}
