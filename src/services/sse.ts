@@ -74,6 +74,12 @@ export class SSEClient {
       sessionId?: string;
       modelId?: string;
       systemPrompt?: string;
+      /** API 端点（如 https://api.openai.com/v1） */
+      endpoint?: string;
+      /** API 密钥 */
+      apiKey?: string;
+      /** 实际模型名（如 gpt-4o、deepseek-chat） */
+      model?: string;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -100,6 +106,9 @@ export class SSEClient {
           message: params.message,
           sessionId: params.sessionId || "default",
           modelId: params.modelId || "deepseek-v4-flash",
+          model: params.model || params.modelId || "deepseek-v4-flash",
+          endpoint: params.endpoint,
+          apiKey: params.apiKey,
           systemPrompt: params.systemPrompt,
         }),
         signal,

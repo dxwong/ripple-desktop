@@ -37,7 +37,7 @@ class Logger {
 
   subscribe(fn: (entry: LogEntry) => void) {
     this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
+    return () => { this.listeners.delete(fn); };
   }
 
   getHistory(): LogEntry[] {

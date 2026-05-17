@@ -221,6 +221,9 @@ export function useStreamingChat() {
                 message: content,
                 sessionId: targetConvId,
                 modelId: modelConfig?.model || "deepseek-v4-flash",
+                model: modelConfig?.model,
+                endpoint: modelConfig?.endpoint,
+                apiKey: modelConfig?.apiKey,
               },
               {
                 onText: (text) => {

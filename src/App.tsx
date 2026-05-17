@@ -127,6 +127,7 @@ function App() {
   return (
     <div className={settings.darkMode ? "dark" : ""}>
       <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
+        {/* 主内容区：侧边栏 + 聊天区 */}
         <div className="flex flex-1 min-h-0">
           {/* 侧边栏 */}
           <Sidebar
@@ -163,6 +164,9 @@ function App() {
             backendModels={backendModels}
           />
         </div>
+
+        {/* 底部日志面板 — 在 flex 列布局内，不影响上方内容 */}
+        <LogPanel />
       </div>
 
       {/* 设置面板 */}
@@ -177,9 +181,6 @@ function App() {
           onSetActiveModel={setActiveModel}
         />
       )}
-
-      {/* 底部日志面板 */}
-      <LogPanel />
     </div>
   );
 }
