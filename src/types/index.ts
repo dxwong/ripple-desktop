@@ -77,3 +77,36 @@ export interface ModelConfigFormData {
   apiKey: string;
   model: string;
 }
+
+// ============================================
+// 后端 API 类型
+// ============================================
+
+/** 后端返回的模型信息 */
+export interface BackendModel {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+}
+
+/** 后端返回的会话信息 */
+export interface BackendSession {
+  id: string;
+  title: string;
+  model: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** SSE 事件类型 */
+export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'done' | 'error';
+
+/** SSE 事件数据 */
+export interface SSEEvent {
+  type: SSEEventType;
+  text?: string;
+  name?: string;
+  error?: string;
+}

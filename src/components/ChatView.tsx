@@ -18,6 +18,10 @@ interface ChatViewProps {
   chatMode?: ChatMode;
   /** 当前关联的项目 */
   project?: Project | null;
+  /** 后端连接状态 */
+  backendConnected?: boolean;
+  /** 后端可用模型列表 */
+  backendModels?: { id: string; name: string }[];
 }
 
 function TypingIndicator() {
@@ -116,6 +120,8 @@ function ChatView({
   onSwitchModel,
   chatMode = "chat",
   project,
+  backendConnected = false,
+  backendModels,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -155,8 +161,24 @@ function ChatView({
           )}
         </div>
 
-        {/* 右侧：窗口控制按钮 */}
-        <WindowControls />
+        {/* 右侧：后端状态 + 窗口控制按钮 */}
+        <div className="flex items-center gap-2">
+          {/* 后端连接状态 */}
+          <div
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium transition-all duration-150 ${
+              backendConnected
+                ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+            }`}
+            title={backendConnected ? "已连接后端服务" : "未连接后端服务，使用模拟模式"}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              backendConnected ? "bg-emerald-500" : "bg-amber-500"
+            }`} />
+            <span>{backendConnected ? "已连接" : "模拟"}</span>
+          </div>
+          <WindowControls />
+        </div>
       </div>
 
       {/* ===== 会话信息栏（项目对话但没有目录时的提示） ===== */}

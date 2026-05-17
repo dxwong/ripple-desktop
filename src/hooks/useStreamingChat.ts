@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Message, Conversation, ChatMode } from "../types";
+import { SSEClient } from "../services/sse";
+import { checkHealth, fetchModels, fetchSessions, saveSession, deleteSession as apiDeleteSession } from "../services/api";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -85,7 +87,9 @@ export function useStreamingChat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const sseClientRef = useRef<SSEClient | null>(null);
 
   // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
@@ -97,18 +101,19 @@ export function useStreamingChat() {
   const activeModeRef = useRef(activeConversation?.mode || "chat");
   activeModeRef.current = activeConversation?.mode || "chat";
 
-  // ===== 追加到指定对话（显式传 convId，避免闭包过期） =====
+  // ===== 检查后端连接状态 =====
+  const checkBackendConnection = useCallback(async () => {
+    const ok = await checkHealth();
+    setBackendConnected(ok);
+    return ok;
+  }, []);
+
+  // ===== 追加到指定对话 =====
   const appendToConversation = useCallback((convId: string, chunk: string) => {
-    if (!convId) {
-      console.warn("[appendToConversation] convId 为空");
-      return;
-    }
-    if (!chunk) return;
-    let found = false;
+    if (!convId || !chunk) return;
     setConversations((prev) => {
       const next = prev.map((conv) => {
         if (conv.id !== convId) return conv;
-        found = true;
         const msgs = [...conv.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === "assistant") {
@@ -124,19 +129,16 @@ export function useStreamingChat() {
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
       });
-      if (!found) console.warn("[appendToConversation] 未找到对话:", convId);
       return next;
     });
   }, []);
 
-  // ===== 追加思考内容到指定对话的最后一个 assistant 消息 =====
+  // ===== 追加思考内容 =====
   const appendThinkingToConversation = useCallback((convId: string, chunk: string) => {
     if (!convId || !chunk) return;
-    let found = false;
     setConversations((prev) => {
       const next = prev.map((conv) => {
         if (conv.id !== convId) return conv;
-        found = true;
         const msgs = [...conv.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === "assistant") {
@@ -152,16 +154,8 @@ export function useStreamingChat() {
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
       });
-      if (!found) console.warn("[appendThinkingToConversation] 未找到对话:", convId);
       return next;
     });
-  }, []);
-
-  // ===== 追加到当前活跃对话（由 ref 决定目标对话） =====
-  const appendToLastAssistant = useCallback((chunk: string) => {
-    const convId = activeConversationIdRef.current;
-    if (!convId) return;
-    appendToConversation(convId, chunk);
   }, []);
 
   // ===== 添加用户/助手消息 =====
@@ -187,12 +181,12 @@ export function useStreamingChat() {
       );
       return msg;
     },
-    [] // 使用 ref 无依赖
+    []
   );
 
-  // ===== 发送消息 - 纯模拟模式 =====
+  // ===== 发送消息 =====
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, useBackend = false, modelId?: string) => {
       if (isProcessing) return;
       setIsProcessing(true);
 
@@ -210,6 +204,59 @@ export function useStreamingChat() {
       addMessage("user", content);
 
       try {
+        // ===== 后端模式 =====
+        if (useBackend) {
+          const sseClient = new SSEClient();
+          sseClientRef.current = sseClient;
+
+          await new Promise<void>((resolve, reject) => {
+            let hasContent = false;
+
+            sseClient.connect(
+              {
+                message: content,
+                sessionId: targetConvId,
+                modelId: modelId || "deepseek-v4-flash",
+              },
+              {
+                onText: (text) => {
+                  hasContent = true;
+                  appendToConversation(targetConvId, text);
+                },
+                onThinking: (text) => {
+                  appendThinkingToConversation(targetConvId, text);
+                },
+                onToolStart: (name) => {
+                  appendToConversation(
+                    targetConvId,
+                    `\n\n> 🔧 **执行工具**: \`${name}\`...\n\n`
+                  );
+                },
+                onToolEnd: (name) => {
+                  appendToConversation(
+                    targetConvId,
+                    `\n\n> ✅ **工具完成**: \`${name}\`\n\n`
+                  );
+                },
+                onDone: () => {
+                  resolve();
+                },
+                onError: (error) => {
+                  if (!hasContent) {
+                    appendToConversation(
+                      targetConvId,
+                      `\n\n> ❌ **错误**: ${error}\n\n`
+                    );
+                  }
+                  reject(new Error(error));
+                },
+              }
+            );
+          });
+
+          return;
+        }
+
         // ===== 模拟模式 =====
         const currentMode = activeModeRef.current;
         let assistantContent = "";
@@ -224,17 +271,20 @@ export function useStreamingChat() {
       } finally {
         setIsProcessing(false);
         abortRef.current = null;
+        sseClientRef.current = null;
       }
     },
-    [isProcessing, appendToConversation, addMessage]
+    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage]
   );
 
+  // ===== 停止生成 =====
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
+    sseClientRef.current?.abort();
     setIsProcessing(false);
   }, []);
 
-  /** 新建对话 */
+  // ===== 新建对话 =====
   const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string) => {
     const newConv: Conversation = {
       id: genId(),
@@ -250,10 +300,12 @@ export function useStreamingChat() {
     return newConv;
   }, []);
 
+  // ===== 切换对话 =====
   const switchConversation = useCallback((id: string) => {
     setActiveConversationId(id);
   }, []);
 
+  // ===== 删除对话 =====
   const deleteConversation = useCallback(
     (id: string) => {
       setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -270,12 +322,13 @@ export function useStreamingChat() {
     activeConversation,
     activeConversationId,
     isProcessing,
+    backendConnected,
     sendMessage,
     stopStreaming,
     addMessage,
-    appendToLastAssistant,
     newConversation,
     switchConversation,
     deleteConversation,
+    checkBackendConnection,
   };
 }

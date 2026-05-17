@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
@@ -7,9 +7,11 @@ import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
 import { useFolderPicker } from "./hooks/useFolderPicker";
 import { ChatMode } from "./types";
+import { fetchModels } from "./services/api";
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
+  const [backendModels, setBackendModels] = useState<{ id: string; name: string }[]>([]);
   const {
     settings,
     updateSettings,
@@ -23,6 +25,21 @@ function App() {
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
+  // 启动时检查后端连接
+  useEffect(() => {
+    const init = async () => {
+      const connected = await chat.checkBackendConnection();
+      if (connected) {
+        // 获取后端模型列表
+        const result = await fetchModels();
+        if (result.data) {
+          setBackendModels(result.data);
+        }
+      }
+    };
+    init();
+  }, []);
+
   // 获取当前会话关联的项目和模式
   const currentProject = chat.activeConversation?.projectId
     ? projects.projects.find((p) => p.id === chat.activeConversation?.projectId)
@@ -30,24 +47,24 @@ function App() {
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
 
-  // 发送消息 - 纯模拟模式
+  // 发送消息 - 后端连接时使用真实后端，否则使用模拟模式
   const handleSendMessage = useCallback(async (content: string) => {
-    await chat.sendMessage(content);
-  }, [chat.sendMessage]);
+    const modelId = activeConfig?.model || "deepseek-v4-flash";
+    await chat.sendMessage(content, chat.backendConnected, modelId);
+  }, [chat.sendMessage, chat.backendConnected, activeConfig?.model]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
     chat.newConversation(mode, projectId);
   };
 
-  // 添加项目 = 创建一条聊天记录（项目本身就是一条对话）
+  // 添加项目 = 创建一条聊天记录
   const handleAddProject = (name: string, directory: string) => {
     const newProject = projects.addProject(name, directory);
-    // 创建立刻创建关联的聊天记录，标题 = 项目名，mode = chat
     chat.newConversation("chat", newProject.id, name);
   };
 
-  // 点击项目 → 切换到关联的聊天记录（不会创建新对话）
+  // 点击项目 → 切换到关联的聊天记录
   const handleSelectProjectConversation = (projectId: string) => {
     projects.setActiveProject(projectId);
     const existingConv = chat.conversations.find(
@@ -56,7 +73,6 @@ function App() {
     if (existingConv) {
       chat.switchConversation(existingConv.id);
     } else {
-      // 兜底：兼容旧数据（升级前添加的项目没有对应对话）
       const project = projects.projects.find((p) => p.id === projectId);
       chat.newConversation("chat", projectId, project?.name || "项目对话");
     }
@@ -97,6 +113,8 @@ function App() {
             onSwitchModel={setActiveModel}
             chatMode={currentMode}
             project={currentProject}
+            backendConnected={chat.backendConnected}
+            backendModels={backendModels}
           />
         </div>
       </div>
