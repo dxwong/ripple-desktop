@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import {
   X, Key, Globe, Cpu, Eye, EyeOff, Check, RefreshCw,
-  Server, Palette, Trash2, Plus, Edit3, Save,
+  Server, Palette, Trash2, Plus, Edit3, Save, Loader2,
 } from "lucide-react";
 import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
+import { testApiConnection } from "../services/llm";
 
 interface SettingsPanelProps {
   settings: AppSettings;
@@ -48,6 +49,8 @@ function SettingsPanel({
   const [showKey, setShowKey] = useState(false);
   const [activeTab, setActiveTab] = useState("api");
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // ===== 表单状态 =====
   const [formName, setFormName] = useState("");
@@ -126,6 +129,20 @@ function SettingsPanel({
   const handleSwitchModel = (id: string) => {
     onSetActiveModel(id);
     setEditId(undefined);
+  };
+
+  /** 测试当前表单配置的连接 */
+  const handleTestConnection = async () => {
+    if (!formEndpoint || !formKey || !formModel) return;
+    setTesting(true);
+    setTestResult(null);
+    const result = await testApiConnection({
+      endpoint: formEndpoint,
+      apiKey: formKey,
+      model: formModel,
+    });
+    setTestResult({ ok: result.success, msg: result.message });
+    setTesting(false);
   };
 
   return (
@@ -375,17 +392,38 @@ function SettingsPanel({
 
                   {/* 测试连接 */}
                   <button
-                    onClick={() => {
-                      alert(`测试连接：\n端点: ${formEndpoint}\n模型: ${formModel}`);
-                    }}
+                    onClick={handleTestConnection}
+                    disabled={testing || !formEndpoint || !formKey || !formModel}
                     className="flex items-center justify-center gap-1.5 w-full px-4 py-2 text-sm font-medium
                                rounded-xl border border-border dark:border-border-dark
                                hover:bg-black/[0.03] dark:hover:bg-white/[0.03]
-                               active:scale-[0.98] transition-all duration-150"
+                               active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+                               transition-all duration-150"
                   >
-                    <RefreshCw size={15} />
-                    测试连接
+                    {testing ? (
+                      <><Loader2 size={15} className="animate-spin" /> 测试中...</>
+                    ) : (
+                      <><RefreshCw size={15} /> 测试连接</>
+                    )}
                   </button>
+
+                  {/* 测试结果 */}
+                  {testResult && (
+                    <div
+                      className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm ${
+                        testResult.ok
+                          ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/30"
+                          : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/30"
+                      }`}
+                    >
+                      {testResult.ok ? (
+                        <Check size={15} className="shrink-0" />
+                      ) : (
+                        <X size={15} className="shrink-0" />
+                      )}
+                      <span>{testResult.msg}</span>
+                    </div>
+                  )}
                 </div>
               )}
 

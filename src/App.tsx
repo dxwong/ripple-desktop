@@ -47,11 +47,17 @@ function App() {
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
 
-  // 发送消息 - 后端连接时使用真实后端，否则使用模拟模式
+  // 发送消息 - 自动选择模式
   const handleSendMessage = useCallback(async (content: string) => {
-    const modelId = activeConfig?.model || "deepseek-v4-flash";
-    await chat.sendMessage(content, chat.backendConnected, modelId);
-  }, [chat.sendMessage, chat.backendConnected, activeConfig?.model]);
+    // 优先级: 后端 > 直连 > 模拟
+    if (chat.backendConnected) {
+      await chat.sendMessage(content, "backend", activeConfig);
+    } else if (activeConfig?.apiKey) {
+      await chat.sendMessage(content, "direct", activeConfig);
+    } else {
+      await chat.sendMessage(content, "simulate");
+    }
+  }, [chat.sendMessage, chat.backendConnected, activeConfig]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
