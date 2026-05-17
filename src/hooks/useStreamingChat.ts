@@ -12,7 +12,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "1. **技术咨询** — 编程问题解答\n",
         "2. **创意生成** — 写作、构思建议\n",
         "3. **知识问答** — 科普知识讲解\n\n",
-        "> 提示：当前为**离线模拟模式**，连接桥接服务后可获得真实 AI 响应。\n",
+        "> 提示：当前为**纯前端模拟模式**，连接后端 AI 服务后可获得真实响应。\n",
       ],
       code: [
         "这是一个模拟的编程开发回复。\n\n",
@@ -20,7 +20,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "1. **代码分析** — 理解复杂代码逻辑\n",
         "2. **代码生成** — 根据需求生成代码\n",
         "3. **调试帮助** — 排查 Bug\n\n",
-        "> 提示：当前为**离线模拟模式**，连接桥接服务后可使用 OpenCode CLI。\n",
+        "> 提示：当前为**纯前端模拟模式**，连接后端 AI 服务后可获得真实响应。\n",
       ],
     },
     code: {
@@ -66,7 +66,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "const users = await fetchUsers();\n",
         "console.log(users);\n",
         "```\n\n",
-        "> 提示：连接桥接服务后，我可以直接在你的项目目录中执行代码。\n",
+        "> 提示：连接后端 AI 服务后，我可以直接在你的项目目录中执行代码分析。\n",
       ],
     },
   };
@@ -190,17 +190,9 @@ export function useStreamingChat() {
     [] // 使用 ref 无依赖
   );
 
-  // ===== 发送消息（流式优先，同步降级） =====
+  // ===== 发送消息 - 纯模拟模式 =====
   const sendMessage = useCallback(
-    async (
-      content: string,
-      mode: "simulate" | "bridge" = "simulate",
-      bridgeSend?: (type: string, data: any) => Promise<any>,
-      bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
-      bridgeSetCallback?: (callback: ((msg: any) => void) | null) => void,
-      projectDirectory?: string,
-      openCodeModel?: string
-    ) => {
+    async (content: string) => {
       if (isProcessing) return;
       setIsProcessing(true);
 
@@ -208,146 +200,33 @@ export function useStreamingChat() {
       abortRef.current = abort;
 
       const targetConvId = activeConversationIdRef.current;
-      const currentConversations = conversationsRef.current;
-      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", currentConversations.length);
       if (!targetConvId) {
         console.warn("[sendMessage] 没有活跃对话，跳过发送");
         setIsProcessing(false);
         return;
       }
 
-      // 确认目标对话存在（使用 ref 避免闭包过期）
-      const convExists = currentConversations.some(c => c.id === targetConvId);
-      console.log("[sendMessage] 目标对话存在:", convExists);
-
       // 先添加用户消息
-      const msg = addMessage("user", content);
-      console.log("[sendMessage] addMessage 结果:", msg ? msg.id : "null");
+      addMessage("user", content);
 
       try {
-        // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
-        if (openCodeModel && bridgeSendStreaming && bridgeSetCallback) {
-          await new Promise<void>((resolve, reject) => {
-            let settled = false;
-            const done = () => { settled = true; };
-            // 5 分钟超时，防止流永远不结束
-            const timer = setTimeout(() => {
-              if (!settled) {
-                bridgeSetCallback(null);
-                reject(new Error("OpenCode 执行超时（5分钟）"));
-              }
-            }, 300000);
-
-            // 先注册回调，再发送（避免竞态）
-            bridgeSetCallback((msg: any) => {
-              // keepalive 和其他非终态消息直接忽略
-              if (msg.status === "keepalive") return;
-              if (settled) return; // 已结束，忽略后续消息
-              console.log("[stream callback] status:", msg.status, "targetConvId:", targetConvId);
-
-              if (msg.status === "stream") {
-                const chunk = msg.data?.chunk || "";
-                if (chunk) {
-                  const count = (window as any).__chunkCount = ((window as any).__chunkCount || 0) + 1;
-                  console.log(`[bridge→UI] #${count} chunk:`, JSON.stringify(chunk));
-                  appendToConversation(targetConvId, chunk);
-                }
-              } else if (msg.status === "thinking") {
-                const chunk = msg.data?.chunk || "";
-                if (chunk) appendThinkingToConversation(targetConvId, chunk);
-              } else if (msg.status === "ok") {
-                clearTimeout(timer);
-                bridgeSetCallback(null);
-                done();
-                resolve();
-              } else if (msg.status === "error") {
-                clearTimeout(timer);
-                bridgeSetCallback(null);
-                done();
-                reject(new Error(msg.data?.error || "执行失败"));
-              }
-            });
-
-            const payload: any = {
-              command: content,
-              cwd: projectDirectory,
-              model: openCodeModel,
-            };
-            bridgeSendStreaming("execute_opencode_streaming", payload).catch((e: any) => {
-              clearTimeout(timer);
-              bridgeSetCallback(null);
-              done();
-              reject(e);
-            });
-          });
-          return;
-        }
-
-        // ===== 同步路径（降级）：OC 模型 + 同步桥接 =====
-        if (openCodeModel && bridgeSend) {
-          try {
-            const payload: any = {
-              command: content,
-              cwd: projectDirectory,
-              model: openCodeModel,
-            };
-            const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout
-              || response?.stderr
-              || "（无输出）";
-            appendToConversation(targetConvId, result);
-          } catch (e: any) {
-            const errMsg = e?.message || "桥接服务不可用";
-            console.error("[sendMessage] OpenCode 执行错误:", errMsg);
-            appendToConversation(targetConvId, `**OpenCode 执行错误**: ${errMsg}`);
-          }
-          return;
-        }
-
-        // ===== OC 模型但桥接未连接 → 提示 =====
-        if (openCodeModel && !bridgeSend && !bridgeSendStreaming) {
-          appendToConversation(targetConvId, "> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。\n\n");
-          appendToConversation(targetConvId, "请先连接桥接服务，并确保 Python 桥接已启动 (`npm run bridge`)\n");
-          return;
-        }
-
         // ===== 模拟模式 =====
-        if (mode === "simulate" || !bridgeSend) {
-          const currentMode = activeModeRef.current;
-          let assistantContent = "";
-          for await (const chunk of simulateStreamResponse(content, currentMode)) {
-            if (abort.signal.aborted) break;
-            assistantContent += chunk;
-            appendToConversation(targetConvId, chunk);
-          }
-          if (!abort.signal.aborted && !assistantContent) {
-            appendToConversation(targetConvId, "（模拟回复为空）");
-          }
-          return;
+        const currentMode = activeModeRef.current;
+        let assistantContent = "";
+        for await (const chunk of simulateStreamResponse(content, currentMode)) {
+          if (abort.signal.aborted) break;
+          assistantContent += chunk;
+          appendToConversation(targetConvId, chunk);
         }
-
-        // ===== 普通桥接模式（无 OC 模型） =====
-        if (bridgeSend) {
-          try {
-            const payload: any = { command: content, cwd: projectDirectory };
-            const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout
-              || response?.stderr
-              || "（无输出）";
-            appendToConversation(targetConvId, result);
-          } catch (e: any) {
-            const errMsg = e?.message || "请求失败";
-            console.error("[sendMessage] 桥接错误:", errMsg);
-            appendToConversation(targetConvId, `**错误**: ${errMsg}`);
-          }
-          return;
+        if (!abort.signal.aborted && !assistantContent) {
+          appendToConversation(targetConvId, "（模拟回复为空）");
         }
       } finally {
         setIsProcessing(false);
         abortRef.current = null;
       }
     },
-    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage]
+    [isProcessing, appendToConversation, addMessage]
   );
 
   const stopStreaming = useCallback(() => {

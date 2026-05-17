@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import { Sparkles, WifiOff, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
+import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
 import { Message, ModelConfig, ChatMode, Project } from "../types";
@@ -10,8 +10,6 @@ interface ChatViewProps {
   messages: Message[];
   onSendMessage: (content: string) => void;
   isProcessing: boolean;
-  bridgeStatus: string;
-  bridgeError: string;
   darkMode?: boolean;
   activeConfig?: ModelConfig;
   modelConfigs?: ModelConfig[];
@@ -20,12 +18,6 @@ interface ChatViewProps {
   chatMode?: ChatMode;
   /** 当前关联的项目 */
   project?: Project | null;
-  /** OpenCode 可用模型列表 */
-  openCodeModels?: { id: string; name: string; provider?: string }[];
-  /** 当前选中的 OpenCode 模型 */
-  openCodeModel?: string;
-  /** 切换 OpenCode 模型 */
-  onSwitchOpenCodeModel?: (model: string) => void;
 }
 
 function TypingIndicator() {
@@ -38,7 +30,7 @@ function TypingIndicator() {
         {[0, 150, 300].map((delay) => (
           <div
             key={delay}
-            className="w-1.5 h-1.5 rounded-full bg-content-tertiary dark:bg-content-tertiary-dark"
+            className="w-1.5 h-1.5 rounded-full bg-content-tertiary dark:text-content-tertiary-dark"
             style={{
               animation: `pulse-dot 1.4s ease-in-out infinite`,
               animationDelay: `${delay}ms`,
@@ -118,23 +110,15 @@ function ChatView({
   messages,
   onSendMessage,
   isProcessing,
-  bridgeStatus,
-  bridgeError,
   darkMode = true,
   activeConfig,
   modelConfigs,
   onSwitchModel,
   chatMode = "chat",
   project,
-  openCodeModels,
-  openCodeModel,
-  onSwitchOpenCodeModel,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const isOnline = bridgeStatus === "connected";
-  const isConnecting = bridgeStatus === "connecting";
   const isEmpty = messages.length === 0;
-  const isOffline = !isOnline && !isConnecting;
 
   const streamingIdx = getStreamingIndex(messages, isProcessing);
   const shouldShowTyping = isProcessing && streamingIdx === -1;
@@ -208,11 +192,6 @@ function ChatView({
                 {chatMode === "code"
                   ? "在当前项目目录中执行代码操作。输入你的需求，我会帮你处理。"
                   : "输入你的问题，Ripple 将为你提供 AI 辅助编程帮助。"}
-                {isOffline && (
-                  <span className="block mt-1 text-amber-500 dark:text-amber-400">
-                    ℹ️ 当前处于离线模拟模式
-                  </span>
-                )}
                 {chatMode === "code" && project && !project.directory && (
                   <span className="block mt-1 text-blue-500 dark:text-blue-400">
                     ℹ️ 请先设置项目目录以启用完整功能
@@ -270,17 +249,6 @@ function ChatView({
         </div>
       </div>
 
-      {isOffline && (
-        <div className="mx-4 mb-2">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/30">
-            <WifiOff size={14} className="text-amber-500 dark:text-amber-400 shrink-0" />
-            <span className="text-sm text-amber-600 dark:text-amber-400">
-              离线模式 · 可在侧边栏连接桥接服务
-            </span>
-          </div>
-        </div>
-      )}
-
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           <MessageInput
@@ -291,9 +259,6 @@ function ChatView({
             onSwitchModel={onSwitchModel}
             chatMode={chatMode}
             hasProject={!!project}
-            openCodeModels={openCodeModels}
-            openCodeModel={openCodeModel}
-            onSwitchOpenCodeModel={onSwitchOpenCodeModel}
             placeholder={
               isProcessing
                 ? "AI 正在回复..."
@@ -314,16 +279,6 @@ function ChatView({
             {chatMode === "code" && (
               <span className="text-xs text-amber-500 dark:text-amber-400 font-medium">
                 · 开发模式
-              </span>
-            )}
-            {isOffline && (
-              <span className="text-xs text-amber-500 dark:text-amber-400 font-medium">
-                · 模拟模式
-              </span>
-            )}
-            {isOnline && (
-              <span className="text-xs text-emerald-500 dark:text-emerald-400 font-medium">
-                · 在线模式
               </span>
             )}
           </div>

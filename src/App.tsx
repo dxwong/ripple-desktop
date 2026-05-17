@@ -1,8 +1,7 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
-import { useBridge } from "./hooks/useBridge";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
@@ -20,32 +19,9 @@ function App() {
     deleteModelConfig,
     setActiveModel,
   } = useSettings();
-  const bridge = useBridge();
   const chat = useStreamingChat();
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
-
-  // ===== 启动时自动连接桥接服务 =====
-  useEffect(() => {
-    // 延迟1秒自动连接（给 Python 桥接服务充足的启动时间）
-    const t1 = setTimeout(() => bridge.connect(), 1000);
-    // 5秒后重试一次兜底（桥接启动较慢的情况）
-    const t2 = setTimeout(() => bridge.connect(), 5000);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // OpenCode 模型列表
-  const [openCodeModels, setOpenCodeModels] = useState<{ id: string; name: string }[]>([
-    { id: "opencode/deepseek-v4-flash-free", name: "DeepSeek V4 Flash (免费)" },
-    { id: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 (免费)" },
-    { id: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super (免费)" },
-    { id: "opencode/ring-2.6-1t-free", name: "Ring 2.6 1T (免费)" },
-  ]);
-  const [openCodeModel, setOpenCodeModel] = useState("");
 
   // 获取当前会话关联的项目和模式
   const currentProject = chat.activeConversation?.projectId
@@ -53,25 +29,11 @@ function App() {
     : null;
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
-  // 是否有关联项目（决定 OC 模型选择器是否显示）
-  const hasProject = !!currentProject;
 
-  // 发送消息
+  // 发送消息 - 纯模拟模式
   const handleSendMessage = useCallback(async (content: string) => {
-    const isOnline = bridge.status === "connected";
-    const projectDirectory = currentProject?.directory;
-    // 有关联项目且选中了 OC 模型才传 model
-    const ocModel = hasProject && openCodeModel ? openCodeModel : undefined;
-    await chat.sendMessage(
-      content,
-      isOnline ? "bridge" : "simulate",
-      isOnline ? bridge.sendMessage : undefined,
-      isOnline ? bridge.sendStreamingMessage : undefined,
-      isOnline ? bridge.setMessageCallback : undefined,
-      projectDirectory,
-      ocModel
-    );
-  }, [bridge.status, bridge.sendMessage, bridge.sendStreamingMessage, bridge.setMessageCallback, chat.sendMessage, currentProject?.directory, hasProject, openCodeModel]);
+    await chat.sendMessage(content);
+  }, [chat.sendMessage]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
@@ -113,8 +75,6 @@ function App() {
             onNewConversation={handleNewConversation}
             onSwitchConversation={chat.switchConversation}
             onDeleteConversation={chat.deleteConversation}
-            bridgeStatus={bridge.status}
-            onReconnectBridge={bridge.connect}
             onOpenSettings={() => setShowSettings(true)}
             projects={projects.projects}
             activeProjectId={projects.activeProjectId}
@@ -131,17 +91,12 @@ function App() {
             messages={chat.activeConversation?.messages || []}
             onSendMessage={handleSendMessage}
             isProcessing={chat.isProcessing}
-            bridgeStatus={bridge.status}
-            bridgeError={bridge.error}
             darkMode={settings.darkMode}
             activeConfig={activeConfig}
             modelConfigs={settings.modelConfigs}
             onSwitchModel={setActiveModel}
             chatMode={currentMode}
             project={currentProject}
-            openCodeModels={openCodeModels}
-            openCodeModel={openCodeModel}
-            onSwitchOpenCodeModel={setOpenCodeModel}
           />
         </div>
       </div>

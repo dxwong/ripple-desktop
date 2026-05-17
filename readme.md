@@ -1,6 +1,6 @@
 # Ripple Desktop
 
-**AI 编程助手桌面端** — 基于 Tauri + React 构建，支持双模式对话（普通对话/编程开发）、多模型配置管理、OpenCode CLI 集成。
+**AI 编程助手桌面端** — 基于 Tauri + React 构建，支持双模式对话（普通对话/编程开发）、多模型配置管理、Ripple-Agent 后端集成。
 
 ![版本](https://img.shields.io/badge/version-0.2.0-orange)
 ![平台](https://img.shields.io/badge/platform-Windows-blue)
@@ -12,7 +12,7 @@
 
 ### 💬 双模式对话
 - **普通对话模式**：无需关联项目，直接与 AI 问答
-- **编程开发模式**：关联本地项目文件夹，通过 OpenCode CLI 执行代码操作
+- **编程开发模式**：关联本地项目文件夹，执行代码操作
 - 两种模式自由切换，对话历史按模式分类管理
 
 ### 🧠 多模型配置管理
@@ -27,11 +27,11 @@
 - 点击项目名称直接打开关联的编程开发对话
 - 项目数据持久化到本地 JSON
 
-### 🔌 OpenCode CLI 集成
-- 编程开发模式下调用 OpenCode CLI 执行命令
-- 支持 `--model` 参数指定执行模型
-- 自动读取 OpenCode 配置中的可用模型列表
-- 桥接服务（Python WebSocket）中转请求
+### 🔌 Ripple-Agent 后端集成
+- 流式对话支持，通过 SSE 实时接收 AI 回复
+- 会话管理 API，支持多会话切换
+- 模型列表自动获取
+- 思考过程 + 工具调用展示
 
 ### 🎨 双主题
 - 浅色/深色模式一键切换
@@ -56,7 +56,7 @@
 | Rust | ≥ 1.77 |
 | VS Build Tools | 含 Windows SDK |
 | Python | ≥ 3.8（桥接服务需要） |
-| OpenCode CLI | 已安装并在 PATH 中 |
+| Ripple-Agent | 后端服务已启动 |
 
 ### 安装 & 运行
 
@@ -96,7 +96,7 @@ ripple-desktop/
 │   │   ├── ChatMessage.tsx   # 消息气泡（流式/完成态）
 │   │   ├── ChatView.tsx      # 主聊天视图（含窗口控制）
 │   │   ├── CodeEditor.tsx    # Monaco 代码编辑器（自定义主题）
-│   │   ├── MessageInput.tsx  # 消息输入框（双模型选择器）
+│   │   ├── MessageInput.tsx  # 消息输入框（模型选择器）
 │   │   ├── SettingsPanel.tsx # 设置面板（多模型配置管理）
 │   │   ├── Sidebar.tsx       # 侧边栏（项目+对话列表）
 │   │   └── ErrorBoundary.tsx # 全局错误边界
@@ -108,6 +108,9 @@ ripple-desktop/
 │   │   ├── useProjects.ts    # 项目管理
 │   │   ├── useFolderPicker.ts # 文件夹选择器
 │   │   └── useTauri.ts       # Tauri 环境检测
+│   ├── services/
+│   │   ├── api.ts            # HTTP API 客户端
+│   │   └── sse.ts            # SSE 流式客户端
 │   ├── types/                # TypeScript 类型定义
 │   │   └── index.ts
 │   ├── styles/
@@ -116,18 +119,21 @@ ripple-desktop/
 │   └── main.tsx
 ├── src-tauri/                # Tauri Rust 后端
 │   ├── src/
-│   │   ├── lib.rs            # IPC 命令（桥接 + 配置 + OpenCode）
+│   │   ├── lib.rs            # IPC 命令
 │   │   ├── main.rs
 │   │   └── ws_client.rs      # WebSocket 客户端
 │   └── tauri.conf.json
 ├── bridge/                   # Python 桥接服务
-│   ├── bridge_server.py      # WebSocket 服务 + OpenCode CLI 调用
+│   ├── bridge_server.py      # WebSocket 服务
 │   └── requirements.txt
+├── doc/                      # 开发文档
+│   ├── DEVELOPMENT-01.md     # 开发进展记录
+│   ├── 经验教训.md           # 踩坑记录
+│   └── 开发计划-前端对接ripple-agent.md
 ├── .gitignore
 ├── package.json
 ├── tailwind.config.js
-├── vite.config.ts
-└── DEVELOPMENT.md            # 开发进展记录
+└── vite.config.ts
 ```
 
 ---
@@ -187,8 +193,9 @@ ripple-desktop/
 | Markdown | [react-markdown](https://github.com/remarkjs/react-markdown) + remark-gfm |
 | 图标库 | [lucide-react](https://lucide.dev/) |
 | 后端语言 | Rust（IPC 命令 + WebSocket 客户端） |
-| 桥接服务 | Python（WebSocket 服务 + OpenCode CLI 调用） |
+| 桥接服务 | Python（WebSocket 服务） |
 | 文件选择器 | @tauri-apps/plugin-dialog |
+| 后端 API | Ripple-Agent（HTTP + SSE） |
 
 ---
 
