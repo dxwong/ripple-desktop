@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import { User, Sparkles, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -76,6 +76,14 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   const isUser = message.role === "user";
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const hasThinking = !!(message.thinking);
+
+  // 流式思考时自动展开
+  useEffect(() => {
+    if (isStreaming && hasThinking && !thinkingExpanded) {
+      setThinkingExpanded(true);
+    }
+  }, [isStreaming, hasThinking, message.thinking]);
+
   renderLog(message.id, message.role, message.content.length, (message.thinking || "").length);
 
   return (

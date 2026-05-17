@@ -30,17 +30,22 @@ function TypingIndicator() {
       <div className="shrink-0 w-7 h-7 rounded-xl bg-content dark:bg-content-dark flex items-center justify-center">
         <Sparkles size={14} className="text-surface dark:text-surface-dark" />
       </div>
-      <div className="flex items-center gap-1.5 px-4 py-3.5 rounded-2xl bg-message-ai dark:bg-message-ai-dark">
-        {[0, 150, 300].map((delay) => (
-          <div
-            key={delay}
-            className="w-1.5 h-1.5 rounded-full bg-content-tertiary dark:text-content-tertiary-dark"
-            style={{
-              animation: `pulse-dot 1.4s ease-in-out infinite`,
-              animationDelay: `${delay}ms`,
-            }}
-          />
-        ))}
+      <div className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-message-ai dark:bg-message-ai-dark">
+        <div className="flex items-center gap-1">
+          {[0, 200, 400].map((delay) => (
+            <div
+              key={delay}
+              className="w-2 h-2 rounded-full bg-accent/60"
+              style={{
+                animation: `typing-bounce 1.2s ease-in-out infinite`,
+                animationDelay: `${delay}ms`,
+              }}
+            />
+          ))}
+        </div>
+        <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark ml-1">
+          AI 思考中...
+        </span>
       </div>
     </div>
   );
@@ -49,7 +54,8 @@ function TypingIndicator() {
 function getStreamingIndex(messages: Message[], isProcessing: boolean): number {
   if (!isProcessing || messages.length === 0) return -1;
   const last = messages[messages.length - 1];
-  if (last.role === "assistant" && last.content.length > 0) {
+  // 只要有内容（文本或思考）就显示 ChatMessage，让思考内容可见
+  if (last.role === "assistant" && (last.content.length > 0 || last.thinking)) {
     return messages.length - 1;
   }
   return -1;
