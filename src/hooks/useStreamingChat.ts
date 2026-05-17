@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
-import { Message, Conversation, ChatMode, ModelConfig } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchModels } from "../services/api";
+import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -88,6 +88,7 @@ export function useStreamingChat() {
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [backendConnected, setBackendConnected] = useState(false);
+  const [pendingToolRequests, setPendingToolRequests] = useState<ToolRequestData[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
 
@@ -247,6 +248,10 @@ export function useStreamingChat() {
                     `\n\n> ✅ **工具完成**: \`${name}\`\n\n`
                   );
                 },
+                onToolRequest: (data) => {
+                  // 添加到待确认队列
+                  setPendingToolRequests((prev) => [...prev, data]);
+                },
                 onDone: () => {
                   resolve();
                 },
@@ -326,12 +331,30 @@ export function useStreamingChat() {
     [activeConversationId, conversations]
   );
 
+  // ===== 确认或拒绝工具执行 =====
+  const handleToolConfirm = useCallback(
+    async (toolCallId: string, approved: boolean, reason?: string) => {
+      const sessionId = activeConversationIdRef.current;
+      if (!sessionId) return;
+
+      const result = await confirmToolCall(sessionId, toolCallId, approved, reason);
+      if (result.error) {
+        console.error("[handleToolConfirm] 失败:", result.error);
+      }
+
+      // 从待确认队列中移除
+      setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+    },
+    []
+  );
+
   return {
     conversations,
     activeConversation,
     activeConversationId,
     isProcessing,
     backendConnected,
+    pendingToolRequests,
     sendMessage,
     stopStreaming,
     addMessage,
@@ -339,5 +362,6 @@ export function useStreamingChat() {
     switchConversation,
     deleteConversation,
     checkBackendConnection,
+    handleToolConfirm,
   };
 }

@@ -156,3 +156,33 @@ export async function testConnection(config: {
     body: JSON.stringify(config),
   });
 }
+
+// ============================================
+// 工具执行确认 API
+// ============================================
+
+export interface ConfirmToolCallResult {
+  success: boolean;
+  message?: string;
+}
+
+/**
+ * 确认或拒绝工具执行
+ * @param sessionId 会话 ID
+ * @param toolCallId 工具调用 ID
+ * @param approved 是否批准
+ * @param reason 拒绝原因（可选）
+ * @param modelId 模型 ID（可选，默认 deepseek-v4-flash）
+ */
+export async function confirmToolCall(
+  sessionId: string,
+  toolCallId: string,
+  approved: boolean,
+  reason?: string,
+  modelId: string = "deepseek-v4-flash"
+): Promise<ApiResponse<ConfirmToolCallResult>> {
+  return request<ConfirmToolCallResult>(`/api/chat/${sessionId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ toolCallId, approved, reason, modelId }),
+  });
+}

@@ -5,7 +5,7 @@
  * 实时接收 AI 回复的文本、思考过程和工具调用事件。
  */
 
-import type { SSEEvent } from "../types";
+import type { SSEEvent, ToolRequestData } from "../types";
 
 /** SSE 连接配置 */
 interface SSEClientOptions {
@@ -21,6 +21,7 @@ interface SSECallbacks {
   onThinking?: (text: string) => void;
   onToolStart?: (name: string) => void;
   onToolEnd?: (name: string) => void;
+  onToolRequest?: (data: ToolRequestData) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
 }
@@ -168,6 +169,9 @@ export class SSEClient {
                 break;
               case "tool-end":
                 if (event.name) callbacks.onToolEnd?.(event.name);
+                break;
+              case "tool-request":
+                if (event.toolRequest) callbacks.onToolRequest?.(event.toolRequest);
                 break;
               case "done":
                 this._status = "done";

@@ -101,7 +101,16 @@ export interface BackendSession {
 }
 
 /** SSE 事件类型 */
-export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'done' | 'error';
+export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'tool-request' | 'done' | 'error';
+
+/** 工具执行确认请求 */
+export interface ToolRequestData {
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  description: string;
+  riskLevel: 'low' | 'medium' | 'high';
+}
 
 /** SSE 事件数据 */
 export interface SSEEvent {
@@ -109,4 +118,5 @@ export interface SSEEvent {
   text?: string;
   name?: string;
   error?: string;
+  toolRequest?: ToolRequestData;
 }
