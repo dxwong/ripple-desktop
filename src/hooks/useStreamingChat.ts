@@ -236,11 +236,17 @@ export function useStreamingChat() {
                 onThinking: (text) => {
                   appendThinkingToConversation(targetConvId, text);
                 },
-                onToolStart: (_name) => {
-                  // 工具执行开始 — 不在消息流中插入提示，避免样式问题
+                onToolStart: (name) => {
+                  appendToConversation(
+                    targetConvId,
+                    `\n🔧 ${name}...\n`
+                  );
                 },
-                onToolEnd: (_name) => {
-                  // 工具执行完成 — Agent 会自行描述结果
+                onToolEnd: (name) => {
+                  appendToConversation(
+                    targetConvId,
+                    `✅ ${name} 完成\n`
+                  );
                 },
                 onToolRequest: (data) => {
                   // 添加到待确认队列
