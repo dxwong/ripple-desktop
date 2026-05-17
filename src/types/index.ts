@@ -118,6 +118,7 @@ export interface SSEEvent {
   text?: string;
   name?: string;
   error?: string;
+  isError?: boolean;
   toolRequest?: ToolRequestData;
   // tool-request 事件的扁平字段（后端直接发送）
   toolCallId?: string;

@@ -243,10 +243,10 @@ export function useStreamingChat() {
                     `\n> 🔧 ${name}...\n`
                   );
                 },
-                onToolEnd: (name) => {
+                onToolEnd: (name, isError) => {
                   appendToConversation(
                     targetConvId,
-                    `> ✅ ${name} 完成\n`
+                    isError ? `> ❌ ${name} 用户拒绝\n` : `> ✅ ${name} 完成\n`
                   );
                 },
                 onToolRequest: (data) => {

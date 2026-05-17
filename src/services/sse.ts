@@ -20,7 +20,7 @@ interface SSECallbacks {
   onText?: (text: string) => void;
   onThinking?: (text: string) => void;
   onToolStart?: (name: string) => void;
-  onToolEnd?: (name: string) => void;
+  onToolEnd?: (name: string, isError?: boolean) => void;
   onToolRequest?: (data: ToolRequestData) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
@@ -168,7 +168,7 @@ export class SSEClient {
                 if (event.name) callbacks.onToolStart?.(event.name);
                 break;
               case "tool-end":
-                if (event.name) callbacks.onToolEnd?.(event.name);
+                if (event.name) callbacks.onToolEnd?.(event.name, event.isError);
                 break;
               case "tool-request":
                 if (event.toolCallId && event.toolName) {
