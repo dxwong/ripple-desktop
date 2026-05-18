@@ -225,10 +225,12 @@ fn find_backend_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
     // 2. 默认路径（相对于前端项目的同级目录）
     let default_paths = [
-        // 开发环境：ripple-agent 在同级目录
-        std::path::PathBuf::from("../pi-mono/ripple-agent"),
-        std::path::PathBuf::from("../../pi-mono/ripple-agent"),
-        // 可能的其他位置
+        // 工作目录是 pi-mono（前端项目父目录）
+        std::path::PathBuf::from("../ripple-agent"),
+        std::path::PathBuf::from("../ripple-agent"),
+        // 工作目录是 ripple-desktop-Tauri
+        std::path::PathBuf::from("../ripple-agent"),
+        // 其他可能的位置
         std::path::PathBuf::from("../ripple-agent"),
     ];
 
