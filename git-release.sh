@@ -110,7 +110,7 @@ echo "   - 查看 dev 完整历史: git log dev --oneline"
 # echo "   git push origin dev"
 
 # 可选：自动推送（取消注释以下代码启用）
-# echo "🔄 正在推送到远程..."
-# git push origin master --force --tags
-# git push origin dev
+ echo "🔄 正在推送到远程..."
+ git push origin master --force --tags
+ git push origin dev
 # echo "✅ 推送完成"
