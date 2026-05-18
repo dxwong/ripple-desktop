@@ -186,3 +186,17 @@ export async function confirmToolCall(
     body: JSON.stringify({ toolCallId, approved, reason, modelId }),
   });
 }
+
+// ============================================
+// 文件操作 API
+// ============================================
+
+/**
+ * 读取文件内容
+ * @param path 文件绝对路径
+ */
+export async function readFile(path: string): Promise<ApiResponse<{ path: string; content: string }>> {
+  return request<{ path: string; content: string }>(
+    `/api/files/read?path=${encodeURIComponent(path)}`
+  );
+}

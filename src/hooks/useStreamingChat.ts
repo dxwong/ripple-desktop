@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
 
@@ -243,21 +243,69 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 onThinking: (text) => {
                   appendThinkingToConversation(targetConvId, text);
                 },
-                onToolStart: (name) => {
-                  appendToConversation(
-                    targetConvId,
-                    `\n> 🔧 ${name}...\n`
-                  );
+                onToolStart: (toolCallId, toolName) => {
+                  // 不再追加纯文本，用结构化 ToolCallCard 展示
                 },
-                onToolEnd: (name, isError) => {
-                  appendToConversation(
-                    targetConvId,
-                    isError ? `> ❌ ${name} 用户拒绝\n` : `> ✅ ${name} 完成\n`
-                  );
+                onToolEnd: (toolCallId, toolName, result) => {
+                  // 更新对应 toolCall 的结果
+                  setConversations((prev) => {
+                    const convId = targetConvId;
+                    return prev.map((conv) => {
+                      if (conv.id !== convId) return conv;
+                      const msgs = [...conv.messages];
+                      const last = msgs[msgs.length - 1];
+                      if (!last || last.role !== "assistant") return conv;
+                      const toolCalls = [...(last.toolCalls || [])];
+                      const idx = toolCalls.findIndex((tc) => tc.toolCallId === toolCallId);
+                      if (idx >= 0) {
+                        toolCalls[idx] = {
+                          ...toolCalls[idx],
+                          status: result.error ? "error" : "success",
+                          output: result.output,
+                          error: result.error,
+                        };
+                      }
+                      msgs[msgs.length - 1] = { ...last, toolCalls };
+                      return { ...conv, messages: msgs, updatedAt: Date.now() };
+                    });
+                  });
                 },
                 onToolRequest: (data) => {
                   // 添加到待确认队列
                   setPendingToolRequests((prev) => [...prev, data]);
+
+                  // 同时在当前 assistant 消息中创建一个 pending 的工具调用卡片
+                  const pendingToolCall: ToolCallResult = {
+                    toolCallId: data.toolCallId,
+                    toolName: data.toolName,
+                    args: data.args,
+                    status: "pending",
+                  };
+                  setConversations((prev) =>
+                    prev.map((conv): Conversation => {
+                      if (conv.id !== targetConvId) return conv;
+                      const msgs: Message[] = [...conv.messages];
+                      const last = msgs[msgs.length - 1];
+                      if (!last || last.role !== "assistant") {
+                        // 还没创建 assistant 消息，先创建一个
+                        const newMsg: Message = {
+                          id: genId(),
+                          role: "assistant",
+                          content: "",
+                          thinking: "",
+                          timestamp: Date.now(),
+                          toolCalls: [pendingToolCall],
+                        };
+                        msgs.push(newMsg);
+                      } else {
+                        msgs[msgs.length - 1] = {
+                          ...last,
+                          toolCalls: [...(last.toolCalls || []), pendingToolCall],
+                        };
+                      }
+                      return { ...conv, messages: msgs, updatedAt: Date.now() };
+                    })
+                  );
                 },
                 onDone: () => {
                   resolve();
@@ -351,6 +399,28 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     async (toolCallId: string, approved: boolean, reason?: string) => {
       const sessionId = activeConversationIdRef.current;
       if (!sessionId) return;
+
+      // 同时更新消息中的 toolCalls 状态
+      setConversations((prev): Conversation[] =>
+        prev.map((conv): Conversation => {
+          if (conv.id !== sessionId) return conv;
+          const msgs: Message[] = conv.messages.map((msg) => {
+            if (msg.role !== "assistant") return msg;
+            const toolCalls: ToolCallResult[] | undefined = msg.toolCalls?.map((tc): ToolCallResult =>
+              tc.toolCallId === toolCallId
+                ? {
+                    ...tc,
+                    status: (approved ? "approved" : "denied") as ToolCallResult["status"],
+                    error: approved ? undefined : reason,
+                  }
+                : tc
+            );
+            if (!toolCalls) return msg;
+            return { ...msg, toolCalls };
+          });
+          return { ...conv, messages: msgs };
+        })
+      );
 
       const result = await confirmToolCall(sessionId, toolCallId, approved, reason);
       if (result.error) {

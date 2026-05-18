@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
 import CodeEditor from "./CodeEditor";
+import { ToolCallCard } from "./ToolCallCard";
 
 // DEBUG: 追踪消息渲染
 const renderLog = (id: string, role: string, contentLen: number, thinkingLen: number) => {
@@ -196,6 +197,19 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="inline-block w-[2px] h-[14px] ml-0.5 bg-accent/70 animate-pulse align-text-bottom" />
           )}
         </div>
+
+        {/* 工具调用卡片（结构化展示） */}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mt-2">
+            {message.toolCalls.map((toolCall) => (
+              <ToolCallCard
+                key={toolCall.toolCallId}
+                toolCall={toolCall}
+                defaultExpanded={toolCall.status === 'pending' || toolCall.status === 'approved'}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

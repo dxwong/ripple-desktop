@@ -19,8 +19,10 @@ interface SSEClientOptions {
 interface SSECallbacks {
   onText?: (text: string) => void;
   onThinking?: (text: string) => void;
-  onToolStart?: (name: string) => void;
-  onToolEnd?: (name: string, isError?: boolean) => void;
+  /** 工具开始执行（已批准后触发） */
+  onToolStart?: (toolCallId: string, toolName: string) => void;
+  /** 工具执行结束（包含结果） */
+  onToolEnd?: (toolCallId: string, toolName: string, result: { output?: string; error?: string }) => void;
   onToolRequest?: (data: ToolRequestData) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
@@ -165,10 +167,20 @@ export class SSEClient {
                 if (event.text) callbacks.onThinking?.(event.text);
                 break;
               case "tool-start":
-                if (event.name) callbacks.onToolStart?.(event.name);
+                // tool-start 事件携带 toolCallId 和 toolName
+                if (event.toolCallId && event.name) {
+                  callbacks.onToolStart?.(event.toolCallId as string, event.name as string);
+                }
                 break;
               case "tool-end":
-                if (event.name) callbacks.onToolEnd?.(event.name, event.isError);
+                // tool-end 事件携带 toolCallId、toolName 和 result
+                if (event.toolCallId && event.name) {
+                  callbacks.onToolEnd?.(
+                    event.toolCallId as string,
+                    event.name as string,
+                    { output: event.output as string | undefined, error: event.error as string | undefined }
+                  );
+                }
                 break;
               case "tool-request":
                 if (event.toolCallId && event.toolName) {
