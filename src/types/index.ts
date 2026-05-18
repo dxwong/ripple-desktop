@@ -26,6 +26,20 @@ export interface Project {
   updatedAt: number;
 }
 
+/** 工具执行结果 */
+export interface ToolCallResult {
+  toolName: string;
+  toolCallId: string;
+  /** 工具调用的输入参数 */
+  args: Record<string, unknown>;
+  /** 执行结果状态 */
+  status: 'pending' | 'approved' | 'denied' | 'success' | 'error';
+  /** 成功时的输出内容 */
+  output?: string;
+  /** 错误时的错误信息 */
+  error?: string;
+}
+
 /** 单条消息 */
 export interface Message {
   id: string;
@@ -34,6 +48,8 @@ export interface Message {
   /** 模型的思考/推理过程（如有），在前端可折叠展示 */
   thinking: string;
   timestamp: number;
+  /** 本条消息关联的工具调用结果 */
+  toolCalls?: ToolCallResult[];
 }
 
 /** 会话 */
@@ -132,10 +148,12 @@ export interface SSEEvent {
   error?: string;
   isError?: boolean;
   toolRequest?: ToolRequestData;
-  // tool-request 事件的扁平字段（后端直接发送）
+  // tool-request / tool-start / tool-end 事件的扁平字段
   toolCallId?: string;
   toolName?: string;
   args?: Record<string, unknown>;
   description?: string;
   riskLevel?: 'low' | 'medium' | 'high';
+  /** tool-end 事件的输出结果 */
+  output?: string;
 }
