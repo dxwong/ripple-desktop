@@ -163,6 +163,7 @@ function App() {
               messages={chat.activeConversation?.messages || []}
               onSendMessage={handleSendMessage}
               isProcessing={chat.isProcessing}
+              onStop={chat.stopStreaming}
               darkMode={settings.darkMode}
               activeConfig={activeConfig}
               modelConfigs={settings.modelConfigs}

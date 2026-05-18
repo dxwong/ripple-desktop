@@ -11,6 +11,8 @@ interface ChatViewProps {
   messages: Message[];
   onSendMessage: (content: string) => void;
   isProcessing: boolean;
+  /** 停止 AI 处理的回调 */
+  onStop?: () => void;
   darkMode?: boolean;
   activeConfig?: ModelConfig;
   modelConfigs?: ModelConfig[];
@@ -131,6 +133,7 @@ function ChatView({
   messages,
   onSendMessage,
   isProcessing,
+  onStop,
   darkMode = true,
   activeConfig,
   modelConfigs,
@@ -356,6 +359,8 @@ function ChatView({
           <MessageInput
             onSend={onSendMessage}
             disabled={isProcessing}
+            isProcessing={isProcessing}
+            onStop={onStop}
             activeConfig={activeConfig}
             modelConfigs={modelConfigs}
             onSwitchModel={onSwitchModel}
@@ -363,7 +368,7 @@ function ChatView({
             hasProject={!!project}
             placeholder={
               isProcessing
-                ? "AI 正在回复..."
+                ? "AI 正在回复... 点击停止按钮可中断"
                 : chatMode === "code" || !!project
                 ? "输入编程指令... (Enter 发送, Shift+Enter 换行)"
                 : "输入消息... (Enter 发送, Shift+Enter 换行)"
