@@ -200,3 +200,138 @@ export async function readFile(path: string): Promise<ApiResponse<{ path: string
     `/api/files/read?path=${encodeURIComponent(path)}`
   );
 }
+
+// ============================================
+// Checkpoint 快照 API
+// ============================================
+
+/** 快照摘要（列表用） */
+export interface CheckpointSummary {
+  id: string;
+  name: string;
+  createdAt: number;
+  source: string;
+  bytes: number;
+}
+
+/** 快照完整信息 */
+export interface CheckpointDetail {
+  id: string;
+  name: string;
+  rootDir: string;
+  createdAt: number;
+  source: string;
+  files: Array<{ path: string; content: string | null; hash?: string }>;
+  bytes: number;
+  description?: string;
+}
+
+/** 差异条目 */
+export interface DiffEntry {
+  path: string;
+  type: "modified" | "added" | "deleted";
+  oldContent?: string;
+  newContent?: string;
+}
+
+/** 恢复结果 */
+export interface RestoreResult {
+  success: boolean;
+  restoredFiles: string[];
+  skippedFiles: string[];
+  backupId?: string;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * 获取快照列表
+ * @param cwd 工作目录
+ */
+export async function getCheckpoints(
+  cwd: string
+): Promise<ApiResponse<CheckpointSummary[]>> {
+  const result = await request<{ checkpoints: CheckpointSummary[] }>(
+    `/api/checkpoints?cwd=${encodeURIComponent(cwd)}`
+  );
+  if (result.error) return { error: result.error };
+  return { data: result.data!.checkpoints };
+}
+
+/**
+ * 创建快照
+ * @param cwd 工作目录
+ * @param name 快照名称（可选，自动生成）
+ * @param description 描述（可选）
+ */
+export async function createCheckpoint(
+  cwd: string,
+  name?: string,
+  description?: string
+): Promise<ApiResponse<{ success: boolean; checkpoint: CheckpointSummary }>> {
+  return request(`/api/checkpoints`, {
+    method: "POST",
+    body: JSON.stringify({ cwd, name, description, source: "manual" }),
+  });
+}
+
+/**
+ * 获取快照详情
+ * @param id 快照 ID
+ * @param cwd 工作目录
+ */
+export async function getCheckpoint(
+  id: string,
+  cwd: string
+): Promise<ApiResponse<{ checkpoint: CheckpointDetail }>> {
+  return request<{ checkpoint: CheckpointDetail }>(
+    `/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`
+  );
+}
+
+/**
+ * 获取快照与当前文件的差异
+ * @param id 快照 ID
+ * @param cwd 工作目录
+ */
+export async function getCheckpointDiff(
+  id: string,
+  cwd: string
+): Promise<ApiResponse<{ diff: DiffEntry[] }>> {
+  return request<{ diff: DiffEntry[] }>(
+    `/api/checkpoints/${id}/diff?cwd=${encodeURIComponent(cwd)}`
+  );
+}
+
+/**
+ * 恢复快照
+ * @param id 快照 ID
+ * @param cwd 工作目录
+ * @param createBackup 是否创建备份（默认 true）
+ * @param force 是否强制覆盖（默认 false）
+ */
+export async function restoreCheckpoint(
+  id: string,
+  cwd: string,
+  createBackup = true,
+  force = false
+): Promise<ApiResponse<RestoreResult>> {
+  return request<RestoreResult>(`/api/checkpoints/${id}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ cwd, createBackup, force }),
+  });
+}
+
+/**
+ * 删除快照
+ * @param id 快照 ID
+ * @param cwd 工作目录
+ */
+export async function deleteCheckpoint(
+  id: string,
+  cwd: string
+): Promise<ApiResponse<{ success: boolean }>> {
+  return request(`/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`, {
+    method: "DELETE",
+  });
+}

@@ -3,6 +3,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import FileTree from "./components/FileTree";
 import FilePreview from "./components/FilePreview";
+import CheckpointPanel from "./components/CheckpointPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 import { useStreamingChat } from "./hooks/useStreamingChat";
@@ -20,6 +21,8 @@ function App() {
   // 文件树状态
   const [fileTreeExpanded, setFileTreeExpanded] = useState(true);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  // 快照面板状态（与文件预览互斥）
+  const [showCheckpointPanel, setShowCheckpointPanel] = useState(false);
   const {
     settings,
     updateSettings,
@@ -174,23 +177,35 @@ function App() {
               onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
             />
 
-            {/* 右侧：文件树 + 文件预览（只有项目模式才显示） */}
+            {/* 右侧：文件树 + 文件预览/快照面板（只有项目模式才显示） */}
             {currentProject && (
               <div className="flex">
                 <FileTree
                   directory={currentProject?.directory || ""}
-                  onFileClick={setSelectedFilePath}
+                  onFileClick={(path) => {
+                    setSelectedFilePath(path);
+                    setShowCheckpointPanel(false);
+                  }}
                   onClose={() => setFileTreeExpanded(false)}
                   isExpanded={fileTreeExpanded}
                   onToggleExpand={() => setFileTreeExpanded(!fileTreeExpanded)}
                   showPanel={!!currentProject}
+                  onToggleCheckpointPanel={() => setShowCheckpointPanel(v => !v)}
+                  isCheckpointPanelActive={showCheckpointPanel}
                 />
-                
-                {/* 文件预览面板 */}
-                <FilePreview
-                  filePath={selectedFilePath}
-                  onClose={() => setSelectedFilePath(null)}
-                />
+
+                {/* 文件预览面板 / 快照面板（互斥） */}
+                {showCheckpointPanel ? (
+                  <CheckpointPanel
+                    cwd={currentProject?.directory || null}
+                    onClose={() => setShowCheckpointPanel(false)}
+                  />
+                ) : (
+                  <FilePreview
+                    filePath={selectedFilePath}
+                    onClose={() => setSelectedFilePath(null)}
+                  />
+                )}
               </div>
             )}
           </div>
