@@ -4,6 +4,72 @@
 
 ---
 
+## v0.4.0 里程碑 (2026-05-18)
+
+### ✅ 已解决
+
+#### EditBlock 智能检测与预览
+- [x] 自动检测 AI 输出中的 EditBlock 格式 (`<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`)
+- [x] 集成 DiffPreview 组件，显示行级差异对比
+- [x] 支持模糊匹配警告（相似度 < 80% 时提示）
+- [x] 应用编辑后自动清理消息中的 EditBlock 标记
+
+#### AI 停止按钮
+- [x] 流式输出期间输入框显示停止按钮（红色 Square 图标）
+- [x] 点击停止按钮调用 `stopStreaming` 中断 SSE 请求
+- [x] 按钮状态动态切换：处理中显示停止，空闲显示发送
+
+#### 新增文件
+- `src/hooks/useEditBlockDetector.ts` - EditBlock 检测 Hook
+- `src/components/EditBlockPreview.tsx` - EditBlock 预览组件
+
+#### 修改文件
+- `src/components/ChatMessage.tsx` - 集成 EditBlockPreview 组件
+- `src/components/ChatView.tsx` - 传递 `onStop` 和 `onEditBlockApply` 回调
+- `src/components/MessageInput.tsx` - 动态显示停止/发送按钮
+- `src/App.tsx` - 传递 `stopStreaming` 到 ChatView
+
+### 技术要点
+
+#### EditBlock 格式检测
+```typescript
+// useEditBlockDetector.ts
+// 正则检测 EditBlock
+const editBlockRegex = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+
+// 返回解析后的 blocks 数组
+interface EditBlock {
+  fileName: string;
+  searchContent: string;
+  replaceContent: string;
+  fileExists: boolean;
+}
+```
+
+#### 停止流式输出
+```typescript
+// useStreamingChat.ts
+const stopStreaming = useCallback(() => {
+  if (abortControllerRef.current) {
+    abortControllerRef.current.abort();
+    abortControllerRef.current = null;
+  }
+}, []);
+
+// MessageInput.tsx
+{isProcessing ? (
+  <button onClick={onStop} className="send-btn bg-red-500">
+    <Square size={16} fill="currentColor" />
+  </button>
+) : (
+  <button onClick={handleSend} className="send-btn">
+    <ArrowUp size={18} />
+  </button>
+)}
+```
+
+---
+
 ## v0.2.0 里程碑
 
 ### ✅ 已解决
@@ -315,9 +381,10 @@ WebSocket 事件循环独占 stream，通过 mpsc channel 接收发送命令，`
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
-| v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择、流式输出 |
+| v0.4.0 | 2026-05-18 | EditBlock 智能检测与 DiffPreview 集成、AI 停止按钮 |
 | v0.3.0 | 2026-05-14 | opencode serve SSE 流式集成（真实逐 token 打字机效果） |
 | v0.2.1 | 2026-05-14 | Bug 修复：项目即对话、Rust 锁死锁（channel+select! 架构）、桥接流式清洗输出 |
+| v0.2.0 | 2026-05-14 | 双模式对话、项目管理、OpenCode 集成、侧边栏重构、输入框双模型选择、流式输出 |
 | v0.1.0 | - | 初始版本：基础聊天、多模型配置、双主题、流式对话 |
 
 ---

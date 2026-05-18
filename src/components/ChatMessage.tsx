@@ -1,10 +1,11 @@
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useCallback } from "react";
 import { User, Sparkles, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
 import CodeEditor from "./CodeEditor";
 import { ToolCallCard } from "./ToolCallCard";
+import EditBlockPreview from "./EditBlockPreview";
 
 // DEBUG: 追踪消息渲染
 const renderLog = (id: string, role: string, contentLen: number, thinkingLen: number) => {
@@ -15,6 +16,8 @@ interface ChatMessageProps {
   message: Message;
   isStreaming?: boolean;
   darkMode?: boolean;
+  /** EditBlock 应用成功回调 */
+  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
 }
 
 /** 从 className 中提取语言 */
@@ -73,10 +76,17 @@ function extractCodeInfo(children: React.ReactNode): { code: string; language?: 
  * - 流式中代码块用轻量 <pre>，完成后用 Monaco Editor
  * - 所有代码内容从 ReactMarkdown 的 pre children 正确提取
  */
-const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply }: ChatMessageProps) {
   const isUser = message.role === "user";
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const hasThinking = !!(message.thinking);
+  /** 当前显示的内容（EditBlock 应用后会被清理） */
+  const [displayContent, setDisplayContent] = useState(message.content);
+
+  // 同步外部内容变化
+  useEffect(() => {
+    setDisplayContent(message.content);
+  }, [message.content]);
 
   // 流式思考时自动展开
   useEffect(() => {
@@ -188,7 +198,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
                 },
               }}
             >
-              {message.content}
+              {displayContent}
             </ReactMarkdown>
           </div>
 
@@ -209,6 +219,16 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               />
             ))}
           </div>
+        )}
+
+        {/* EditBlock 预览（代码编辑块预览） */}
+        {!isUser && !isStreaming && (
+          <EditBlockPreview
+            content={message.content}
+            messageId={message.id}
+            isStreaming={isStreaming}
+            onContentChange={setDisplayContent}
+          />
         )}
       </div>
     </div>

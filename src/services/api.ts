@@ -335,3 +335,101 @@ export async function deleteCheckpoint(
     method: "DELETE",
   });
 }
+
+// ============================================
+// EditBlock API（编辑块解析、预览、应用）
+// ============================================
+
+/** EditBlock 编辑块结构 */
+export interface EditBlock {
+  /** 要搜索的原始代码 */
+  search: string;
+  /** 替换后的代码 */
+  replace: string;
+  /** 文件路径（可选） */
+  filePath?: string;
+}
+
+/** EditBlock 应用结果 */
+export interface EditBlockResult {
+  success: boolean;
+  content?: string;
+  error?: string;
+  matchType: "exact" | "fuzzy";
+  similarity: number;
+  method?: "ngram" | "diff-alignment";
+  suggestedSearch?: string;
+}
+
+/** 批量应用结果 */
+export interface ApplyBlocksResult {
+  success: boolean;
+  applied: number;
+  failed: number;
+  content: string;
+  results: Array<EditBlockResult & { block: EditBlock }>;
+  checkpointId?: string;
+  rollback?: () => Promise<boolean>;
+}
+
+/**
+ * 解析 LLM 输出的 EditBlock 格式
+ * @param text 包含 EditBlock 的文本
+ * @param defaultFilePath 默认文件路径（可选）
+ */
+export async function parseEditBlocks(
+  text: string,
+  defaultFilePath?: string
+): Promise<ApiResponse<{ blocks: EditBlock[]; count: number }>> {
+  return request(`/api/edit/parse`, {
+    method: "POST",
+    body: JSON.stringify({ 
+      text, 
+      options: defaultFilePath ? { defaultFilePath } : undefined 
+    }),
+  });
+}
+
+/**
+ * 预览 EditBlock 的修改效果（不实际修改文件）
+ * @param content 文件当前内容
+ * @param block EditBlock
+ * @param minSimilarity 最小相似度阈值（默认 0.8）
+ */
+export async function previewEditBlock(
+  content: string,
+  block: EditBlock,
+  minSimilarity = 0.8
+): Promise<ApiResponse<{ success: boolean; diff?: string; similarity: number; error?: string }>> {
+  return request(`/api/edit/preview`, {
+    method: "POST",
+    body: JSON.stringify({ content, block, minSimilarity }),
+  });
+}
+
+/**
+ * 应用 EditBlock（自动创建快照支持回滚）
+ * @param filePath 文件路径
+ * @param blocks EditBlock 数组
+ * @param useFuzzy 是否使用模糊匹配（默认 true）
+ * @param minSimilarity 最小相似度阈值（默认 0.8）
+ * @param createCheckpoint 是否创建快照（默认 true）
+ */
+export async function applyEditBlocks(
+  filePath: string,
+  blocks: EditBlock[],
+  useFuzzy = true,
+  minSimilarity = 0.8,
+  createCheckpoint = true
+): Promise<ApiResponse<ApplyBlocksResult>> {
+  return request(`/api/edit/apply`, {
+    method: "POST",
+    body: JSON.stringify({ 
+      filePath, 
+      blocks, 
+      useFuzzy, 
+      minSimilarity, 
+      createCheckpoint 
+    }),
+  });
+}

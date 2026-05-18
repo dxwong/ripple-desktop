@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, ChevronDown } from "lucide-react";
+import { ArrowUp, ChevronDown, Square } from "lucide-react";
 import type { ModelConfig, ChatMode } from "../types";
 
 interface MessageInputProps {
   onSend: (content: string) => void;
   disabled?: boolean;
+  /** AI 是否正在处理中（显示停止按钮） */
+  isProcessing?: boolean;
+  /** 停止处理回调 */
+  onStop?: () => void;
   placeholder?: string;
   /** 当前激活的对话模型配置 */
   activeConfig?: ModelConfig;
@@ -24,6 +28,8 @@ interface MessageInputProps {
 function MessageInput({
   onSend,
   disabled = false,
+  isProcessing = false,
+  onStop,
   placeholder = "输入消息...",
   activeConfig,
   modelConfigs = [],
@@ -153,15 +159,25 @@ function MessageInput({
             )}
           </div>
 
-          {/* ---- 发送按钮 ---- */}
-          <button
-            onClick={handleSend}
-            disabled={disabled || !hasInput}
-            className="send-btn"
-            title="发送 (Enter)"
-          >
-            <ArrowUp size={18} />
-          </button>
+          {/* ---- 发送/停止按钮 ---- */}
+          {isProcessing ? (
+            <button
+              onClick={onStop}
+              className="send-btn bg-red-500 hover:bg-red-600"
+              title="停止 (点击停止 AI 回复)"
+            >
+              <Square size={16} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={disabled || !hasInput}
+              className="send-btn"
+              title="发送 (Enter)"
+            >
+              <ArrowUp size={18} />
+            </button>
+          )}
         </div>
       </div>
     </div>

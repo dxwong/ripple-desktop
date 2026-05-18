@@ -2,7 +2,7 @@
 
 **AI 编程助手桌面端** — 基于 Tauri + React 构建，支持双模式对话（普通对话/编程开发）、多模型配置管理、Ripple-Agent 后端集成。
 
-![版本](https://img.shields.io/badge/version-0.2.0-orange)
+![版本](https://img.shields.io/badge/version-0.4.0-orange)
 ![平台](https://img.shields.io/badge/platform-Windows-blue)
 ![技术栈](https://img.shields.io/badge/stack-Tauri_2_|_React_18_|_TypeScript_|_Rust-blue)
 
@@ -37,6 +37,15 @@
 - 浅色/深色模式一键切换
 - 代码块背景色与流式渲染保持一致
 - 自定义 Monaco 编辑器主题，匹配应用配色
+
+### 🎯 EditBlock 智能预览
+- AI 输出代码编辑时自动检测 EditBlock 格式
+- 集成 DiffPreview 组件，显示行级差异对比
+- 支持模糊匹配警告，应用前可预览变更
+
+### ⏹️ AI 停止按钮
+- 流式输出期间可随时停止 AI 生成
+- 避免等待时间过长或不需要的回复
 
 ### 💬 流式对话
 - 实时显示 AI 回复
@@ -93,18 +102,20 @@ npm run tauri:build
 ripple-desktop/
 ├── src/                      # 前端源码（React + TypeScript）
 │   ├── components/
-│   │   ├── ChatMessage.tsx   # 消息气泡（流式/完成态）
+│   │   ├── ChatMessage.tsx   # 消息气泡（集成 EditBlock 预览）
 │   │   ├── ChatView.tsx      # 主聊天视图（含窗口控制）
 │   │   ├── CodeEditor.tsx    # Monaco 代码编辑器（自定义主题）
-│   │   ├── MessageInput.tsx  # 消息输入框（模型选择器）
+│   │   ├── EditBlockPreview.tsx # EditBlock 差异预览组件
+│   │   ├── MessageInput.tsx  # 消息输入框（停止按钮）
 │   │   ├── SettingsPanel.tsx # 设置面板（多模型配置管理）
 │   │   ├── Sidebar.tsx       # 侧边栏（项目+对话列表）
 │   │   └── ErrorBoundary.tsx # 全局错误边界
 │   ├── hooks/
 │   │   ├── useSettings.ts    # 设置管理
 │   │   ├── useStore.ts       # 统一存储层（JSON/localStorage）
-│   │   ├── useStreamingChat.ts # 流式对话管理
+│   │   ├── useStreamingChat.ts # 流式对话管理（支持停止）
 │   │   ├── useBridge.ts      # WebSocket 桥接
+│   │   ├── useEditBlockDetector.ts # EditBlock 检测 Hook
 │   │   ├── useProjects.ts    # 项目管理
 │   │   ├── useFolderPicker.ts # 文件夹选择器
 │   │   └── useTauri.ts       # Tauri 环境检测
