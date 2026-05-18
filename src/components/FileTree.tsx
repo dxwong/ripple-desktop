@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, FileText, FileCode, FileImage, File, ChevronLeft, ChevronRight as ChevronRightIcon, Menu } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, FileText, FileCode, FileImage, File, ChevronLeft, ChevronRight as ChevronRightIcon, Menu, GitBranch } from 'lucide-react';
 import type { FileItem, FileTreeState } from '../types/file';
 
 interface FileTreeProps {
@@ -9,6 +9,10 @@ interface FileTreeProps {
   isExpanded: boolean;
   onToggleExpand: () => void;
   showPanel: boolean;
+  /** 切换到快照面板 */
+  onToggleCheckpointPanel?: () => void;
+  /** 快照面板是否激活 */
+  isCheckpointPanelActive?: boolean;
 }
 
 /** 根据文件扩展名返回对应的图标 */
@@ -152,7 +156,7 @@ async function loadDirectory(path: string): Promise<FileItem[]> {
 }
 
 /** 文件树面板 */
-export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggleExpand, showPanel }: FileTreeProps) {
+export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggleExpand, showPanel, onToggleCheckpointPanel, isCheckpointPanelActive }: FileTreeProps) {
   const [state, setState] = useState<FileTreeState>({
     isExpanded: false,
     selectedPath: null,
@@ -213,13 +217,25 @@ export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggle
                 文件
               </span>
             </div>
-            <button
-              onClick={onToggleExpand}
-              className="icon-btn !p-1"
-              title="收起文件树"
-            >
-              <Menu size={15} className="text-content-tertiary dark:text-content-tertiary-dark" />
-            </button>
+            <div className="flex items-center gap-1">
+              {/* 快照切换按钮 */}
+              {onToggleCheckpointPanel && (
+                <button
+                  onClick={onToggleCheckpointPanel}
+                  className={`icon-btn !p-1 ${isCheckpointPanelActive ? 'text-blue-500 bg-blue-500/10' : 'text-content-tertiary dark:text-content-tertiary-dark'}`}
+                  title={isCheckpointPanelActive ? '返回文件' : '快照管理'}
+                >
+                  <GitBranch size={15} />
+                </button>
+              )}
+              <button
+                onClick={onToggleExpand}
+                className="icon-btn !p-1"
+                title="收起文件树"
+              >
+                <Menu size={15} className="text-content-tertiary dark:text-content-tertiary-dark" />
+              </button>
+            </div>
           </div>
         )}
 
