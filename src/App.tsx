@@ -170,8 +170,8 @@ function App() {
               backendModels={backendModels}
               pendingToolRequests={chat.pendingToolRequests}
               onToolConfirm={chat.handleToolConfirm}
-              autoConfirm={chat.autoConfirm}
-              onToggleAutoConfirm={() => chat.setAutoConfirm(!chat.autoConfirm)}
+              permissionMode={settings.permissionMode}
+              onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
             />
 
             {/* 右侧：文件树 + 文件预览（只有项目模式才显示） */}

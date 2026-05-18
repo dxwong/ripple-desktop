@@ -3,7 +3,7 @@ import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X 
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
-import { Message, ModelConfig, ChatMode, Project, ToolRequestData } from "../types";
+import { Message, ModelConfig, ChatMode, Project, ToolRequestData, PermissionMode, PERMISSION_MODES } from "../types";
 import { isTauri } from "../hooks/useTauri";
 
 interface ChatViewProps {
@@ -27,10 +27,10 @@ interface ChatViewProps {
   pendingToolRequests?: ToolRequestData[];
   /** 确认/拒绝工具执行 */
   onToolConfirm?: (toolCallId: string, approved: boolean, reason?: string) => void;
-  /** 自动确认模式 */
-  autoConfirm?: boolean;
-  /** 切换自动确认 */
-  onToggleAutoConfirm?: () => void;
+  /** 当前权限模式 */
+  permissionMode?: PermissionMode;
+  /** 切换权限模式 */
+  onPermissionModeChange?: (mode: PermissionMode) => void;
 }
 
 function TypingIndicator() {
@@ -139,8 +139,8 @@ function ChatView({
   backendModels,
   pendingToolRequests = [],
   onToolConfirm,
-  autoConfirm = false,
-  onToggleAutoConfirm,
+  permissionMode = "confirm",
+  onPermissionModeChange,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -293,7 +293,7 @@ function ChatView({
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           {/* 工具确认横幅 — 输入框上方靠右 */}
-          {pendingToolRequests.length > 0 && onToolConfirm && !autoConfirm && (
+          {pendingToolRequests.length > 0 && onToolConfirm && permissionMode !== "auto" && (
             <div className="flex justify-end mb-2">
               <ToolConfirmBanner
                 requests={pendingToolRequests}
@@ -301,28 +301,51 @@ function ChatView({
               />
             </div>
           )}
-          {/* Auto 确认开关 — 弹窗时隐藏 */}
-          {!(pendingToolRequests.length > 0 && !autoConfirm) && (
+          {/* 权限模式切换按钮 — 弹窗时隐藏 */}
+          {!(pendingToolRequests.length > 0 && permissionMode !== "auto") && (
           <div className="flex justify-end mb-1.5">
             <button
-              onClick={onToggleAutoConfirm}
-              title={autoConfirm ? "Auto 模式：工具自动执行，无需确认" : "手动模式：每次工具执行需要用户确认"}
-              className={`group relative flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-all duration-200 ${
-                autoConfirm
-                  ? "bg-accent/15 text-accent hover:bg-accent/25"
+              onClick={() => {
+                // 循环切换三种模式
+                const modes: PermissionMode[] = ["auto", "confirm", "read-only"];
+                const currentIndex = modes.indexOf(permissionMode);
+                const nextMode = modes[(currentIndex + 1) % modes.length];
+                onPermissionModeChange?.(nextMode);
+              }}
+              className={`group relative flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-200 ${
+                permissionMode === "auto"
+                  ? "bg-accent/20 text-accent hover:bg-accent/30 shadow-[0_0_6px_rgba(217,119,87,0.4)]"
+                  : permissionMode === "read-only"
+                  ? "bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-150"
                   : "bg-message-ai dark:bg-message-ai-dark text-content-tertiary hover:text-content-secondary"
               }`}
             >
-              <span className={`w-2 h-2 rounded-full transition-colors duration-200 ${
-                autoConfirm ? "bg-accent shadow-[0_0_4px_rgba(217,119,87,0.5)]" : "bg-content-tertiary"
+              <span className={`w-2 h-2 rounded-full transition-all duration-200 ${
+                permissionMode === "auto"
+                  ? "bg-accent shadow-[0_0_4px_rgba(217,119,87,0.5)]"
+                  : permissionMode === "read-only"
+                  ? "bg-blue-500"
+                  : "bg-content-tertiary"
               }`} />
-              auto
+              <span>{permissionMode === "auto" ? "Auto" : permissionMode === "read-only" ? "只读" : "确认"}</span>
               {/* Tooltip */}
-              <span className="absolute -top-8 right-0 px-2 py-1 rounded bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[10px] text-content-secondary whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-                {autoConfirm
-                  ? "已开启 Auto，工具将自动执行"
-                  : "点击开启 Auto 模式，工具将自动执行"}
-              </span>
+              <div className="absolute -top-20 right-0 px-2 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-xl">
+                <div className="font-medium text-content-secondary mb-1">点击切换权限模式</div>
+                <div className="space-y-0.5">
+                  {PERMISSION_MODES.map((mode) => (
+                    <div key={mode.value} className={`flex items-center gap-1.5 ${
+                      permissionMode === mode.value ? "text-accent" : "text-content-tertiary"
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        permissionMode === mode.value
+                          ? "bg-accent"
+                          : "bg-content-tertiary"
+                      }`} />
+                      <span>{mode.label}: {mode.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </button>
           </div>
           )}
