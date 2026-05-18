@@ -31,6 +31,8 @@ interface ChatViewProps {
   permissionMode?: PermissionMode;
   /** 切换权限模式 */
   onPermissionModeChange?: (mode: PermissionMode) => void;
+  /** EditBlock 应用成功回调 */
+  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
 }
 
 function TypingIndicator() {
@@ -141,6 +143,7 @@ function ChatView({
   onToolConfirm,
   permissionMode = "confirm",
   onPermissionModeChange,
+  onEditBlockApply,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -279,6 +282,7 @@ function ChatView({
                   message={msg}
                   isStreaming={index === streamingIdx}
                   darkMode={darkMode}
+                  onEditBlockApply={onEditBlockApply}
                 />
               ))}
             </div>
