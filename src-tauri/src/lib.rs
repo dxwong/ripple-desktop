@@ -224,16 +224,35 @@ fn find_backend_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     }
 
     // 2. 默认路径（相对于前端项目的同级目录）
-    let default_paths = [
-        // 开发环境：ripple-agent 在同级目录
-        std::path::PathBuf::from("../pi-mono/ripple-agent"),
-        std::path::PathBuf::from("../../pi-mono/ripple-agent"),
-        // 可能的其他位置
-        std::path::PathBuf::from("../ripple-agent"),
-    ];
+    // 尝试基于当前可执行文件位置和常见相对路径查找
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
-    for path in &default_paths {
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut list = vec![
+            std::path::PathBuf::from("../ripple-agent"),
+            std::path::PathBuf::from("../../ripple-agent"),
+            std::path::PathBuf::from("../pi-mono/ripple-agent"),
+        ];
+        // 如果能获取可执行文件目录，也尝试从那里向上查找
+        if let Some(ref dir) = exe_dir {
+            // Tauri dev: exe 在 src-tauri/target/debug/，向上 3 级到项目根
+            if let Some(d) = dir.parent().and_then(|d| d.parent()).and_then(|d| d.parent()) {
+                list.push(d.join("../ripple-agent"));
+                list.push(d.join("../../ripple-agent"));
+                list.push(d.join("../pi-mono/ripple-agent"));
+            }
+        }
+        list
+    };
+
+    for path in &candidates {
         if path.join("packages").join("server").exists() {
+            // 转为绝对路径，避免 current_dir 不确定的问题
+            if let Ok(abs) = path.canonicalize() {
+                return Ok(abs);
+            }
             return Ok(path.clone());
         }
     }
