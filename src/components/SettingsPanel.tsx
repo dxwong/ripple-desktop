@@ -3,7 +3,8 @@ import {
   X, Key, Globe, Cpu, Eye, EyeOff, Check, RefreshCw,
   Server, Palette, Trash2, Plus, Edit3, Save, Loader2,
 } from "lucide-react";
-import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
+import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider, PermissionMode } from "../types";
+import { PERMISSION_MODES } from "../types";
 import { testConnection } from "../services/api";
 
 interface SettingsPanelProps {
@@ -437,6 +438,39 @@ function SettingsPanel({
               {/* ===== 通用 ===== */}
               {activeTab === "general" && (
                 <div className="space-y-4 max-w-lg">
+                  {/* 权限设置 */}
+                  <section>
+                    <label className="text-sm font-medium text-content-secondary dark:text-content-secondary-dark mb-3 block">
+                      操作权限
+                    </label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {PERMISSION_MODES.map((mode) => (
+                        <button
+                          key={mode.value}
+                          onClick={() => onUpdate({ permissionMode: mode.value })}
+                          className={`text-left px-4 py-3 rounded-xl border transition-all ${
+                            settings.permissionMode === mode.value
+                              ? "border-accent bg-accent/5 dark:bg-accent/10"
+                              : "border-border dark:border-border-dark hover:border-accent/30 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">
+                              {mode.label}
+                            </span>
+                            {settings.permissionMode === mode.value && (
+                              <Check size={15} className="text-accent" />
+                            )}
+                          </div>
+                          <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1">
+                            {mode.description}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  {/* 关于信息 */}
                   <div className="p-4 rounded-xl bg-black/[0.02] dark:bg-white/[0.02] border border-border dark:border-border-dark">
                     <h3 className="text-sm font-medium mb-1">关于 Ripple Desktop</h3>
                     <p className="text-sm text-content-tertiary dark:text-content-tertiary-dark leading-relaxed">
@@ -444,6 +478,7 @@ function SettingsPanel({
                     </p>
                   </div>
 
+                  {/* 重置按钮 */}
                   <button
                     onClick={onReset}
                     className="flex items-center justify-center gap-1.5 w-full px-4 py-2 text-sm font-medium

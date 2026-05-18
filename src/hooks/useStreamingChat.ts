@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
 
@@ -83,13 +83,14 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
   }
 }
 
-export function useStreamingChat() {
+export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [backendConnected, setBackendConnected] = useState(false);
   const [pendingToolRequests, setPendingToolRequests] = useState<ToolRequestData[]>([]);
-  const [autoConfirm, setAutoConfirm] = useState(false);
+  // 根据权限模式自动设置 autoConfirm：auto 模式自动确认，confirm 和 read-only 需要确认
+  const [autoConfirm, setAutoConfirm] = useState(permissionMode === "auto");
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
 
@@ -98,6 +99,11 @@ export function useStreamingChat() {
   activeConversationIdRef.current = activeConversationId;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
+
+  // 监听全局权限模式变化，自动同步 autoConfirm 状态
+  useEffect(() => {
+    setAutoConfirm(permissionMode === "auto");
+  }, [permissionMode]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
   const activeModeRef = useRef(activeConversation?.mode || "chat");

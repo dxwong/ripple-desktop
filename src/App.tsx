@@ -29,7 +29,7 @@ function App() {
     deleteModelConfig,
     setActiveModel,
   } = useSettings();
-  const chat = useStreamingChat();
+  const chat = useStreamingChat(settings.permissionMode);
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
