@@ -136,37 +136,6 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
               AI 助手
             </span>
-            {/* 重新生成按钮（非流式时显示） */}
-            {!isStreaming && onRegenerate && (
-              <button
-                onClick={onRegenerate}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] 
-                           hover:bg-black/5 dark:hover:bg-white/5 transition-all"
-                title="重新生成"
-              >
-                <RefreshCw size={12} />
-                <span>重新生成</span>
-              </button>
-            )}
-            {/* 复制按钮 */}
-            <button
-              onClick={handleCopy}
-              className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] 
-                         hover:bg-black/5 dark:hover:bg-white/5 transition-all"
-              title="复制内容"
-            >
-              {copied ? (
-                <>
-                  <Check size={12} className="text-green-500" />
-                  <span className="text-green-500">已复制</span>
-                </>
-              ) : (
-                <>
-                  <Copy size={12} />
-                  <span>复制</span>
-                </>
-              )}
-            </button>
           </div>
         )}
 
@@ -253,6 +222,34 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="inline-block w-[2px] h-[14px] ml-0.5 bg-accent/70 animate-pulse align-text-bottom" />
           )}
         </div>
+
+        {/* 操作按钮（非流式时在内容右下角显示） */}
+        {!isUser && !isStreaming && (
+          <div className="flex justify-end gap-1 mt-1.5 mr-1">
+            {/* 重新生成按钮 */}
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+                title="重新生成"
+              >
+                <RefreshCw size={14} />
+              </button>
+            )}
+            {/* 复制按钮（只保留图标，放右边） */}
+            <button
+              onClick={handleCopy}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+              title="复制内容"
+            >
+              {copied ? (
+                <Check size={14} className="text-green-500" />
+              ) : (
+                <Copy size={14} />
+              )}
+            </button>
+          </div>
+        )}
 
         {/* 工具调用卡片（结构化展示） */}
         {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
