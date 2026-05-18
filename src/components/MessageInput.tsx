@@ -99,12 +99,10 @@ function MessageInput({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          disabled={disabled}
           className="flex-1 resize-none bg-transparent text-sm
                      text-content dark:text-content-dark
                      placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
-                     outline-none py-1 min-h-[44px] max-h-[240px]
-                     disabled:cursor-not-allowed disabled:opacity-50"
+                     outline-none py-1 min-h-[44px] max-h-[240px]"
         />
       </div>
 
@@ -171,7 +169,7 @@ function MessageInput({
           ) : (
             <button
               onClick={handleSend}
-              disabled={disabled || !hasInput}
+              disabled={!hasInput}
               className="send-btn"
               title="发送 (Enter)"
             >

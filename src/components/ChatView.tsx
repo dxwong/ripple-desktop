@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
@@ -154,6 +154,18 @@ function ChatView({
   const streamingIdx = getStreamingIndex(messages, isProcessing);
   const shouldShowTyping = isProcessing && streamingIdx === -1;
 
+  // 重新生成：找到对应 AI 消息的前一条用户消息，重新发送
+  const handleRegenerate = useCallback((msgIdx: number) => {
+    if (isProcessing) return;
+    // 向前查找用户消息
+    for (let i = msgIdx - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        onSendMessage(messages[i].content);
+        break;
+      }
+    }
+  }, [isProcessing, messages, onSendMessage]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isProcessing]);
@@ -286,6 +298,7 @@ function ChatView({
                   isStreaming={index === streamingIdx}
                   darkMode={darkMode}
                   onEditBlockApply={onEditBlockApply}
+                  onRegenerate={msg.role === "assistant" ? () => handleRegenerate(index) : undefined}
                 />
               ))}
             </div>
