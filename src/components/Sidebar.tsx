@@ -4,9 +4,6 @@ import {
   Sun,
   Moon,
   Settings,
-  Wifi,
-  WifiOff,
-  RefreshCw,
   Trash2,
   Search,
   FolderOpen,
@@ -15,7 +12,6 @@ import {
   X,
   ChevronDown,
   ChevronRight,
-  Folder,
 } from "lucide-react";
 import { useState } from "react";
 import { Conversation, Project, ChatMode } from "../types";
@@ -28,8 +24,6 @@ interface SidebarProps {
   onNewConversation: (mode?: ChatMode, projectId?: string) => void;
   onSwitchConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
-  bridgeStatus: string;
-  onReconnectBridge: () => void;
   onOpenSettings: () => void;
   // 项目相关
   projects: Project[];
@@ -47,7 +41,7 @@ interface SidebarProps {
  * 侧边栏 — 上下分栏布局
  *
  * ┌──────────────────────────────┐
- * │  顶部：Logo + 搜索 + 状态 + [+] │
+ * │  顶部：Logo + 搜索 + [+]      │
  * ├──────────────────────────────┤
  * │  上半部分：项目列表           │
  * │  - 新建项目（选择本地文件夹）    │
@@ -66,8 +60,6 @@ function Sidebar({
   onNewConversation,
   onSwitchConversation,
   onDeleteConversation,
-  bridgeStatus,
-  onReconnectBridge,
   onOpenSettings,
   projects,
   activeProjectId,
@@ -84,8 +76,6 @@ function Sidebar({
   const [projectDir, setProjectDir] = useState("");
   const [pickingFolder, setPickingFolder] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const isOnline = bridgeStatus === "connected";
-  const isConnecting = bridgeStatus === "connecting";
 
   // 对话列表：只显示普通对话（有关联项目的对话已在项目列表中展示，避免重复）
   const filteredConversations = conversations.filter((c) =>
@@ -130,7 +120,7 @@ function Sidebar({
 
   return (
     <aside className="w-72 flex flex-col bg-surface-secondary dark:bg-surface-secondary-dark border-r border-border dark:border-border-dark shrink-0">
-      {/* ===== 顶部区域：Logo + 搜索 + 状态 + 新建对话（窗口拖拽区） ===== */}
+      {/* ===== 顶部区域：Logo + 搜索 + 新建对话（窗口拖拽区） ===== */}
       <div className="titlebar-drag p-3 pb-2 space-y-2.5">
         <div className="titlebar-no-drag flex items-center gap-2">
           <div className="w-8 h-8 rounded-xl bg-accent flex items-center justify-center shrink-0">
@@ -166,41 +156,6 @@ function Sidebar({
                        focus:outline-none focus:border-accent/30 focus:bg-transparent
                        transition-all duration-150"
           />
-        </div>
-
-        {/* 桥接状态 */}
-        <div
-          className={`titlebar-no-drag flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-colors ${
-            isOnline
-              ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/15"
-              : isConnecting
-              ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/15"
-              : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/15"
-          }`}
-        >
-          {isOnline ? (
-            <Wifi size={14} />
-          ) : isConnecting ? (
-            <RefreshCw size={14} className="animate-spin" />
-          ) : (
-            <WifiOff size={14} />
-          )}
-          <span className="text-xs font-medium flex-1">
-            {isOnline
-              ? "桥接已连接"
-              : isConnecting
-              ? "连接中..."
-              : "未连接"}
-          </span>
-          {!isOnline && !isConnecting && (
-            <button
-              onClick={onReconnectBridge}
-              className="hover:text-accent transition-colors"
-              title="重新连接"
-            >
-              <RefreshCw size={12} />
-            </button>
-          )}
         </div>
       </div>
 

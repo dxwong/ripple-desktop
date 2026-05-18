@@ -8,7 +8,6 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "bridge": "python bridge/bridge_server.py",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

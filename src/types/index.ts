@@ -21,6 +21,8 @@ export interface Message {
   id: string;
   role: MessageRole;
   content: string;
+  /** 模型的思考/推理过程（如有），在前端可折叠展示 */
+  thinking: string;
   timestamp: number;
 }
 
@@ -74,4 +76,54 @@ export interface ModelConfigFormData {
   endpoint: string;
   apiKey: string;
   model: string;
+}
+
+// ============================================
+// 后端 API 类型
+// ============================================
+
+/** 后端返回的模型信息 */
+export interface BackendModel {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+}
+
+/** 后端返回的会话信息 */
+export interface BackendSession {
+  id: string;
+  title: string;
+  model: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** SSE 事件类型 */
+export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'tool-request' | 'done' | 'error';
+
+/** 工具执行确认请求 */
+export interface ToolRequestData {
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  description: string;
+  riskLevel: 'low' | 'medium' | 'high';
+}
+
+/** SSE 事件数据 */
+export interface SSEEvent {
+  type: SSEEventType;
+  text?: string;
+  name?: string;
+  error?: string;
+  isError?: boolean;
+  toolRequest?: ToolRequestData;
+  // tool-request 事件的扁平字段（后端直接发送）
+  toolCallId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  description?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
 }

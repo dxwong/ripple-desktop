@@ -228,3 +228,15 @@
 .msg-enter {
   animation: fadeIn 0.2s ease-out;
 }
+
+/* 加载动画：三个圆点依次弹跳 */
+@keyframes typing-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}

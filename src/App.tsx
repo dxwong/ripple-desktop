@@ -2,15 +2,19 @@ import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsPanel from "./components/SettingsPanel";
-import { useBridge } from "./hooks/useBridge";
+import LogPanel from "./components/LogPanel";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
 import { useProjects } from "./hooks/useProjects";
 import { useFolderPicker } from "./hooks/useFolderPicker";
 import { ChatMode } from "./types";
+import { fetchModels } from "./services/api";
+import { logger } from "./components/LogPanel";
+import { isTauri } from "./hooks/useTauri";
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
+  const [backendModels, setBackendModels] = useState<{ id: string; name: string }[]>([]);
   const {
     settings,
     updateSettings,
@@ -20,32 +24,68 @@ function App() {
     deleteModelConfig,
     setActiveModel,
   } = useSettings();
-  const bridge = useBridge();
   const chat = useStreamingChat();
   const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
-  // ===== 启动时自动连接桥接服务 =====
+  // 启动时检查后端连接
   useEffect(() => {
-    // 延迟1秒自动连接（给 Python 桥接服务充足的启动时间）
-    const t1 = setTimeout(() => bridge.connect(), 1000);
-    // 5秒后重试一次兜底（桥接启动较慢的情况）
-    const t2 = setTimeout(() => bridge.connect(), 5000);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
+    const init = async () => {
+      // Tauri 环境下自动启动后端
+      if (isTauri()) {
+        try {
+          logger.info("Tauri 环境，正在启动后端服务...");
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("start_backend");
+          // 等待后端启动
+          await new Promise((r) => setTimeout(r, 2000));
+        } catch (e: any) {
+          logger.warn(`自动启动后端失败: ${e}`);
+        }
+      }
+
+      logger.info("正在检查后端连接...");
+      const connected = await chat.checkBackendConnection();
+      if (connected) {
+        logger.success("后端服务已连接 (localhost:3002)");
+        const result = await fetchModels();
+        if (result.data) {
+          setBackendModels(result.data);
+          logger.info(`获取到 ${result.data.length} 个模型: ${result.data.map(m => m.name).join(", ")}`);
+        }
+      } else {
+        logger.warn("后端服务未连接，使用模拟模式（仅开发测试）");
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    init();
   }, []);
 
-  // OpenCode 模型列表
-  const [openCodeModels, setOpenCodeModels] = useState<{ id: string; name: string }[]>([
-    { id: "opencode/deepseek-v4-flash-free", name: "DeepSeek V4 Flash (免费)" },
-    { id: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 (免费)" },
-    { id: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super (免费)" },
-    { id: "opencode/ring-2.6-1t-free", name: "Ring 2.6 1T (免费)" },
-  ]);
-  const [openCodeModel, setOpenCodeModel] = useState("");
+  // Tauri 环境下监听后端日志事件
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ level: string; message: string }>("backend-log", (event) => {
+          const { level, message } = event.payload;
+          switch (level) {
+            case "error": logger.error(message); break;
+            case "warn": logger.warn(message); break;
+            case "success": logger.success(message); break;
+            default: logger.info(message);
+          }
+        });
+      } catch (e) {
+        console.warn("监听后端日志失败:", e);
+      }
+    })();
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   // 获取当前会话关联的项目和模式
   const currentProject = chat.activeConversation?.projectId
@@ -53,39 +93,24 @@ function App() {
     : null;
   const currentMode = chat.activeConversation?.mode || "chat";
   const isCodeMode = currentMode === "code";
-  // 是否有关联项目（决定 OC 模型选择器是否显示）
-  const hasProject = !!currentProject;
 
-  // 发送消息
+  // 发送消息 - 后端可用走后端，否则走模拟（仅开发测试）
   const handleSendMessage = useCallback(async (content: string) => {
-    const isOnline = bridge.status === "connected";
-    const projectDirectory = currentProject?.directory;
-    // 有关联项目且选中了 OC 模型才传 model
-    const ocModel = hasProject && openCodeModel ? openCodeModel : undefined;
-    await chat.sendMessage(
-      content,
-      isOnline ? "bridge" : "simulate",
-      isOnline ? bridge.sendMessage : undefined,
-      isOnline ? bridge.sendStreamingMessage : undefined,
-      isOnline ? bridge.setMessageCallback : undefined,
-      projectDirectory,
-      ocModel
-    );
-  }, [bridge.status, bridge.sendMessage, bridge.sendStreamingMessage, bridge.setMessageCallback, chat.sendMessage, currentProject?.directory, hasProject, openCodeModel]);
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentProject?.directory);
+  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentProject?.directory]);
 
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
     chat.newConversation(mode, projectId);
   };
 
-  // 添加项目 = 创建一条聊天记录（项目本身就是一条对话）
+  // 添加项目 = 创建一条聊天记录
   const handleAddProject = (name: string, directory: string) => {
     const newProject = projects.addProject(name, directory);
-    // 创建立刻创建关联的聊天记录，标题 = 项目名，mode = chat
     chat.newConversation("chat", newProject.id, name);
   };
 
-  // 点击项目 → 切换到关联的聊天记录（不会创建新对话）
+  // 点击项目 → 切换到关联的聊天记录
   const handleSelectProjectConversation = (projectId: string) => {
     projects.setActiveProject(projectId);
     const existingConv = chat.conversations.find(
@@ -94,7 +119,6 @@ function App() {
     if (existingConv) {
       chat.switchConversation(existingConv.id);
     } else {
-      // 兜底：兼容旧数据（升级前添加的项目没有对应对话）
       const project = projects.projects.find((p) => p.id === projectId);
       chat.newConversation("chat", projectId, project?.name || "项目对话");
     }
@@ -103,6 +127,7 @@ function App() {
   return (
     <div className={settings.darkMode ? "dark" : ""}>
       <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
+        {/* 主内容区：侧边栏 + 聊天区 */}
         <div className="flex flex-1 min-h-0">
           {/* 侧边栏 */}
           <Sidebar
@@ -113,8 +138,6 @@ function App() {
             onNewConversation={handleNewConversation}
             onSwitchConversation={chat.switchConversation}
             onDeleteConversation={chat.deleteConversation}
-            bridgeStatus={bridge.status}
-            onReconnectBridge={bridge.connect}
             onOpenSettings={() => setShowSettings(true)}
             projects={projects.projects}
             activeProjectId={projects.activeProjectId}
@@ -131,19 +154,23 @@ function App() {
             messages={chat.activeConversation?.messages || []}
             onSendMessage={handleSendMessage}
             isProcessing={chat.isProcessing}
-            bridgeStatus={bridge.status}
-            bridgeError={bridge.error}
             darkMode={settings.darkMode}
             activeConfig={activeConfig}
             modelConfigs={settings.modelConfigs}
             onSwitchModel={setActiveModel}
             chatMode={currentMode}
             project={currentProject}
-            openCodeModels={openCodeModels}
-            openCodeModel={openCodeModel}
-            onSwitchOpenCodeModel={setOpenCodeModel}
+            backendConnected={chat.backendConnected}
+            backendModels={backendModels}
+            pendingToolRequests={chat.pendingToolRequests}
+            onToolConfirm={chat.handleToolConfirm}
+            autoConfirm={chat.autoConfirm}
+            onToggleAutoConfirm={() => chat.setAutoConfirm(!chat.autoConfirm)}
           />
         </div>
+
+        {/* 底部日志面板 — 在 flex 列布局内，不影响上方内容 */}
+        <LogPanel />
       </div>
 
       {/* 设置面板 */}

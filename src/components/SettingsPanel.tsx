@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   X, Key, Globe, Cpu, Eye, EyeOff, Check, RefreshCw,
-  Server, Palette, Trash2, Plus, Edit3, Save, FileText,
+  Server, Palette, Trash2, Plus, Edit3, Save, Loader2,
 } from "lucide-react";
 import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
-import { isTauri } from "../hooks/useTauri";
+import { testConnection } from "../services/api";
 
 interface SettingsPanelProps {
   settings: AppSettings;
@@ -29,7 +29,6 @@ const PROVIDERS: { value: ApiProvider; label: string; endpoint: string; model: s
 const NAV_ITEMS = [
   { key: "api", label: "API 配置", icon: Server },
   { key: "general", label: "通用", icon: Palette },
-  { key: "logs", label: "日志", icon: FileText },
 ];
 
 /**
@@ -50,6 +49,8 @@ function SettingsPanel({
   const [showKey, setShowKey] = useState(false);
   const [activeTab, setActiveTab] = useState("api");
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // ===== 表单状态 =====
   const [formName, setFormName] = useState("");
@@ -128,6 +129,27 @@ function SettingsPanel({
   const handleSwitchModel = (id: string) => {
     onSetActiveModel(id);
     setEditId(undefined);
+  };
+
+  /** 测试当前表单配置的连接（通过后端） */
+  const handleTestConnection = async () => {
+    if (!formEndpoint || !formKey || !formModel) return;
+    setTesting(true);
+    setTestResult(null);
+    const result = await testConnection({
+      endpoint: formEndpoint,
+      apiKey: formKey,
+      model: formModel,
+    });
+    if (result.error) {
+      setTestResult({ ok: false, msg: result.error });
+    } else if (result.data) {
+      setTestResult({
+        ok: result.data.success,
+        msg: result.data.message || result.data.error || "未知结果",
+      });
+    }
+    setTesting(false);
   };
 
   return (
@@ -377,17 +399,38 @@ function SettingsPanel({
 
                   {/* 测试连接 */}
                   <button
-                    onClick={() => {
-                      alert(`测试连接：\n端点: ${formEndpoint}\n模型: ${formModel}`);
-                    }}
+                    onClick={handleTestConnection}
+                    disabled={testing || !formEndpoint || !formKey || !formModel}
                     className="flex items-center justify-center gap-1.5 w-full px-4 py-2 text-sm font-medium
                                rounded-xl border border-border dark:border-border-dark
                                hover:bg-black/[0.03] dark:hover:bg-white/[0.03]
-                               active:scale-[0.98] transition-all duration-150"
+                               active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+                               transition-all duration-150"
                   >
-                    <RefreshCw size={15} />
-                    测试连接
+                    {testing ? (
+                      <><Loader2 size={15} className="animate-spin" /> 测试中...</>
+                    ) : (
+                      <><RefreshCw size={15} /> 测试连接</>
+                    )}
                   </button>
+
+                  {/* 测试结果 */}
+                  {testResult && (
+                    <div
+                      className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm ${
+                        testResult.ok
+                          ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/30"
+                          : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/30"
+                      }`}
+                    >
+                      {testResult.ok ? (
+                        <Check size={15} className="shrink-0" />
+                      ) : (
+                        <X size={15} className="shrink-0" />
+                      )}
+                      <span>{testResult.msg}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -413,11 +456,6 @@ function SettingsPanel({
                   </button>
                 </div>
               )}
-
-              {/* ===== 日志 ===== */}
-              {activeTab === "logs" && (
-                <LogViewer />
-              )}
             </div>
           </div>
 
@@ -436,107 +474,6 @@ function SettingsPanel({
         </div>
       </div>
     </>
-  );
-}
-
-// ==================== 日志查看器 ====================
-
-interface LogEntry {
-  line: string;
-  timestamp: string;
-}
-
-function LogViewer() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const inTauri = isTauri();
-
-  // 轮询日志
-  useEffect(() => {
-    if (!inTauri) return;
-    let mounted = true;
-    const poll = async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const data = await invoke<LogEntry[]>("get_bridge_logs");
-        if (mounted) setLogs(data);
-      } catch (e) {
-        console.warn("获取日志失败:", e);
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => { mounted = false; clearInterval(timer); };
-  }, [inTauri]);
-
-  // 自动滚动到底部
-  useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, autoScroll]);
-
-  const handleClear = () => setLogs([]);
-
-  return (
-    <div className="flex flex-col h-full">
-      {/* 工具栏 */}
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark">
-          {logs.length} 条日志
-          {!inTauri && "（仅 Tauri 环境）"}
-        </span>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-content-tertiary dark:text-content-tertiary-dark cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              className="rounded border-border dark:border-border-dark"
-            />
-            自动滚动
-          </label>
-          <button onClick={handleClear} className="text-xs text-content-tertiary hover:text-red-500 transition-colors">
-            清空
-          </button>
-          <button
-            onClick={() => { const el = scrollRef.current; if (el) { const r = document.createRange(); r.selectNodeContents(el); window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(r); } }}
-            className="text-xs text-content-tertiary hover:text-accent transition-colors"
-          >
-            全选
-          </button>
-        </div>
-      </div>
-
-      {/* 日志列表（可选中的文本，便于复制） */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto bg-black/[0.03] dark:bg-white/[0.03] rounded-xl border border-border dark:border-border-dark font-mono text-[12px] leading-relaxed p-3 min-h-[300px] max-h-[500px] select-text"
-      >
-        {logs.length === 0 ? (
-          <div className="text-center py-8 text-content-tertiary dark:text-content-tertiary-dark">
-            暂无日志
-          </div>
-        ) : (
-          logs.map((entry, i) => (
-            <div key={i} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] px-1 rounded">
-              <span className="text-content-tertiary dark:text-content-tertiary-dark mr-2 select-none">
-                {entry.timestamp}
-              </span>
-              <span className={entry.line.includes("ERROR") || entry.line.includes("ERR]")
-                ? "text-red-500 dark:text-red-400"
-                : entry.line.includes("WARN")
-                ? "text-amber-500 dark:text-amber-400"
-                : "text-content dark:text-content-dark"
-              }>
-                {entry.line}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
   );
 }
 

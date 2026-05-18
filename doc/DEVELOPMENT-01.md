@@ -220,7 +220,73 @@ send_to_bridge_no_wait: ws_stream锁(发消息) → 释放
 #### Rust 后端锁架构（已修复）
 WebSocket 事件循环独占 stream，通过 mpsc channel 接收发送命令，`tokio::select!` 同时处理收发。详见上方修复记录。
 
+### ✅ v0.3.0 已修复
+
+#### Bug：流式输出重叠词 ✅ 已修复 (2026-05-14)
+
+**现象**：UI 显示 "有什么有什么 我可以我可以 帮你帮你"，每个 token 出现两次，相邻拼接。
+
+**根因**：`useBridge.ts` 的 `useEffect` 中 `setupListeners` 是 async 函数（`await import` + `await listen`），但 React cleanup 同步执行。React StrictMode 触发 `挂载→清理→挂载` 时，第一个 `setupListeners` 的 `await` 还没完成，cleanup 就执行了（此时 `unlistenRef` 为空，无监听器可清理）。第一个 `await` 完成后注册的监听器"泄漏"下来，与第二个 `setupListeners` 注册的监听器叠加 → 两个 `bridge-message` 监听器 → 每个 token 被 `appendToConversation` 两次。
+
+**修复**：在 `setupListeners` 中加 `cancelled` 标志，cleanup 时设 `cancelled=true`，每个 `await` 后检查并清理。
+
+**涉及文件**：
+- `src/hooks/useBridge.ts` — 添加 `cancelled` 竞态防护 + 监听器数量日志
+
+**为什么第一次修复失败**：此前尝试相同修复时，同时改了 `ChatMessage.tsx`（加了 `{message.content && (` 条件渲染），导致 content 为空的 AI 消息不渲染，被误认为"UI 无输出"。实际是条件渲染的副作用，不是 cancelled 标志的问题。
+
 ### ❌ 未解决 / 待办
+
+#### ⚠️ 架构笔记（2026-05-14 调试记录，部分已过时）
+
+以下是在调试流式输出重叠词 bug 过程中确认的事实：
+
+1. **POST /session/{id}/message 响应是 JSON，不是 SSE** ✅ 已确认
+   - content-type: `application/json`
+   - SSE 流只能从 `/event` 端点获取
+
+2. **bridge_server.py 使用 `_listen_events` + `/event` + `readline()` 解析 SSE** ✅ 已确认
+   - 直连测试 35 token，零连续重复
+   - 不要改成从 POST 响应体读 token
+
+3. **`经验教训.md` 第 3 条已过时**
+   - 原来说"POST 响应体是 SSE 流"——那是设计假设，实测是 JSON
+   - 已在经验教训 #9 中纠正
+
+4. **`useEffect` async cleanup 竞态 → 双重监听 → token 重复** ✅ 已修复
+   - 根因在 `useBridge.ts`，不在 bridge、不在 Rust、不在 token 拼接
+   - 详见经验教训 #8
+
+5. **前端 `conversations` 闭包过期** ✅ 已修复
+   - `sendMessage` 改用 `conversationsRef` 替代闭包变量
+   - `addMessage` 使用 `activeConversationIdRef` 确保写到正确对话
+
+6. **ChatMessage 条件渲染** ⚠️ 曾导致误判
+   - `{message.content && (` 包裹消息气泡会导致 content 为空时不渲染
+   - 已移除该条件，保持与原始代码一致
+
+1. **POST /session/{id}/message 响应是 JSON，不是 SSE**
+   - content-type: `application/json`
+   - 响应体示例：`{"info":{"parentID":"msg_xxx","role":"assistant",...}`
+   - SSE 流只能从 `/event` 端点获取
+   - **不要**试图从 POST 响应体读 token
+
+2. **bridge_server.py 当前使用 `readline()` 解析 /event SSE**
+   - 不用手写 buffer + `\n\n` 分割
+   - 直连测试证明输出干净无重复
+
+3. **`经验教训.md` 第 3 条关于 "POST 响应体是 SSE 流" 的说法是错的**
+   - 那是设计假设，不是实测结论
+   - 已在经验教训第 8 条中纠正
+
+4. **Python `__pycache__` 可能导致旧代码运行**
+   - 改了 `.py` 但 `.pyc` mtime 更新 → Python 优先加载缓存
+   - 务必删除 `bridge/__pycache__/` 后重启
+
+5. **前端 `conversations` 闭包过期已修复**
+   - `sendMessage` 改用 `conversationsRef` 替代闭包变量
+   - `activeModeRef` 替代 `activeConversation?.mode`
+   - 依赖数组不再包含 `activeConversation?.mode`
 
 #### 高优先级
 - [ ] 桥接服务与 Tauri 自动联动

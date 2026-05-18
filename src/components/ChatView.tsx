@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState } from "react";
-import { Sparkles, WifiOff, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
+import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
-import { Message, ModelConfig, ChatMode, Project } from "../types";
+import { ToolConfirmBanner } from "./ToolConfirmBanner";
+import { Message, ModelConfig, ChatMode, Project, ToolRequestData } from "../types";
 import { isTauri } from "../hooks/useTauri";
 
 interface ChatViewProps {
@@ -10,8 +11,6 @@ interface ChatViewProps {
   messages: Message[];
   onSendMessage: (content: string) => void;
   isProcessing: boolean;
-  bridgeStatus: string;
-  bridgeError: string;
   darkMode?: boolean;
   activeConfig?: ModelConfig;
   modelConfigs?: ModelConfig[];
@@ -20,12 +19,18 @@ interface ChatViewProps {
   chatMode?: ChatMode;
   /** 当前关联的项目 */
   project?: Project | null;
-  /** OpenCode 可用模型列表 */
-  openCodeModels?: { id: string; name: string; provider?: string }[];
-  /** 当前选中的 OpenCode 模型 */
-  openCodeModel?: string;
-  /** 切换 OpenCode 模型 */
-  onSwitchOpenCodeModel?: (model: string) => void;
+  /** 后端连接状态 */
+  backendConnected?: boolean;
+  /** 后端可用模型列表 */
+  backendModels?: { id: string; name: string }[];
+  /** 待确认的工具请求 */
+  pendingToolRequests?: ToolRequestData[];
+  /** 确认/拒绝工具执行 */
+  onToolConfirm?: (toolCallId: string, approved: boolean, reason?: string) => void;
+  /** 自动确认模式 */
+  autoConfirm?: boolean;
+  /** 切换自动确认 */
+  onToggleAutoConfirm?: () => void;
 }
 
 function TypingIndicator() {
@@ -34,17 +39,22 @@ function TypingIndicator() {
       <div className="shrink-0 w-7 h-7 rounded-xl bg-content dark:bg-content-dark flex items-center justify-center">
         <Sparkles size={14} className="text-surface dark:text-surface-dark" />
       </div>
-      <div className="flex items-center gap-1.5 px-4 py-3.5 rounded-2xl bg-message-ai dark:bg-message-ai-dark">
-        {[0, 150, 300].map((delay) => (
-          <div
-            key={delay}
-            className="w-1.5 h-1.5 rounded-full bg-content-tertiary dark:bg-content-tertiary-dark"
-            style={{
-              animation: `pulse-dot 1.4s ease-in-out infinite`,
-              animationDelay: `${delay}ms`,
-            }}
-          />
-        ))}
+      <div className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-message-ai dark:bg-message-ai-dark">
+        <div className="flex items-center gap-1">
+          {[0, 200, 400].map((delay) => (
+            <div
+              key={delay}
+              className="w-2 h-2 rounded-full bg-accent/60"
+              style={{
+                animation: `typing-bounce 1.2s ease-in-out infinite`,
+                animationDelay: `${delay}ms`,
+              }}
+            />
+          ))}
+        </div>
+        <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark ml-1">
+          AI 思考中...
+        </span>
       </div>
     </div>
   );
@@ -53,7 +63,8 @@ function TypingIndicator() {
 function getStreamingIndex(messages: Message[], isProcessing: boolean): number {
   if (!isProcessing || messages.length === 0) return -1;
   const last = messages[messages.length - 1];
-  if (last.role === "assistant" && last.content.length > 0) {
+  // 只要有内容（文本或思考）就显示 ChatMessage，让思考内容可见
+  if (last.role === "assistant" && (last.content.length > 0 || last.thinking)) {
     return messages.length - 1;
   }
   return -1;
@@ -118,23 +129,21 @@ function ChatView({
   messages,
   onSendMessage,
   isProcessing,
-  bridgeStatus,
-  bridgeError,
   darkMode = true,
   activeConfig,
   modelConfigs,
   onSwitchModel,
   chatMode = "chat",
   project,
-  openCodeModels,
-  openCodeModel,
-  onSwitchOpenCodeModel,
+  backendConnected = false,
+  backendModels,
+  pendingToolRequests = [],
+  onToolConfirm,
+  autoConfirm = false,
+  onToggleAutoConfirm,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const isOnline = bridgeStatus === "connected";
-  const isConnecting = bridgeStatus === "connecting";
   const isEmpty = messages.length === 0;
-  const isOffline = !isOnline && !isConnecting;
 
   const streamingIdx = getStreamingIndex(messages, isProcessing);
   const shouldShowTyping = isProcessing && streamingIdx === -1;
@@ -171,8 +180,24 @@ function ChatView({
           )}
         </div>
 
-        {/* 右侧：窗口控制按钮 */}
-        <WindowControls />
+        {/* 右侧：后端状态 + 窗口控制按钮 */}
+        <div className="flex items-center gap-2">
+          {/* 后端连接状态 */}
+          <div
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium transition-all duration-150 ${
+              backendConnected
+                ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+            }`}
+            title={backendConnected ? "已连接后端服务" : "未连接后端服务，使用模拟模式"}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              backendConnected ? "bg-emerald-500" : "bg-amber-500"
+            }`} />
+            <span>{backendConnected ? "已连接" : "模拟"}</span>
+          </div>
+          <WindowControls />
+        </div>
       </div>
 
       {/* ===== 会话信息栏（项目对话但没有目录时的提示） ===== */}
@@ -208,11 +233,6 @@ function ChatView({
                 {chatMode === "code"
                   ? "在当前项目目录中执行代码操作。输入你的需求，我会帮你处理。"
                   : "输入你的问题，Ripple 将为你提供 AI 辅助编程帮助。"}
-                {isOffline && (
-                  <span className="block mt-1 text-amber-500 dark:text-amber-400">
-                    ℹ️ 当前处于离线模拟模式
-                  </span>
-                )}
                 {chatMode === "code" && project && !project.directory && (
                   <span className="block mt-1 text-blue-500 dark:text-blue-400">
                     ℹ️ 请先设置项目目录以启用完整功能
@@ -270,19 +290,42 @@ function ChatView({
         </div>
       </div>
 
-      {isOffline && (
-        <div className="mx-4 mb-2">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/30">
-            <WifiOff size={14} className="text-amber-500 dark:text-amber-400 shrink-0" />
-            <span className="text-sm text-amber-600 dark:text-amber-400">
-              离线模式 · 可在侧边栏连接桥接服务
-            </span>
-          </div>
-        </div>
-      )}
-
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
+          {/* 工具确认横幅 — 输入框上方靠右 */}
+          {pendingToolRequests.length > 0 && onToolConfirm && !autoConfirm && (
+            <div className="flex justify-end mb-2">
+              <ToolConfirmBanner
+                requests={pendingToolRequests}
+                onConfirm={onToolConfirm}
+              />
+            </div>
+          )}
+          {/* Auto 确认开关 — 弹窗时隐藏 */}
+          {!(pendingToolRequests.length > 0 && !autoConfirm) && (
+          <div className="flex justify-end mb-1.5">
+            <button
+              onClick={onToggleAutoConfirm}
+              title={autoConfirm ? "Auto 模式：工具自动执行，无需确认" : "手动模式：每次工具执行需要用户确认"}
+              className={`group relative flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-all duration-200 ${
+                autoConfirm
+                  ? "bg-accent/15 text-accent hover:bg-accent/25"
+                  : "bg-message-ai dark:bg-message-ai-dark text-content-tertiary hover:text-content-secondary"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full transition-colors duration-200 ${
+                autoConfirm ? "bg-accent shadow-[0_0_4px_rgba(217,119,87,0.5)]" : "bg-content-tertiary"
+              }`} />
+              auto
+              {/* Tooltip */}
+              <span className="absolute -top-8 right-0 px-2 py-1 rounded bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[10px] text-content-secondary whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                {autoConfirm
+                  ? "已开启 Auto，工具将自动执行"
+                  : "点击开启 Auto 模式，工具将自动执行"}
+              </span>
+            </button>
+          </div>
+          )}
           <MessageInput
             onSend={onSendMessage}
             disabled={isProcessing}
@@ -291,9 +334,6 @@ function ChatView({
             onSwitchModel={onSwitchModel}
             chatMode={chatMode}
             hasProject={!!project}
-            openCodeModels={openCodeModels}
-            openCodeModel={openCodeModel}
-            onSwitchOpenCodeModel={onSwitchOpenCodeModel}
             placeholder={
               isProcessing
                 ? "AI 正在回复..."
@@ -314,16 +354,6 @@ function ChatView({
             {chatMode === "code" && (
               <span className="text-xs text-amber-500 dark:text-amber-400 font-medium">
                 · 开发模式
-              </span>
-            )}
-            {isOffline && (
-              <span className="text-xs text-amber-500 dark:text-amber-400 font-medium">
-                · 模拟模式
-              </span>
-            )}
-            {isOnline && (
-              <span className="text-xs text-emerald-500 dark:text-emerald-400 font-medium">
-                · 在线模式
               </span>
             )}
           </div>

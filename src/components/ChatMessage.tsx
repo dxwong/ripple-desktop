@@ -1,9 +1,14 @@
-import { memo } from "react";
-import { User, Sparkles } from "lucide-react";
+import { memo, useState, useEffect } from "react";
+import { User, Sparkles, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
 import CodeEditor from "./CodeEditor";
+
+// DEBUG: 追踪消息渲染
+const renderLog = (id: string, role: string, contentLen: number, thinkingLen: number) => {
+  console.log(`[ChatMessage] render id=${id} role=${role} content_len=${contentLen} thinking_len=${thinkingLen}`);
+};
 
 interface ChatMessageProps {
   message: Message;
@@ -69,6 +74,17 @@ function extractCodeInfo(children: React.ReactNode): { code: string; language?: 
  */
 const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true }: ChatMessageProps) {
   const isUser = message.role === "user";
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const hasThinking = !!(message.thinking);
+
+  // 流式思考时自动展开
+  useEffect(() => {
+    if (isStreaming && hasThinking && !thinkingExpanded) {
+      setThinkingExpanded(true);
+    }
+  }, [isStreaming, hasThinking, message.thinking]);
+
+  renderLog(message.id, message.role, message.content.length, (message.thinking || "").length);
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -94,6 +110,28 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
               AI 助手
             </span>
+          </div>
+        )}
+
+        {/* 思考/推理过程（可折叠） */}
+        {!isUser && hasThinking && (
+          <div className="mb-2">
+            <button
+              onClick={() => setThinkingExpanded(!thinkingExpanded)}
+              className="flex items-center gap-1.5 text-xs text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary dark:hover:text-content-secondary-dark transition-colors px-1"
+            >
+              {thinkingExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <Brain size={12} />
+              <span>思考过程</span>
+              {isStreaming && message.thinking && !message.content && (
+                <span className="inline-block w-[2px] h-[12px] bg-accent/70 animate-pulse align-middle ml-0.5" />
+              )}
+            </button>
+            {thinkingExpanded && (
+              <div className="mt-1.5 rounded-xl px-3 py-2 bg-message-code/50 dark:bg-message-code-dark/50 border border-border/50 dark:border-border-dark/50 text-xs text-content-tertiary dark:text-content-tertiary-dark whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                {message.thinking}
+              </div>
+            )}
           </div>
         )}
 

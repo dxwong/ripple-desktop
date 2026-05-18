@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback } from "react";
-import { Message, Conversation, ChatMode } from "../types";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData } from "../types";
+import { SSEClient } from "../services/sse";
+import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -12,7 +14,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "1. **技术咨询** — 编程问题解答\n",
         "2. **创意生成** — 写作、构思建议\n",
         "3. **知识问答** — 科普知识讲解\n\n",
-        "> 提示：当前为**离线模拟模式**，连接桥接服务后可获得真实 AI 响应。\n",
+        "> 提示：当前为**纯前端模拟模式**，连接后端 AI 服务后可获得真实响应。\n",
       ],
       code: [
         "这是一个模拟的编程开发回复。\n\n",
@@ -20,7 +22,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "1. **代码分析** — 理解复杂代码逻辑\n",
         "2. **代码生成** — 根据需求生成代码\n",
         "3. **调试帮助** — 排查 Bug\n\n",
-        "> 提示：当前为**离线模拟模式**，连接桥接服务后可使用 OpenCode CLI。\n",
+        "> 提示：当前为**纯前端模拟模式**，连接后端 AI 服务后可获得真实响应。\n",
       ],
     },
     code: {
@@ -66,7 +68,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
         "const users = await fetchUsers();\n",
         "console.log(users);\n",
         "```\n\n",
-        "> 提示：连接桥接服务后，我可以直接在你的项目目录中执行代码。\n",
+        "> 提示：连接后端 AI 服务后，我可以直接在你的项目目录中执行代码分析。\n",
       ],
     },
   };
@@ -85,26 +87,35 @@ export function useStreamingChat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(false);
+  const [pendingToolRequests, setPendingToolRequests] = useState<ToolRequestData[]>([]);
+  const [autoConfirm, setAutoConfirm] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const sseClientRef = useRef<SSEClient | null>(null);
 
-  // 用 ref 跟踪 activeConversationId，避免闭包捕获过期值
+  // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
+  const activeModeRef = useRef(activeConversation?.mode || "chat");
+  activeModeRef.current = activeConversation?.mode || "chat";
 
-  // ===== 追加到指定对话（显式传 convId，避免闭包过期） =====
+  // ===== 检查后端连接状态 =====
+  const checkBackendConnection = useCallback(async () => {
+    const ok = await checkHealth();
+    setBackendConnected(ok);
+    return ok;
+  }, []);
+
+  // ===== 追加到指定对话 =====
   const appendToConversation = useCallback((convId: string, chunk: string) => {
-    if (!convId) {
-      console.warn("[appendToConversation] convId 为空");
-      return;
-    }
-    if (!chunk) return;
-    let found = false;
+    if (!convId || !chunk) return;
     setConversations((prev) => {
       const next = prev.map((conv) => {
         if (conv.id !== convId) return conv;
-        found = true;
         const msgs = [...conv.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === "assistant") {
@@ -114,21 +125,39 @@ export function useStreamingChat() {
             id: genId(),
             role: "assistant",
             content: chunk,
+            thinking: "",
             timestamp: Date.now(),
           });
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
       });
-      if (!found) console.warn("[appendToConversation] 未找到对话:", convId);
       return next;
     });
   }, []);
 
-  // ===== 追加到当前活跃对话（由 ref 决定目标对话） =====
-  const appendToLastAssistant = useCallback((chunk: string) => {
-    const convId = activeConversationIdRef.current;
-    if (!convId) return;
-    appendToConversation(convId, chunk);
+  // ===== 追加思考内容 =====
+  const appendThinkingToConversation = useCallback((convId: string, chunk: string) => {
+    if (!convId || !chunk) return;
+    setConversations((prev) => {
+      const next = prev.map((conv) => {
+        if (conv.id !== convId) return conv;
+        const msgs = [...conv.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          msgs[msgs.length - 1] = { ...last, thinking: (last.thinking || "") + chunk };
+        } else {
+          msgs.push({
+            id: genId(),
+            role: "assistant",
+            content: "",
+            thinking: chunk,
+            timestamp: Date.now(),
+          });
+        }
+        return { ...conv, messages: msgs, updatedAt: Date.now() };
+      });
+      return next;
+    });
   }, []);
 
   // ===== 添加用户/助手消息 =====
@@ -136,7 +165,7 @@ export function useStreamingChat() {
     (role: "user" | "assistant", content: string) => {
       const convId = activeConversationIdRef.current;
       if (!convId) return null;
-      const msg: Message = { id: genId(), role, content, timestamp: Date.now() };
+      const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now() };
       setConversations((prev) =>
         prev.map((conv) =>
           conv.id === convId
@@ -154,19 +183,16 @@ export function useStreamingChat() {
       );
       return msg;
     },
-    [] // 使用 ref 无依赖
+    []
   );
 
-  // ===== 发送消息（流式优先，同步降级） =====
+  // ===== 发送消息 =====
   const sendMessage = useCallback(
     async (
       content: string,
-      mode: "simulate" | "bridge" = "simulate",
-      bridgeSend?: (type: string, data: any) => Promise<any>,
-      bridgeSendStreaming?: (type: string, data: any) => Promise<void>,
-      bridgeSetCallback?: (callback: ((msg: any) => void) | null) => void,
-      projectDirectory?: string,
-      openCodeModel?: string
+      useBackend = false,
+      modelConfig?: ModelConfig,
+      cwd?: string
     ) => {
       if (isProcessing) return;
       setIsProcessing(true);
@@ -175,146 +201,105 @@ export function useStreamingChat() {
       abortRef.current = abort;
 
       const targetConvId = activeConversationIdRef.current;
-      console.log("[sendMessage] targetConvId:", targetConvId, "conversations:", conversations.length);
       if (!targetConvId) {
         console.warn("[sendMessage] 没有活跃对话，跳过发送");
         setIsProcessing(false);
         return;
       }
 
-      // 确认目标对话存在
-      const convExists = conversations.some(c => c.id === targetConvId);
-      console.log("[sendMessage] 目标对话存在:", convExists);
-
       // 先添加用户消息
-      const msg = addMessage("user", content);
-      console.log("[sendMessage] addMessage 结果:", msg ? msg.id : "null");
+      addMessage("user", content);
 
       try {
-        // ===== 流式路径（推荐）：OC 模型 + 流式桥接就绪 =====
-        if (openCodeModel && bridgeSendStreaming && bridgeSetCallback) {
+        // ===== 后端模式（Ripple-Agent SSE） =====
+        if (useBackend) {
+          const sseClient = new SSEClient();
+          sseClientRef.current = sseClient;
+
           await new Promise<void>((resolve, reject) => {
-            let settled = false;
-            const done = () => { settled = true; };
-            // 5 分钟超时，防止流永远不结束
-            const timer = setTimeout(() => {
-              if (!settled) {
-                bridgeSetCallback(null);
-                reject(new Error("OpenCode 执行超时（5分钟）"));
+            let hasContent = false;
+
+            sseClient.connect(
+              {
+                message: content,
+                sessionId: targetConvId,
+                modelId: modelConfig?.model || "deepseek-v4-flash",
+                model: modelConfig?.model,
+                endpoint: modelConfig?.endpoint,
+                apiKey: modelConfig?.apiKey,
+                cwd,
+              },
+              {
+                onText: (text) => {
+                  hasContent = true;
+                  appendToConversation(targetConvId, text);
+                },
+                onThinking: (text) => {
+                  appendThinkingToConversation(targetConvId, text);
+                },
+                onToolStart: (name) => {
+                  appendToConversation(
+                    targetConvId,
+                    `\n> 🔧 ${name}...\n`
+                  );
+                },
+                onToolEnd: (name, isError) => {
+                  appendToConversation(
+                    targetConvId,
+                    isError ? `> ❌ ${name} 用户拒绝\n` : `> ✅ ${name} 完成\n`
+                  );
+                },
+                onToolRequest: (data) => {
+                  // 添加到待确认队列
+                  setPendingToolRequests((prev) => [...prev, data]);
+                },
+                onDone: () => {
+                  resolve();
+                },
+                onError: (error) => {
+                  if (!hasContent) {
+                    appendToConversation(
+                      targetConvId,
+                      `\n\n> ❌ **错误**: ${error}\n\n`
+                    );
+                  }
+                  reject(new Error(error));
+                },
               }
-            }, 300000);
-
-            // 先注册回调，再发送（避免竞态）
-            bridgeSetCallback((msg: any) => {
-              // keepalive 和其他非终态消息直接忽略
-              if (msg.status === "keepalive") return;
-              if (settled) return; // 已结束，忽略后续消息
-              console.log("[stream callback] status:", msg.status, "targetConvId:", targetConvId);
-
-              if (msg.status === "stream") {
-                const chunk = msg.data?.chunk || "";
-                if (chunk) appendToConversation(targetConvId, chunk);
-              } else if (msg.status === "ok") {
-                clearTimeout(timer);
-                bridgeSetCallback(null);
-                done();
-                resolve();
-              } else if (msg.status === "error") {
-                clearTimeout(timer);
-                bridgeSetCallback(null);
-                done();
-                reject(new Error(msg.data?.error || "执行失败"));
-              }
-            });
-
-            const payload: any = {
-              command: content,
-              cwd: projectDirectory,
-              model: openCodeModel,
-            };
-            bridgeSendStreaming("execute_opencode_streaming", payload).catch((e: any) => {
-              clearTimeout(timer);
-              bridgeSetCallback(null);
-              done();
-              reject(e);
-            });
+            );
           });
+
           return;
         }
 
-        // ===== 同步路径（降级）：OC 模型 + 同步桥接 =====
-        if (openCodeModel && bridgeSend) {
-          try {
-            const payload: any = {
-              command: content,
-              cwd: projectDirectory,
-              model: openCodeModel,
-            };
-            const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout
-              || response?.stderr
-              || "（无输出）";
-            appendToConversation(targetConvId, result);
-          } catch (e: any) {
-            const errMsg = e?.message || "桥接服务不可用";
-            console.error("[sendMessage] OpenCode 执行错误:", errMsg);
-            appendToConversation(targetConvId, `**OpenCode 执行错误**: ${errMsg}`);
-          }
-          return;
+        // ===== 模拟模式（仅开发测试用） =====
+        const currentMode = activeModeRef.current;
+        let assistantContent = "";
+        for await (const chunk of simulateStreamResponse(content, currentMode)) {
+          if (abort.signal.aborted) break;
+          assistantContent += chunk;
+          appendToConversation(targetConvId, chunk);
         }
-
-        // ===== OC 模型但桥接未连接 → 提示 =====
-        if (openCodeModel && !bridgeSend && !bridgeSendStreaming) {
-          appendToConversation(targetConvId, "> ⚠️ **需要连接桥接服务**才能通过 OpenCode 执行。\n\n");
-          appendToConversation(targetConvId, "请先连接桥接服务，并确保 Python 桥接已启动 (`npm run bridge`)\n");
-          return;
-        }
-
-        // ===== 模拟模式 =====
-        if (mode === "simulate" || !bridgeSend) {
-          const currentMode = activeConversation?.mode || "chat";
-          let assistantContent = "";
-          for await (const chunk of simulateStreamResponse(content, currentMode)) {
-            if (abort.signal.aborted) break;
-            assistantContent += chunk;
-            appendToConversation(targetConvId, chunk);
-          }
-          if (!abort.signal.aborted && !assistantContent) {
-            appendToConversation(targetConvId, "（模拟回复为空）");
-          }
-          return;
-        }
-
-        // ===== 普通桥接模式（无 OC 模型） =====
-        if (bridgeSend) {
-          try {
-            const payload: any = { command: content, cwd: projectDirectory };
-            const response = await bridgeSend("execute_opencode", payload);
-            const result = response?.stdout
-              || response?.stderr
-              || "（无输出）";
-            appendToConversation(targetConvId, result);
-          } catch (e: any) {
-            const errMsg = e?.message || "请求失败";
-            console.error("[sendMessage] 桥接错误:", errMsg);
-            appendToConversation(targetConvId, `**错误**: ${errMsg}`);
-          }
-          return;
+        if (!abort.signal.aborted && !assistantContent) {
+          appendToConversation(targetConvId, "（模拟回复为空）");
         }
       } finally {
         setIsProcessing(false);
         abortRef.current = null;
+        sseClientRef.current = null;
       }
     },
-    [isProcessing, activeConversation?.mode, appendToConversation, addMessage]
+    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage]
   );
 
+  // ===== 停止生成 =====
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
+    sseClientRef.current?.abort();
     setIsProcessing(false);
   }, []);
 
-  /** 新建对话 */
+  // ===== 新建对话 =====
   const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string) => {
     const newConv: Conversation = {
       id: genId(),
@@ -330,10 +315,20 @@ export function useStreamingChat() {
     return newConv;
   }, []);
 
+  // ===== 切换对话 =====
   const switchConversation = useCallback((id: string) => {
+    // 切换对话时，如果当前有进行中的请求，停止它并清理状态
+    if (isProcessing) {
+      abortRef.current?.abort();
+      sseClientRef.current?.abort();
+      setIsProcessing(false);
+    }
+    // 清理当前对话的待确认工具请求
+    setPendingToolRequests([]);
     setActiveConversationId(id);
-  }, []);
+  }, [isProcessing]);
 
+  // ===== 删除对话 =====
   const deleteConversation = useCallback(
     (id: string) => {
       setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -345,17 +340,50 @@ export function useStreamingChat() {
     [activeConversationId, conversations]
   );
 
+  // ===== 确认或拒绝工具执行 =====
+  const handleToolConfirm = useCallback(
+    async (toolCallId: string, approved: boolean, reason?: string) => {
+      const sessionId = activeConversationIdRef.current;
+      if (!sessionId) return;
+
+      const result = await confirmToolCall(sessionId, toolCallId, approved, reason);
+      if (result.error) {
+        console.error("[handleToolConfirm] 失败:", result.error);
+      }
+
+      // 从待确认队列中移除
+      setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+    },
+    []
+  );
+
+  // ===== Auto 确认：队列变化时自动批准 =====
+  useEffect(() => {
+    if (!autoConfirm || pendingToolRequests.length === 0) return;
+    const req = pendingToolRequests[0];
+    // 延迟一小段时间再确认，让 UI 有时间反应
+    const timer = setTimeout(() => {
+      handleToolConfirm(req.toolCallId, true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [pendingToolRequests, autoConfirm, handleToolConfirm]);
+
   return {
     conversations,
     activeConversation,
     activeConversationId,
     isProcessing,
+    backendConnected,
+    pendingToolRequests,
+    autoConfirm,
+    setAutoConfirm,
     sendMessage,
     stopStreaming,
     addMessage,
-    appendToLastAssistant,
     newConversation,
     switchConversation,
     deleteConversation,
+    checkBackendConnection,
+    handleToolConfirm,
   };
 }
