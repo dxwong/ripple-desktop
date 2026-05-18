@@ -7,6 +7,16 @@ export type ApiProvider = "openai" | "custom";
 /** 聊天模式 */
 export type ChatMode = "chat" | "code";
 
+/** 权限模式 */
+export type PermissionMode = "auto" | "confirm" | "read-only";
+
+/** 权限模式选项 */
+export const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
+  { value: "auto", label: "默认允许", description: "信任模式：所有工具自动执行，无需确认" },
+  { value: "confirm", label: "每次确认", description: "安全模式：高风险操作需要用户确认" },
+  { value: "read-only", label: "只读模式", description: "仅允许读取文件，禁止写操作" },
+];
+
 /** 项目类型 */
 export interface Project {
   id: string;
@@ -62,6 +72,8 @@ export interface AppSettings {
   /** 已保存的所有模型配置列表 */
   modelConfigs: ModelConfig[];
   darkMode: boolean;
+  /** 权限模式：auto（自动执行）、confirm（每次确认）、read-only（只读） */
+  permissionMode: PermissionMode;
   // 以下为兼容字段（当前激活配置的快捷引用）
   apiProvider: ApiProvider;
   apiEndpoint: string;

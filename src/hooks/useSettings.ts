@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   apiKey: "",
   modelName: "gpt-4o",
   darkMode: false,
+  permissionMode: "confirm",
 };
 
 /** 设置存储键名 */
