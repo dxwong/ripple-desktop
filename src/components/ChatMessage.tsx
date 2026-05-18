@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from "react";
-import { User, Sparkles, Brain, ChevronDown, ChevronRight } from "lucide-react";
+import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
@@ -18,6 +18,8 @@ interface ChatMessageProps {
   darkMode?: boolean;
   /** EditBlock 应用成功回调 */
   onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
+  /** 重新生成回调 */
+  onRegenerate?: () => void;
 }
 
 /** 从 className 中提取语言 */
@@ -76,12 +78,14 @@ function extractCodeInfo(children: React.ReactNode): { code: string; language?: 
  * - 流式中代码块用轻量 <pre>，完成后用 Monaco Editor
  * - 所有代码内容从 ReactMarkdown 的 pre children 正确提取
  */
-const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply, onRegenerate }: ChatMessageProps) {
   const isUser = message.role === "user";
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const hasThinking = !!(message.thinking);
   /** 当前显示的内容（EditBlock 应用后会被清理） */
   const [displayContent, setDisplayContent] = useState(message.content);
+  /** 复制状态 */
+  const [copied, setCopied] = useState(false);
 
   // 同步外部内容变化
   useEffect(() => {
@@ -94,6 +98,17 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
       setThinkingExpanded(true);
     }
   }, [isStreaming, hasThinking, message.thinking]);
+
+  // 复制消息内容
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  }, [message.content]);
 
   renderLog(message.id, message.role, message.content.length, (message.thinking || "").length);
 
@@ -207,6 +222,34 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="inline-block w-[2px] h-[14px] ml-0.5 bg-accent/70 animate-pulse align-text-bottom" />
           )}
         </div>
+
+        {/* 操作按钮（非流式时在内容右下角显示） */}
+        {!isUser && !isStreaming && (
+          <div className="flex justify-end gap-1 mt-1.5 mr-1">
+            {/* 重新生成按钮 */}
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+                title="重新生成"
+              >
+                <RefreshCw size={14} />
+              </button>
+            )}
+            {/* 复制按钮（只保留图标，放右边） */}
+            <button
+              onClick={handleCopy}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+              title="复制内容"
+            >
+              {copied ? (
+                <Check size={14} className="text-green-500" />
+              ) : (
+                <Copy size={14} />
+              )}
+            </button>
+          </div>
+        )}
 
         {/* 工具调用卡片（结构化展示） */}
         {!isUser && message.toolCalls && message.toolCalls.length > 0 && (

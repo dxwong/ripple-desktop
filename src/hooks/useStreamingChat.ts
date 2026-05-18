@@ -347,11 +347,30 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   );
 
   // ===== 停止生成 =====
-  const stopStreaming = useCallback(() => {
+  const stopStreaming = useCallback(async () => {
     abortRef.current?.abort();
     sseClientRef.current?.abort();
+    
+    // 调用后端 abort 端点，清理后端状态
+    const targetConvId = activeConversationIdRef.current;
+    if (targetConvId && backendConnected) {
+      try {
+        await fetch('http://localhost:3002/api/chat/abort', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            sessionId: targetConvId, 
+            reason: 'User clicked stop button' 
+          }),
+        });
+        console.log(`[stopStreaming] Called backend abort for session ${targetConvId}`);
+      } catch (err) {
+        console.warn('[stopStreaming] Failed to call backend abort:', err);
+      }
+    }
+    
     setIsProcessing(false);
-  }, []);
+  }, [backendConnected]);
 
   // ===== 新建对话 =====
   const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string) => {
