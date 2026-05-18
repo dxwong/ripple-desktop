@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
+import FileTree from "./components/FileTree";
+import FilePreview from "./components/FilePreview";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 import { useStreamingChat } from "./hooks/useStreamingChat";
@@ -15,6 +17,9 @@ import { isTauri } from "./hooks/useTauri";
 function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [backendModels, setBackendModels] = useState<{ id: string; name: string }[]>([]);
+  // 文件树状态
+  const [fileTreeExpanded, setFileTreeExpanded] = useState(true);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const {
     settings,
     updateSettings,
@@ -127,9 +132,9 @@ function App() {
   return (
     <div className={settings.darkMode ? "dark" : ""}>
       <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
-        {/* 主内容区：侧边栏 + 聊天区 */}
+        {/* 主内容区：侧边栏 + 聊天区 + 文件树 */}
         <div className="flex flex-1 min-h-0">
-          {/* 侧边栏 */}
+          {/* 左侧边栏 */}
           <Sidebar
             darkMode={settings.darkMode}
             onToggleDarkMode={() => updateSettings({ darkMode: !settings.darkMode })}
@@ -148,25 +153,47 @@ function App() {
             onPickFolder={pickFolder}
           />
 
-          {/* 聊天区 */}
-          <ChatView
-            conversationId={chat.activeConversationId}
-            messages={chat.activeConversation?.messages || []}
-            onSendMessage={handleSendMessage}
-            isProcessing={chat.isProcessing}
-            darkMode={settings.darkMode}
-            activeConfig={activeConfig}
-            modelConfigs={settings.modelConfigs}
-            onSwitchModel={setActiveModel}
-            chatMode={currentMode}
-            project={currentProject}
-            backendConnected={chat.backendConnected}
-            backendModels={backendModels}
-            pendingToolRequests={chat.pendingToolRequests}
-            onToolConfirm={chat.handleToolConfirm}
-            autoConfirm={chat.autoConfirm}
-            onToggleAutoConfirm={() => chat.setAutoConfirm(!chat.autoConfirm)}
-          />
+          {/* 中间：聊天区 */}
+          <div className="flex-1 flex min-h-0">
+            <ChatView
+              conversationId={chat.activeConversationId}
+              messages={chat.activeConversation?.messages || []}
+              onSendMessage={handleSendMessage}
+              isProcessing={chat.isProcessing}
+              darkMode={settings.darkMode}
+              activeConfig={activeConfig}
+              modelConfigs={settings.modelConfigs}
+              onSwitchModel={setActiveModel}
+              chatMode={currentMode}
+              project={currentProject}
+              backendConnected={chat.backendConnected}
+              backendModels={backendModels}
+              pendingToolRequests={chat.pendingToolRequests}
+              onToolConfirm={chat.handleToolConfirm}
+              autoConfirm={chat.autoConfirm}
+              onToggleAutoConfirm={() => chat.setAutoConfirm(!chat.autoConfirm)}
+            />
+
+            {/* 右侧：文件树 + 文件预览（只有项目模式才显示） */}
+            {currentProject && (
+              <div className="flex">
+                <FileTree
+                  directory={currentProject?.directory || ""}
+                  onFileClick={setSelectedFilePath}
+                  onClose={() => setFileTreeExpanded(false)}
+                  isExpanded={fileTreeExpanded}
+                  onToggleExpand={() => setFileTreeExpanded(!fileTreeExpanded)}
+                  showPanel={!!currentProject}
+                />
+                
+                {/* 文件预览面板 */}
+                <FilePreview
+                  filePath={selectedFilePath}
+                  onClose={() => setSelectedFilePath(null)}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         {/* 底部日志面板 — 在 flex 列布局内，不影响上方内容 */}
