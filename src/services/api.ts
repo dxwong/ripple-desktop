@@ -102,7 +102,7 @@ export async function fetchSession(
  */
 export async function saveSession(
   id: string,
-  data: { title?: string; model?: string; messages?: unknown[] }
+  data: { title?: string; model?: string; messages?: unknown[]; cwd?: string }
 ): Promise<ApiResponse<{ success: boolean }>> {
   return request(`/api/sessions/${id}`, {
     method: "POST",

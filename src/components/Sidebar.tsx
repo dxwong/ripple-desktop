@@ -119,7 +119,7 @@ function Sidebar({
   };
 
   return (
-    <aside className="w-72 flex flex-col bg-surface-secondary dark:bg-surface-secondary-dark border-r border-border dark:border-border-dark shrink-0">
+    <aside className="w-72 min-w-[18rem] flex flex-col bg-surface-secondary dark:bg-surface-secondary-dark border-r border-border dark:border-border-dark shrink-0">
       {/* ===== 顶部区域：Logo + 搜索 + 新建对话（窗口拖拽区） ===== */}
       <div className="titlebar-drag p-3 pb-2 space-y-2.5">
         <div className="titlebar-no-drag flex items-center gap-2">
@@ -189,7 +189,7 @@ function Sidebar({
         </button>
         {/* 项目列表内容 — 可折叠 */}
         {!projectsCollapsed && (
-        <div className="px-2 pb-2 max-h-[40vh] overflow-y-auto">
+        <div className="px-2 pb-2 max-h-[40vh] overflow-y-auto min-w-0">
           {projects.length === 0 ? (
             <div className="text-center py-4">
               <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark">暂无项目</p>
@@ -209,7 +209,7 @@ function Sidebar({
                     <Code size={14} className={`shrink-0 ${
                       project.id === activeProjectId ? "opacity-100" : "opacity-60"
                     }`} />
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 overflow-hidden">
                       <div className="truncate">{project.name}</div>
                       {project.directory && (
                         <div className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark truncate">
@@ -236,7 +236,7 @@ function Sidebar({
       </div>
 
       {/* ===== 下半部分：对话列表 ===== */}
-      <div className="flex-1 overflow-y-auto border-t border-border dark:border-border-dark">
+      <div className="flex-1 overflow-y-auto border-t border-border dark:border-border-dark min-w-0">
         <div className="px-3 py-2 flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <MessageSquare size={12} className="text-content-tertiary dark:text-content-tertiary-dark" />

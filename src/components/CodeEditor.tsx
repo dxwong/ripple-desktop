@@ -145,7 +145,7 @@ function CodeEditor({
   return (
     <div
       className={`my-3 rounded-xl overflow-hidden border border-border dark:border-border-dark
-                   bg-message-code dark:bg-message-code-dark transition-all duration-200`}
+                   bg-message-code dark:bg-message-code-dark transition-all duration-200 max-w-full`}
     >
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-black/[0.03] dark:bg-white/[0.03] border-b border-border dark:border-border-dark">

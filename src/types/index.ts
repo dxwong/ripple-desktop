@@ -61,6 +61,8 @@ export interface Conversation {
   updatedAt: number;
   /** 关联的项目 ID（编程模式下使用） */
   projectId?: string;
+  /** 工作目录（后端 Agent 的 cwd，用于项目对话） */
+  cwd?: string;
   /** 聊天模式 */
   mode: ChatMode;
 }
@@ -126,6 +128,12 @@ export interface BackendSession {
   messageCount: number;
   createdAt: number;
   updatedAt: number;
+  /** 完整消息列表（从 /api/sessions/:id 获取时包含） */
+  messages?: Message[];
+  mode?: ChatMode;
+  projectId?: string;
+  /** 后端 JSONL 中的工作目录，前端用它匹配本地项目 */
+  cwd?: string;
 }
 
 /** SSE 事件类型 */

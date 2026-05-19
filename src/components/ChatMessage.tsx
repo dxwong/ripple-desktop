@@ -32,7 +32,7 @@ function extractLanguage(className?: string): string | undefined {
 /** 轻量代码块（流式中使用，无 Monaco） */
 function LightweightCodeBlock({ code, language }: { code: string; language?: string }) {
   return (
-    <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark">
+    <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
       {language && (
         <div className="flex items-center px-4 py-1 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]">
           <span className="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">
@@ -126,7 +126,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
       </div>
 
       {/* 消息主体 */}
-      <div className={`flex-1 min-w-0 ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
+      <div className={`flex-1 min-w-0 overflow-x-hidden ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
         {/* AI 消息头部 */}
         {!isUser && (
           <div className="flex items-center gap-2 mb-1.5 px-1">
@@ -179,7 +179,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
                   if (!code) {
                     // 没有代码内容时回退到普通 pre
                     return (
-                      <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark">
+                      <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
                         <pre className="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono">
                           {children}
                         </pre>

@@ -36,6 +36,7 @@ export function useProjects() {
     const init = async () => {
       const saved = await loadItem<Project[] | null>(STORAGE_KEY, null);
       if (saved && saved.length > 0) {
+        saved.sort((a, b) => b.updatedAt - a.updatedAt);
         setProjects(saved);
         // 检查当前 activeId 是否有效，无效则用第一个
         const valid = saved.find((p) => p.id === activeProjectId);
@@ -68,7 +69,7 @@ export function useProjects() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    setProjects((prev) => [...prev, newProject]);
+    setProjects((prev) => [newProject, ...prev]);
     setActiveProjectId(newProject.id);
     return newProject;
   }, []);

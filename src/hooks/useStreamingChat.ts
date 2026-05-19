@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, Project } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchModels, confirmToolCall } from "../services/api";
+import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession } from "../services/api";
+import { useStore } from "./useStore";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -91,19 +92,128 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const [pendingToolRequests, setPendingToolRequests] = useState<ToolRequestData[]>([]);
   // 根据权限模式自动设置 autoConfirm：auto 模式自动确认，confirm 和 read-only 需要确认
   const [autoConfirm, setAutoConfirm] = useState(permissionMode === "auto");
+  // 追踪哪些会话已加载过消息详情（避免重复请求）
+  const [loadedMessageIds, setLoadedMessageIds] = useState<Set<string>>(new Set());
+  // 记录当前正在加载消息的会话 ID（用于 UI 加载态）
+  const [loadingMessagesFor, setLoadingMessagesFor] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
+  const { saveItem, loadItem } = useStore();
+  const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
+  // 追踪已删除的会话 ID（持久化到 localStorage，防止重启后"复活"）
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
 
   // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
+  // 用于 addMessage 中捕获 saveItem/deletedIds 的最新引用（避免闭包过期）
+  const deletedIdsRef = useRef(deletedIds);
+  deletedIdsRef.current = deletedIds;
+  const saveItemRef = useRef(saveItem);
+  saveItemRef.current = saveItem;
 
   // 监听全局权限模式变化，自动同步 autoConfirm 状态
   useEffect(() => {
     setAutoConfirm(permissionMode === "auto");
   }, [permissionMode]);
+
+  // ===== 从本地存储加载会话（仅首次执行） =====
+  useEffect(() => {
+    if (loadedInitRef.current) return;
+    loadedInitRef.current = true;
+    (async () => {
+      // 加载已删除 ID 集合
+      const savedDeleted = await loadItem<string[]>("deletedConversationIds", []);
+      if (savedDeleted && savedDeleted.length > 0) {
+        setDeletedIds(new Set(savedDeleted));
+        console.log(`[useStreamingChat] 加载了 ${savedDeleted.length} 个已删除会话记录`);
+      }
+      // 加载会话列表（排除已删除的）
+      const saved = await loadItem<Conversation[]>("conversations", []);
+      if (saved && saved.length > 0) {
+        const active = saved.filter((c) => !savedDeleted?.includes(c.id));
+        active.sort((a, b) => b.updatedAt - a.updatedAt);
+        setConversations(active);
+        // 重建 loadedMessageIds：已有消息的会话标记为已加载
+        const ids = new Set<string>();
+        for (const c of active) {
+          if (c.messages && c.messages.length > 0) ids.add(c.id);
+        }
+        setLoadedMessageIds(ids);
+        console.log(`[useStreamingChat] 从本地存储加载了 ${active.length} 个会话（排除 ${saved.length - active.length} 个已删除），其中 ${ids.size} 个已有消息`);
+      }
+    })();
+  }, []);
+
+  // ===== 持久化：debounce 保存会话到本地存储（排除已删除） =====
+  useEffect(() => {
+    if (!loadedInitRef.current) return; // 等待首次加载完成后再保存
+    const timer = setTimeout(() => {
+      // 保存会话列表（过滤掉已删除的）和已删除 ID 集合
+      const active = conversations.filter((c) => !deletedIds.has(c.id));
+      saveItem("conversations", active);
+      saveItem("deletedConversationIds", Array.from(deletedIds));
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [conversations, deletedIds, saveItem]);
+
+  // ===== 懒加载单个会话的消息详情 =====
+  const loadConversationMessages = useCallback(async (convId: string, projects: Project[]) => {
+    if (loadedMessageIds.has(convId) || loadingMessagesFor === convId) return;
+    setLoadingMessagesFor(convId);
+    try {
+      const result = await fetchSession(convId);
+      if (result.error || !result.data) {
+        console.warn(`[loadConversationMessages] 加载失败 ${convId}:`, result.error);
+        return;
+      }
+      const sessionData = result.data;
+      // 建立 directory → projectId 映射
+      const dirToProjectId = new Map<string, string>();
+      for (const p of projects) {
+        if (p.directory) {
+          dirToProjectId.set(p.directory.toLowerCase().replace(/\\/g, '/'), p.id);
+        }
+      }
+      const inferProjectId = (cwd?: string): string | undefined => {
+        if (!cwd) return undefined;
+        const normalized = cwd.toLowerCase().replace(/\\/g, '/');
+        if (dirToProjectId.has(normalized)) return dirToProjectId.get(normalized);
+        for (const [dir, pid] of dirToProjectId.entries()) {
+          if (normalized === dir || normalized.startsWith(dir + '/')) return pid;
+        }
+        return undefined;
+      };
+      const projectId = inferProjectId(sessionData.cwd);
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== convId) return c;
+          // 已有消息时优先保留本地（合并策略）
+          if (c.messages && c.messages.length > 0) {
+            // 即使有消息，也更新 cwd（用于 sendMessage）
+            return {
+              ...c,
+              cwd: sessionData.cwd || c.cwd,
+              projectId: projectId || c.projectId,
+            };
+          }
+          return {
+            ...c,
+            messages: (sessionData.messages || []) as Message[],
+            mode: projectId ? 'code' : ((sessionData.mode as ChatMode) || c.mode),
+            projectId: projectId || c.projectId,
+            cwd: sessionData.cwd || c.cwd,
+          };
+        })
+      );
+      setLoadedMessageIds((prev) => new Set([...prev, convId]));
+      console.log(`[loadConversationMessages] ${convId} 消息加载完成，共 ${(sessionData.messages || []).length} 条，cwd=${sessionData.cwd || '(none)'}, projectId=${projectId || '(none)'}`);
+    } finally {
+      setLoadingMessagesFor((v) => (v === convId ? null : v));
+    }
+  }, [loadedMessageIds, loadingMessagesFor]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
   const activeModeRef = useRef(activeConversation?.mode || "chat");
@@ -172,23 +282,51 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       const convId = activeConversationIdRef.current;
       if (!convId) return null;
       const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now() };
+      let newTitle: string | undefined;
+      let newProjectId: string | undefined;
       setConversations((prev) =>
-        prev.map((conv) =>
-          conv.id === convId
-            ? {
-                ...conv,
-                messages: [...conv.messages, msg],
-                updatedAt: Date.now(),
-                title:
-                  conv.messages.length === 0 && role === "user"
-                    ? content.slice(0, 30) + (content.length > 30 ? "..." : "")
-                    : conv.title,
-              }
-            : conv
-        )
+        prev.map((conv) => {
+          if (conv.id !== convId) return conv;
+          const isFirstUserMessage = conv.messages.length === 0 && role === "user";
+          const title = isFirstUserMessage
+            ? content.slice(0, 30) + (content.length > 30 ? "..." : "")
+            : conv.title;
+          if (isFirstUserMessage) {
+            newTitle = title;
+            newProjectId = conv.projectId;
+          }
+          return {
+            ...conv,
+            messages: [...conv.messages, msg],
+            updatedAt: Date.now(),
+            title,
+          };
+        })
       );
+      // 同步标题到后端（使用 ref 确保拿到最新值），防止快速关闭导致标题丢失
+      if (newTitle !== undefined) {
+        // 立即保存到本地存储（不等待 debounce）
+        const active = conversationsRef.current.filter((c) => !deletedIdsRef.current.has(c.id));
+        saveItemRef.current("conversations", active);
+        // 同时同步到后端 .json 元数据文件
+        // 注意：只传 cwd（项目目录），不传 projectId。cwd 用于后端正确路由，projectId 是前端内部标识
+        const body: { title: string; cwd?: string } = { title: newTitle };
+        if (newProjectId) {
+          // 如果是项目对话，从 conversation 中获取正确的 cwd
+          const conv = conversationsRef.current.find((c) => c.id === convId);
+          if (conv && conv.projectId) {
+            // projectId 存在说明是项目对话，但 cwd 存储在后端 .json 中
+            // 这里不传 cwd，让后端从 .json 读取已有的 cwd
+            // body.cwd 会通过 loadConversationMessages 时从后端获取并更新到前端
+          }
+        }
+        saveSession(convId, body).catch((err) => {
+          console.warn(`[addMessage] 同步标题到后端失败 ${convId}:`, err);
+        });
+      }
       return msg;
     },
+    // 空依赖数组：所有引用都通过 ref 访问最新值
     []
   );
 
@@ -213,6 +351,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         return;
       }
 
+      // 如果没有传入 cwd，尝试从当前会话获取（懒加载后已保存 cwd）
+      const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === targetConvId)?.cwd;
+
       // 先添加用户消息
       addMessage("user", content);
 
@@ -233,7 +374,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 model: modelConfig?.model,
                 endpoint: modelConfig?.endpoint,
                 apiKey: modelConfig?.apiKey,
-                cwd,
+                cwd: effectiveCwd,
               },
               {
                 onText: (text) => {
@@ -248,6 +389,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
                   // 更新对应 toolCall 的结果
+                  // 用 ref 检查当前活跃对话是否还是原来的对话，防止切换后写入错误对话
+                  if (activeConversationIdRef.current !== targetConvId) return;
                   setConversations((prev) => {
                     const convId = targetConvId;
                     return prev.map((conv) => {
@@ -373,7 +516,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   }, [backendConnected]);
 
   // ===== 新建对话 =====
-  const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string) => {
+  const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string, cwd?: string) => {
     const newConv: Conversation = {
       id: genId(),
       title: title || (mode === "code" ? "新开发会话" : "新对话"),
@@ -382,33 +525,62 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       updatedAt: Date.now(),
       mode,
       projectId,
+      cwd, // 保存 cwd，用于 sendMessage 时传递
     };
-    setConversations((prev) => [...prev, newConv]);
+    setConversations((prev) => [newConv, ...prev]);
+    // 新会话消息为空，直接标记为已加载（无需从后端请求）
+    setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
     setActiveConversationId(newConv.id);
+    // 同时在后端创建对应 session，确保重启后可恢复
+    // 如果是项目对话，需要把 cwd 也保存，便于后端正确路由消息
+    if (cwd) {
+      saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
+    } else {
+      fetchSession(newConv.id).catch(() => { /* 静默 */ });
+    }
     return newConv;
   }, []);
 
   // ===== 切换对话 =====
-  const switchConversation = useCallback((id: string) => {
-    // 切换对话时，如果当前有进行中的请求，停止它并清理状态
+  const switchConversation = useCallback((id: string, projects: Project[] = []) => {
     if (isProcessing) {
+      // 彻底中止当前的 SSE 流和 AbortController
       abortRef.current?.abort();
+      // 立即关闭 SSE 客户端，防止旧流继续写入任何对话
       sseClientRef.current?.abort();
+      sseClientRef.current = null;
+      abortRef.current = null;
       setIsProcessing(false);
     }
-    // 清理当前对话的待确认工具请求
+    // 清理当前对话的待确认工具请求（切换后旧请求不再有效）
     setPendingToolRequests([]);
     setActiveConversationId(id);
-  }, [isProcessing]);
+    // 懒加载：切换到未加载消息的会话时自动拉取后端详情
+    if (!loadedMessageIds.has(id)) {
+      loadConversationMessages(id, projects);
+    }
+  }, [isProcessing, loadedMessageIds, loadConversationMessages]);
 
   // ===== 删除对话 =====
   const deleteConversation = useCallback(
     (id: string) => {
       setConversations((prev) => prev.filter((c) => c.id !== id));
+      // 标记为已删除（防止重启后"复活"）
+      setDeletedIds((prev) => new Set([...prev, id]));
+      // 从 loadedMessageIds 移除（避免遗留状态干扰）
+      setLoadedMessageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       if (id === activeConversationId) {
         const remaining = conversations.filter((c) => c.id !== id);
         setActiveConversationId(remaining.length > 0 ? remaining[remaining.length - 1].id : "");
       }
+      // 通知后端删除对应 session
+      deleteSession(id).catch((err) => {
+        console.warn(`[deleteConversation] 后端删除失败 ${id}:`, err);
+      });
     },
     [activeConversationId, conversations]
   );
@@ -463,6 +635,81 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     return () => clearTimeout(timer);
   }, [pendingToolRequests, autoConfirm, handleToolConfirm]);
 
+  // ===== 从后端加载历史会话列表（仅合并元数据，不拉取消息） =====
+  const loadSessionsFromBackend = useCallback(async (projects: Project[]) => {
+    const result = await fetchSessions();
+    if (result.error || !result.data) {
+      console.warn('[loadSessionsFromBackend] 加载失败:', result.error);
+      return;
+    }
+
+    // 建立 directory → projectId 的映射（统一转为小写和正斜杠，兼容 Windows 路径）
+    const dirToProjectId = new Map<string, string>();
+    for (const p of projects) {
+      if (p.directory) {
+        const normalized = p.directory.toLowerCase().replace(/\\/g, '/');
+        dirToProjectId.set(normalized, p.id);
+      }
+    }
+
+    /** 根据后端 cwd 推断 projectId */
+    const inferProjectId = (cwd?: string): string | undefined => {
+      if (!cwd) return undefined;
+      const normalized = cwd.toLowerCase().replace(/\\/g, '/');
+      if (dirToProjectId.has(normalized)) return dirToProjectId.get(normalized);
+      for (const [dir, pid] of dirToProjectId.entries()) {
+        if (normalized === dir || normalized.startsWith(dir + '/')) return pid;
+      }
+      return undefined;
+    };
+
+    // 只构建元数据，后端会话的 messages 初始为空，切换到该会话时才懒加载
+    const backendConversations = result.data.map((session) => {
+      const projectId = inferProjectId(session.cwd);
+      return {
+        id: session.id,
+        title: session.title,
+        messages: [] as Message[],
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        mode: projectId ? 'code' : ((session.mode as ChatMode) || 'chat'),
+        projectId,
+        cwd: session.cwd, // 保存 cwd，用于 sendMessage 时传递
+      };
+    });
+
+      // 合并策略：本地已有会话优先（保留消息和 loadedMessageIds 状态），
+      // 后端新增的会话追加；后端会话不在 loadedMessageIds 中（消息待懒加载）；
+      // 已删除的会话不追加（deletedIds 已标记，重启后不会复活）
+      setConversations((prev) => {
+        const merged = new Map<string, Conversation>();
+        // 先保留本地已有的（消息和状态完整）
+        for (const c of prev) merged.set(c.id, c);
+        // 再处理后端会话：追加本地没有的，或选择更好的标题
+        for (const c of backendConversations) {
+          if (deletedIds.has(c.id)) continue;
+          const backendConv = c as Conversation;
+          if (!merged.has(c.id)) {
+            merged.set(c.id, backendConv);
+            continue;
+          }
+          // 本地已有：比较标题，保留更有意义的（非默认格式）
+          const localConv = merged.get(c.id)!;
+          const isLocalDefault = !localConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(localConv.title);
+          const isBackendDefault = !backendConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(backendConv.title);
+          if (isLocalDefault && !isBackendDefault) {
+            merged.set(c.id, { ...localConv, title: backendConv.title });
+          }
+          // 其他情况保留本地（本地非默认标题优先）
+        }
+        const arr = Array.from(merged.values());
+        // 按 updatedAt 降序排列
+        arr.sort((a, b) => b.updatedAt - a.updatedAt);
+        console.log(`[loadSessionsFromBackend] 后端 ${backendConversations.length} 个会话，与本地合并后共 ${arr.length} 个（过滤了 ${deletedIds.size} 个已删除）`);
+        return arr;
+      });
+  }, [deletedIds]);
+
   return {
     conversations,
     activeConversation,
@@ -480,5 +727,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     deleteConversation,
     checkBackendConnection,
     handleToolConfirm,
+    loadSessionsFromBackend,
+    loadConversationMessages,
+    loadedMessageIds,
+    loadingMessagesFor,
   };
 }

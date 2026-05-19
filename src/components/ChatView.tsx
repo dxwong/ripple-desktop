@@ -171,7 +171,7 @@ function ChatView({
   }, [messages, isProcessing]);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
       {/* ===== 顶部栏：窗口拖拽 + 会话信息 + 窗口控制 ===== */}
       <div className="titlebar-drag flex items-center gap-3 px-3 h-9 bg-surface-secondary dark:bg-surface-secondary-dark border-b border-border dark:border-border-dark shrink-0">
         {/* 左侧：会话模式/项目目录 — 始终显示 */}
@@ -230,7 +230,7 @@ function ChatView({
 
       {/* ===== 消息区域 ===== */}
       <div className="flex-1 overflow-y-auto scroll-anchor">
-        <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up">
+        <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up min-w-0">
           {isEmpty ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center animate-fade-in">
               <div className="relative mb-6">

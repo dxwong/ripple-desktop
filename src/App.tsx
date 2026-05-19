@@ -68,6 +68,15 @@ function App() {
     init();
   }, []);
 
+  // 等项目列表从本地存储加载完成后，再加载后端历史会话
+  // 避免竞态：loadSessionsFromBackend 需要 projects 才能做 cwd → projectId 匹配
+  useEffect(() => {
+    if (!chat.backendConnected || !projects.loaded) return;
+    logger.info("项目列表已加载，正在恢复后端历史会话...");
+    chat.loadSessionsFromBackend(projects.projects);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.backendConnected, projects.loaded]);
+
   // Tauri 环境下监听后端日志事件
   useEffect(() => {
     if (!isTauri()) return;
@@ -107,15 +116,21 @@ function App() {
     await chat.sendMessage(content, chat.backendConnected, activeConfig, currentProject?.directory);
   }, [chat.sendMessage, chat.backendConnected, activeConfig, currentProject?.directory]);
 
+  // 切换对话时自动懒加载消息
+  const handleSwitchConversation = useCallback((id: string) => {
+    chat.switchConversation(id, projects.projects);
+  }, [chat.switchConversation, projects.projects]);
+
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
-    chat.newConversation(mode, projectId);
+    const project = projectId ? projects.projects.find((p) => p.id === projectId) : null;
+    chat.newConversation(mode, projectId, undefined, project?.directory);
   };
 
   // 添加项目 = 创建一条聊天记录
   const handleAddProject = (name: string, directory: string) => {
     const newProject = projects.addProject(name, directory);
-    chat.newConversation("chat", newProject.id, name);
+    chat.newConversation("chat", newProject.id, name, directory);
   };
 
   // 点击项目 → 切换到关联的聊天记录
@@ -125,10 +140,10 @@ function App() {
       (c) => c.projectId === projectId
     );
     if (existingConv) {
-      chat.switchConversation(existingConv.id);
+      chat.switchConversation(existingConv.id, projects.projects);
     } else {
       const project = projects.projects.find((p) => p.id === projectId);
-      chat.newConversation("chat", projectId, project?.name || "项目对话");
+      chat.newConversation("chat", projectId, project?.name || "项目对话", project?.directory);
     }
   };
 
@@ -136,7 +151,7 @@ function App() {
     <div className={settings.darkMode ? "dark" : ""}>
       <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
         {/* 主内容区：侧边栏 + 聊天区 + 文件树 */}
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* 左侧边栏 */}
           <Sidebar
             darkMode={settings.darkMode}
@@ -144,7 +159,7 @@ function App() {
             conversations={chat.conversations}
             activeConversationId={chat.activeConversationId}
             onNewConversation={handleNewConversation}
-            onSwitchConversation={chat.switchConversation}
+            onSwitchConversation={handleSwitchConversation}
             onDeleteConversation={chat.deleteConversation}
             onOpenSettings={() => setShowSettings(true)}
             projects={projects.projects}
