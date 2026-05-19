@@ -62,14 +62,15 @@ export function useStore() {
 
   const saveItem = useCallback(
     async (key: string, value: unknown): Promise<void> => {
+      // 总是先同步写入 localStorage（最可靠的持久化方式）
+      try {
+        localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(value));
+      } catch (e) {
+        console.warn(`localStorage 写入失败 (${key}):`, e);
+      }
+      // Tauri 模式下额外通过 IPC 保存到文件（作为备份）
       if (inTauri) {
         await tauriSaveConfig(key, value);
-      } else {
-        try {
-          localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(value));
-        } catch (e) {
-          console.warn(`localStorage 写入失败 (${key}):`, e);
-        }
       }
     },
     [inTauri]
@@ -77,22 +78,21 @@ export function useStore() {
 
   const loadItem = useCallback(
     async <T = unknown>(key: string, defaultValue: T): Promise<T> => {
+      // 优先从 localStorage 读取（最快）
+      try {
+        const stored = localStorage.getItem(`${LS_PREFIX}${key}`);
+        if (stored !== null) return JSON.parse(stored) as T;
+      } catch (e) {
+        console.warn(`localStorage 读取失败 (${key}):`, e);
+      }
+      // Tauri 模式下尝试从文件读取（兜底）
       if (inTauri) {
         const result = await tauriLoadConfig(key);
-        if (result === null || result === undefined) {
-          return defaultValue;
-        }
-        return result as T;
-      } else {
-        try {
-          const stored = localStorage.getItem(`${LS_PREFIX}${key}`);
-          if (stored === null) return defaultValue;
-          return JSON.parse(stored) as T;
-        } catch (e) {
-          console.warn(`localStorage 读取失败 (${key}):`, e);
-          return defaultValue;
+        if (result !== null && result !== undefined) {
+          return result as T;
         }
       }
+      return defaultValue;
     },
     [inTauri]
   );

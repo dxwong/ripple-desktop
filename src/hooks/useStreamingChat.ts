@@ -3,6 +3,8 @@ import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, Permissi
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
 import { useStore } from "./useStore";
+import { flog } from "../services/frontendLogger";
+import { healthSSEClient } from "../services/healthSSEClient";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
 
@@ -124,11 +126,12 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     if (loadedInitRef.current) return;
     loadedInitRef.current = true;
     (async () => {
+      flog.info('STREAMING', '初始化：从本地存储加载会话');
       // 加载已删除 ID 集合
       const savedDeleted = await loadItem<string[]>("deletedConversationIds", []);
       if (savedDeleted && savedDeleted.length > 0) {
         setDeletedIds(new Set(savedDeleted));
-        console.log(`[useStreamingChat] 加载了 ${savedDeleted.length} 个已删除会话记录`);
+        flog.info('STREAMING', `加载已删除会话记录`, { count: savedDeleted.length });
       }
       // 加载会话列表（排除已删除的）
       const saved = await loadItem<Conversation[]>("conversations", []);
@@ -136,41 +139,84 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         const active = saved.filter((c) => !savedDeleted?.includes(c.id));
         active.sort((a, b) => b.updatedAt - a.updatedAt);
         setConversations(active);
-        // 重建 loadedMessageIds：已有消息的会话标记为已加载
         const ids = new Set<string>();
         for (const c of active) {
           if (c.messages && c.messages.length > 0) ids.add(c.id);
         }
         setLoadedMessageIds(ids);
-        console.log(`[useStreamingChat] 从本地存储加载了 ${active.length} 个会话（排除 ${saved.length - active.length} 个已删除），其中 ${ids.size} 个已有消息`);
+        flog.info('STREAMING', `从本地存储加载会话`, {
+          total: active.length,
+          excluded: saved.length - active.length,
+          withMessages: ids.size,
+        });
+      } else {
+        flog.info('STREAMING', '本地无已保存会话');
       }
     })();
   }, []);
 
-  // ===== 持久化：debounce 保存会话到本地存储（排除已删除） =====
+  // ===== 持久化：保存会话到本地存储（排除已删除） =====
+  // 每次 conversations/deletedIds 变化时触发（带防抖）
   useEffect(() => {
-    if (!loadedInitRef.current) return; // 等待首次加载完成后再保存
-    const timer = setTimeout(() => {
-      // 保存会话列表（过滤掉已删除的）和已删除 ID 集合
+    if (!loadedInitRef.current) return;
+    const timer = setTimeout(async () => {
       const active = conversations.filter((c) => !deletedIds.has(c.id));
-      saveItem("conversations", active);
-      saveItem("deletedConversationIds", Array.from(deletedIds));
+      try {
+        await saveItem("conversations", active);
+        await saveItem("deletedConversationIds", Array.from(deletedIds));
+      } catch (err) {
+        flog.warn('STREAMING', '保存会话到本地存储失败', { error: String(err) });
+      }
     }, 100);
     return () => clearTimeout(timer);
   }, [conversations, deletedIds, saveItem]);
 
+  // ===== 窗口关闭前强制保存 =====
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      const active = conversationsRef.current.filter((c) => !deletedIdsRef.current.has(c.id));
+      await saveItem("conversations", active);
+      await saveItem("deletedConversationIds", Array.from(deletedIdsRef.current));
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [saveItem]);
+
+  // ===== 通过 SSE 实时检测后端连接状态（替代轮询） =====
+  useEffect(() => {
+    flog.info('STREAMING', '启动 SSE 健康检测');
+    healthSSEClient.connect((connected) => {
+      setBackendConnected(connected);
+      flog.info('STREAMING', `SSE 健康检测: ${connected ? '已连接' : '未连接'}`);
+    });
+    return () => healthSSEClient.close();
+  }, []);
+
   // ===== 懒加载单个会话的消息详情 =====
   const loadConversationMessages = useCallback(async (convId: string, projects: Project[]) => {
-    if (loadedMessageIds.has(convId) || loadingMessagesFor === convId) return;
+    if (loadedMessageIds.has(convId) || loadingMessagesFor === convId) {
+      flog.debug('STREAMING', `跳过已加载/正在加载的会话`, { convId });
+      return;
+    }
     setLoadingMessagesFor(convId);
+    
+    flog.info('STREAMING', `开始加载会话消息`, { convId, projectsCount: projects.length });
+    
     try {
       const result = await fetchSession(convId);
       if (result.error || !result.data) {
-        console.warn(`[loadConversationMessages] 加载失败 ${convId}:`, result.error);
+        flog.error('STREAMING', `加载会话失败`, { convId, error: result.error });
         return;
       }
       const sessionData = result.data;
-      // 建立 directory → projectId 映射
+      flog.info('STREAMING', `从后端获取会话数据`, {
+        convId,
+        id: sessionData.id,
+        cwd: sessionData.cwd || '(none)',
+        title: sessionData.title || '(none)',
+        messageCount: (sessionData.messages || []).length,
+      });
+      
       const dirToProjectId = new Map<string, string>();
       for (const p of projects) {
         if (p.directory) {
@@ -190,9 +236,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== convId) return c;
-          // 已有消息时优先保留本地（合并策略）
           if (c.messages && c.messages.length > 0) {
-            // 即使有消息，也更新 cwd（用于 sendMessage）
             return {
               ...c,
               cwd: sessionData.cwd || c.cwd,
@@ -209,7 +253,12 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         })
       );
       setLoadedMessageIds((prev) => new Set([...prev, convId]));
-      console.log(`[loadConversationMessages] ${convId} 消息加载完成，共 ${(sessionData.messages || []).length} 条，cwd=${sessionData.cwd || '(none)'}, projectId=${projectId || '(none)'}`);
+      flog.info('STREAMING', `会话消息加载完成`, {
+        convId,
+        messageCount: (sessionData.messages || []).length,
+        cwd: sessionData.cwd || '(none)',
+        projectId: projectId || '(none)',
+      });
     } finally {
       setLoadingMessagesFor((v) => (v === convId ? null : v));
     }
@@ -219,10 +268,18 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const activeModeRef = useRef(activeConversation?.mode || "chat");
   activeModeRef.current = activeConversation?.mode || "chat";
 
-  // ===== 检查后端连接状态 =====
+  // ===== 检查后端连接状态（仅返回结果，不修改状态——状态由 SSE 健康检测管理） =====
   const checkBackendConnection = useCallback(async () => {
+    flog.info('STREAMING', '检查后端连接状态');
     const ok = await checkHealth();
-    setBackendConnected(ok);
+    if (!ok) {
+      flog.warn('STREAMING', '首次连接失败，1秒后重试');
+      await new Promise(r => setTimeout(r, 1000));
+      const retryOk = await checkHealth();
+      flog.info('STREAMING', `重试后端连接状态: ${retryOk ? '已连接' : '未连接'}`);
+      return retryOk;
+    }
+    flog.info('STREAMING', `后端连接状态: ${ok ? '已连接' : '未连接'}`);
     return ok;
   }, []);
 
@@ -280,7 +337,17 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const addMessage = useCallback(
     (role: "user" | "assistant", content: string, extraFields?: { snapshotId?: string }) => {
       const convId = activeConversationIdRef.current;
-      if (!convId) return null;
+      if (!convId) {
+        flog.warn('STREAMING', 'addMessage 失败：无活跃会话');
+        return null;
+      }
+      flog.info('STREAMING', `添加消息: ${role}`, {
+        convId,
+        role,
+        contentLength: content.length,
+        contentPreview: content.slice(0, 50),
+        extraFields,
+      });
       const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now(), ...extraFields };
       let newTitle: string | undefined;
       let newProjectId: string | undefined;
@@ -338,7 +405,18 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       modelConfig?: ModelConfig,
       cwd?: string
     ) => {
-      if (isProcessing) return;
+      flog.info('STREAMING', `发送消息请求`, {
+        contentLength: content.length,
+        contentPreview: content.slice(0, 50),
+        useBackend,
+        hasModelConfig: !!modelConfig,
+        cwd: cwd || '(none)',
+      });
+
+      if (isProcessing) {
+        flog.warn('STREAMING', '发送跳过：正在处理中');
+        return;
+      }
       setIsProcessing(true);
 
       const abort = new AbortController();
@@ -346,53 +424,72 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
       const targetConvId = activeConversationIdRef.current;
       if (!targetConvId) {
-        console.warn("[sendMessage] 没有活跃对话，跳过发送");
+        flog.error('STREAMING', '发送失败：没有活跃对话');
         setIsProcessing(false);
         return;
       }
 
-      // 如果没有传入 cwd，尝试从当前会话获取（懒加载后已保存 cwd）
       const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === targetConvId)?.cwd;
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
+      flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
 
-      // ── 发送消息前创建快照 ──────────────────────────────────
-      // 记录当前文件状态，方便用户回滚撤销 AI 的操作
       let snapshotId: string | undefined;
       if (effectiveCwd) {
         try {
-          const cpRes = await createCheckpoint(effectiveCwd, `pre-msg-${targetConvId.slice(0, 8)}-${Date.now()}`, `AI处理前快照: ${content.slice(0, 30)}`);
-          if (cpRes.data?.checkpoint?.id) {
-            snapshotId = cpRes.data.checkpoint.id;
+          const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+          const cpRes = await Promise.race([
+            createCheckpoint(effectiveCwd, `pre-msg-${targetConvId.slice(0, 8)}-${Date.now()}`, `AI处理前快照: ${content.slice(0, 30)}`),
+            timeoutPromise,
+          ]);
+          if (cpRes && (cpRes as any).data?.checkpoint?.id) {
+            snapshotId = (cpRes as any).data.checkpoint.id;
+            flog.debug('STREAMING', `创建快照成功`, { snapshotId });
+          } else if (cpRes === null) {
+            flog.debug('STREAMING', '创建快照超时，跳过快照');
           }
         } catch {
-          // 快照创建失败不影响消息发送
+          flog.debug('STREAMING', '创建快照失败（不影响消息发送）');
         }
       }
 
-      // 添加用户消息（携带 snapshotId）
       addMessage("user", content, { snapshotId });
 
       try {
-        // ===== 后端模式（Ripple-Agent SSE） =====
         if (useBackend) {
+          flog.info('STREAMING', '使用后端模式发送');
           const sseClient = new SSEClient();
           sseClientRef.current = sseClient;
 
           await new Promise<void>((resolve, reject) => {
             let hasContent = false;
 
-            // 获取当前会话标题，传递给后端确保 .jsonl header 正确保存
             const currentConv = conversationsRef.current.find((c) => c.id === targetConvId);
+            
+            const backendParams = {
+              message: content,
+              sessionId: targetConvId,
+              modelId: modelConfig?.model || "deepseek-v4-flash",
+              model: modelConfig?.model,
+              endpoint: modelConfig?.endpoint,
+              apiKey: modelConfig?.apiKey,
+              cwd: effectiveCwd,
+              title: currentConv?.title,
+              requestId,
+            };
+            flog.info('STREAMING', `发送到后端的参数`, {
+              sessionId: backendParams.sessionId,
+              title: backendParams.title || '(none)',
+              requestId,
+              cwd: backendParams.cwd || '(none)',
+              modelId: backendParams.modelId,
+              model: backendParams.model || '(none)',
+              endpoint: backendParams.endpoint || '(none)',
+              hasApiKey: !!backendParams.apiKey,
+              messagePreview: content.slice(0, 50),
+            });
+            
             sseClient.connect(
-              {
-                message: content,
-                sessionId: targetConvId,
-                modelId: modelConfig?.model || "deepseek-v4-flash",
-                model: modelConfig?.model,
-                endpoint: modelConfig?.endpoint,
-                apiKey: modelConfig?.apiKey,
-                cwd: effectiveCwd,
-                title: currentConv?.title,
-              },
+              backendParams,
               {
                 onText: (text) => {
                   hasContent = true;
@@ -402,11 +499,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   appendThinkingToConversation(targetConvId, text);
                 },
                 onToolStart: (toolCallId, toolName) => {
-                  // 不再追加纯文本，用结构化 ToolCallCard 展示
+                  flog.debug('STREAMING', `工具开始`, { toolCallId, toolName });
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
-                  // 更新对应 toolCall 的结果
-                  // 用 ref 检查当前活跃对话是否还是原来的对话，防止切换后写入错误对话
+                  flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
                   if (activeConversationIdRef.current !== targetConvId) return;
                   setConversations((prev) => {
                     const convId = targetConvId;
@@ -431,10 +527,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   });
                 },
                 onToolRequest: (data) => {
-                  // 添加到待确认队列
+                  flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });
                   setPendingToolRequests((prev) => [...prev, data]);
-
-                  // 同时在当前 assistant 消息中创建一个 pending 的工具调用卡片
                   const pendingToolCall: ToolCallResult = {
                     toolCallId: data.toolCallId,
                     toolName: data.toolName,
@@ -447,7 +541,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                       const msgs: Message[] = [...conv.messages];
                       const last = msgs[msgs.length - 1];
                       if (!last || last.role !== "assistant") {
-                        // 还没创建 assistant 消息，先创建一个
                         const newMsg: Message = {
                           id: genId(),
                           role: "assistant",
@@ -468,9 +561,11 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   );
                 },
                 onDone: () => {
+                  flog.info('STREAMING', 'SSE 流正常结束');
                   resolve();
                 },
                 onError: (error) => {
+                  flog.error('STREAMING', `SSE 流错误`, { error });
                   if (!hasContent) {
                     appendToConversation(
                       targetConvId,
@@ -486,7 +581,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
           return;
         }
 
-        // ===== 模拟模式（仅开发测试用） =====
+        flog.info('STREAMING', '使用模拟模式发送');
         const currentMode = activeModeRef.current;
         let assistantContent = "";
         for await (const chunk of simulateStreamResponse(content, currentMode)) {
@@ -497,6 +592,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         if (!abort.signal.aborted && !assistantContent) {
           appendToConversation(targetConvId, "（模拟回复为空）");
         }
+      } catch (err: any) {
+        flog.error('STREAMING', `发送消息异常`, { error: err.message });
       } finally {
         setIsProcessing(false);
         abortRef.current = null;
@@ -508,10 +605,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
   // ===== 停止生成 =====
   const stopStreaming = useCallback(async () => {
+    flog.info('STREAMING', '用户请求停止生成');
     abortRef.current?.abort();
     sseClientRef.current?.abort();
     
-    // 调用后端 abort 端点，清理后端状态
     const targetConvId = activeConversationIdRef.current;
     if (targetConvId && backendConnected) {
       try {
@@ -523,9 +620,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
             reason: 'User clicked stop button' 
           }),
         });
-        console.log(`[stopStreaming] Called backend abort for session ${targetConvId}`);
+        flog.info('STREAMING', `后端 abort 已调用`, { sessionId: targetConvId });
       } catch (err) {
-        console.warn('[stopStreaming] Failed to call backend abort:', err);
+        flog.warn('STREAMING', '调用后端 abort 失败', { error: err instanceof Error ? err.message : String(err) });
       }
     }
     
@@ -542,33 +639,40 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       updatedAt: Date.now(),
       mode,
       projectId,
-      cwd, // 保存 cwd，用于 sendMessage 时传递
+      cwd,
     };
+    flog.info('STREAMING', `新建对话`, {
+      id: newConv.id,
+      title: newConv.title,
+      mode,
+      projectId: projectId || '(none)',
+      cwd: cwd || '(none)',
+    });
     setConversations((prev) => [newConv, ...prev]);
-    // 新会话消息为空，直接标记为已加载（无需从后端请求）
     setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
     setActiveConversationId(newConv.id);
-    // 同时在后端创建对应 session，确保重启后可恢复
-    // 普通模式和项目模式都需要创建后端文件，否则 .jsonl header 中无 title，重启后会丢失标题
     saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
     return newConv;
   }, []);
 
   // ===== 切换对话 =====
   const switchConversation = useCallback((id: string, projects: Project[] = []) => {
+    const target = conversationsRef.current.find(c => c.id === id);
+    flog.info('STREAMING', `切换对话`, {
+      fromId: activeConversationIdRef.current,
+      toId: id,
+      toTitle: target?.title || '(unknown)',
+      isProcessing,
+    });
     if (isProcessing) {
-      // 彻底中止当前的 SSE 流和 AbortController
       abortRef.current?.abort();
-      // 立即关闭 SSE 客户端，防止旧流继续写入任何对话
       sseClientRef.current?.abort();
       sseClientRef.current = null;
       abortRef.current = null;
       setIsProcessing(false);
     }
-    // 清理当前对话的待确认工具请求（切换后旧请求不再有效）
     setPendingToolRequests([]);
     setActiveConversationId(id);
-    // 懒加载：切换到未加载消息的会话时自动拉取后端详情
     if (!loadedMessageIds.has(id)) {
       loadConversationMessages(id, projects);
     }
@@ -577,10 +681,15 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   // ===== 删除对话 =====
   const deleteConversation = useCallback(
     (id: string) => {
+      const target = conversationsRef.current.find(c => c.id === id);
+      flog.info('STREAMING', `删除对话`, {
+        id,
+        title: target?.title || '(unknown)',
+        cwd: target?.cwd || '(none)',
+        messageCount: target?.messages?.length || 0,
+      });
       setConversations((prev) => prev.filter((c) => c.id !== id));
-      // 标记为已删除（防止重启后"复活"）
       setDeletedIds((prev) => new Set([...prev, id]));
-      // 从 loadedMessageIds 移除（避免遗留状态干扰）
       setLoadedMessageIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -590,9 +699,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         const remaining = conversations.filter((c) => c.id !== id);
         setActiveConversationId(remaining.length > 0 ? remaining[remaining.length - 1].id : "");
       }
-      // 通知后端删除对应 session
       deleteSession(id).catch((err) => {
-        console.warn(`[deleteConversation] 后端删除失败 ${id}:`, err);
+        flog.warn('STREAMING', `后端删除失败`, { id, error: err instanceof Error ? err.message : String(err) });
       });
     },
     [activeConversationId, conversations]
@@ -602,9 +710,14 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const handleToolConfirm = useCallback(
     async (toolCallId: string, approved: boolean, reason?: string) => {
       const sessionId = activeConversationIdRef.current;
+      flog.info('STREAMING', `工具执行确认: ${approved ? '批准' : '拒绝'}`, {
+        toolCallId,
+        approved,
+        reason: reason || '(无)',
+        sessionId,
+      });
       if (!sessionId) return;
 
-      // 同时更新消息中的 toolCalls 状态
       setConversations((prev): Conversation[] =>
         prev.map((conv): Conversation => {
           if (conv.id !== sessionId) return conv;
@@ -628,10 +741,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
       const result = await confirmToolCall(sessionId, toolCallId, approved, reason);
       if (result.error) {
-        console.error("[handleToolConfirm] 失败:", result.error);
+        flog.error('STREAMING', `工具确认失败`, { toolCallId, error: result.error });
       }
 
-      // 从待确认队列中移除
       setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
     },
     []
@@ -650,13 +762,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
   // ===== 从后端加载历史会话列表（仅合并元数据，不拉取消息） =====
   const loadSessionsFromBackend = useCallback(async (projects: Project[]) => {
+    flog.info('STREAMING', '从后端加载历史会话列表');
     const result = await fetchSessions();
     if (result.error || !result.data) {
-      console.warn('[loadSessionsFromBackend] 加载失败:', result.error);
+      flog.warn('STREAMING', '从后端加载会话失败', { error: result.error });
       return;
     }
 
-    // 建立 directory → projectId 的映射（统一转为小写和正斜杠，兼容 Windows 路径）
     const dirToProjectId = new Map<string, string>();
     for (const p of projects) {
       if (p.directory) {
@@ -665,7 +777,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       }
     }
 
-    /** 根据后端 cwd 推断 projectId */
     const inferProjectId = (cwd?: string): string | undefined => {
       if (!cwd) return undefined;
       const normalized = cwd.toLowerCase().replace(/\\/g, '/');
@@ -676,7 +787,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       return undefined;
     };
 
-    // 只构建元数据，后端会话的 messages 初始为空，切换到该会话时才懒加载
     const backendConversations = result.data.map((session) => {
       const projectId = inferProjectId(session.cwd);
       return {
@@ -687,18 +797,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         updatedAt: session.updatedAt,
         mode: projectId ? 'code' : ((session.mode as ChatMode) || 'chat'),
         projectId,
-        cwd: session.cwd, // 保存 cwd，用于 sendMessage 时传递
+        cwd: session.cwd,
       };
     });
 
-      // 合并策略：本地已有会话优先（保留消息和 loadedMessageIds 状态），
-      // 后端新增的会话追加；后端会话不在 loadedMessageIds 中（消息待懒加载）；
-      // 已删除的会话不追加（deletedIds 已标记，重启后不会复活）
       setConversations((prev) => {
         const merged = new Map<string, Conversation>();
-        // 先保留本地已有的（消息和状态完整）
         for (const c of prev) merged.set(c.id, c);
-        // 再处理后端会话：追加本地没有的，或选择更好的标题
         for (const c of backendConversations) {
           if (deletedIds.has(c.id)) continue;
           const backendConv = c as Conversation;
@@ -706,19 +811,20 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
             merged.set(c.id, backendConv);
             continue;
           }
-          // 本地已有：比较标题，保留更有意义的（非默认格式）
           const localConv = merged.get(c.id)!;
           const isLocalDefault = !localConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(localConv.title);
           const isBackendDefault = !backendConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(backendConv.title);
           if (isLocalDefault && !isBackendDefault) {
             merged.set(c.id, { ...localConv, title: backendConv.title });
           }
-          // 其他情况保留本地（本地非默认标题优先）
         }
         const arr = Array.from(merged.values());
-        // 按 updatedAt 降序排列
         arr.sort((a, b) => b.updatedAt - a.updatedAt);
-        console.log(`[loadSessionsFromBackend] 后端 ${backendConversations.length} 个会话，与本地合并后共 ${arr.length} 个（过滤了 ${deletedIds.size} 个已删除）`);
+        flog.info('STREAMING', `后端会话合并完成`, {
+          backendCount: backendConversations.length,
+          mergedCount: arr.length,
+          filteredDeleted: deletedIds.size,
+        });
         return arr;
       });
   }, [deletedIds]);

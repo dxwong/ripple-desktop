@@ -153,7 +153,9 @@ function App() {
   // 添加项目 = 创建一条聊天记录
   const handleAddProject = (name: string, directory: string) => {
     const newProject = projects.addProject(name, directory);
-    chat.newConversation("chat", newProject.id, name, directory);
+    if (newProject) {
+      chat.newConversation("chat", newProject.id, name, directory);
+    }
   };
 
   // 点击项目 → 切换到关联的聊天记录
