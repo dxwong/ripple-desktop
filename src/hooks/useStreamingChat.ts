@@ -366,6 +366,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
           await new Promise<void>((resolve, reject) => {
             let hasContent = false;
 
+            // 获取当前会话标题，传递给后端确保 .jsonl header 正确保存
+            const currentConv = conversationsRef.current.find((c) => c.id === targetConvId);
             sseClient.connect(
               {
                 message: content,
@@ -375,6 +377,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 endpoint: modelConfig?.endpoint,
                 apiKey: modelConfig?.apiKey,
                 cwd: effectiveCwd,
+                title: currentConv?.title,
               },
               {
                 onText: (text) => {
@@ -532,12 +535,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
     setActiveConversationId(newConv.id);
     // 同时在后端创建对应 session，确保重启后可恢复
-    // 如果是项目对话，需要把 cwd 也保存，便于后端正确路由消息
-    if (cwd) {
-      saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
-    } else {
-      fetchSession(newConv.id).catch(() => { /* 静默 */ });
-    }
+    // 普通模式和项目模式都需要创建后端文件，否则 .jsonl header 中无 title，重启后会丢失标题
+    saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
     return newConv;
   }, []);
 

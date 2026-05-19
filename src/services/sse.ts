@@ -85,6 +85,8 @@ export class SSEClient {
       model?: string;
       /** 项目工作目录（限制文件操作范围） */
       cwd?: string;
+      /** 会话标题（用于 .jsonl header） */
+      title?: string;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -116,6 +118,7 @@ export class SSEClient {
           apiKey: params.apiKey,
           systemPrompt: params.systemPrompt,
           cwd: params.cwd,
+          title: params.title,
         }),
         signal,
       });
