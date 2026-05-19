@@ -50,6 +50,8 @@ export interface Message {
   timestamp: number;
   /** 本条消息关联的工具调用结果 */
   toolCalls?: ToolCallResult[];
+  /** 发送该消息前创建的快照 ID，用于回滚撤销后续操作 */
+  snapshotId?: string;
 }
 
 /** 会话 */

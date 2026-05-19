@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, Project } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession } from "../services/api";
+import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
 import { useStore } from "./useStore";
 
 const genId = () => Math.random().toString(36).substring(2, 10);
@@ -278,10 +278,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
   // ===== 添加用户/助手消息 =====
   const addMessage = useCallback(
-    (role: "user" | "assistant", content: string) => {
+    (role: "user" | "assistant", content: string, extraFields?: { snapshotId?: string }) => {
       const convId = activeConversationIdRef.current;
       if (!convId) return null;
-      const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now() };
+      const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now(), ...extraFields };
       let newTitle: string | undefined;
       let newProjectId: string | undefined;
       setConversations((prev) =>
@@ -354,8 +354,22 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       // 如果没有传入 cwd，尝试从当前会话获取（懒加载后已保存 cwd）
       const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === targetConvId)?.cwd;
 
-      // 先添加用户消息
-      addMessage("user", content);
+      // ── 发送消息前创建快照 ──────────────────────────────────
+      // 记录当前文件状态，方便用户回滚撤销 AI 的操作
+      let snapshotId: string | undefined;
+      if (effectiveCwd) {
+        try {
+          const cpRes = await createCheckpoint(effectiveCwd, `pre-msg-${targetConvId.slice(0, 8)}-${Date.now()}`, `AI处理前快照: ${content.slice(0, 30)}`);
+          if (cpRes.data?.checkpoint?.id) {
+            snapshotId = cpRes.data.checkpoint.id;
+          }
+        } catch {
+          // 快照创建失败不影响消息发送
+        }
+      }
+
+      // 添加用户消息（携带 snapshotId）
+      addMessage("user", content, { snapshotId });
 
       try {
         // ===== 后端模式（Ripple-Agent SSE） =====
@@ -709,6 +723,57 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       });
   }, [deletedIds]);
 
+  // ===== 回滚到指定消息的快照 =====
+  const rollbackToSnapshot = useCallback(
+    async (snapshotId: string, messageId: string, convId: string, cwd?: string) => {
+      if (isProcessing) {
+        console.warn("[rollbackToSnapshot] 正在处理中，无法回滚");
+        return { success: false, error: "正在处理中，无法回滚" };
+      }
+
+      // 1. 恢复文件快照
+      if (cwd) {
+        const res = await restoreCheckpoint(snapshotId, cwd);
+        if (res.error) {
+          return { success: false, error: res.error };
+        }
+        if (!res.data?.success) {
+          return { success: false, error: res.data?.errors?.join(", ") || "回滚失败" };
+        }
+      }
+
+      // 2. 截断对话：删除该消息之后的所有消息
+      setConversations((prev) =>
+        prev.map((conv) => {
+          if (conv.id !== convId) return conv;
+          const msgIndex = conv.messages.findIndex((m) => m.id === messageId);
+          if (msgIndex < 0) return conv;
+          return {
+            ...conv,
+            messages: conv.messages.slice(0, msgIndex + 1),
+            updatedAt: Date.now(),
+          };
+        })
+      );
+
+      // 3. 通知后端重置会话（清理 Agent 上下文）
+      if (backendConnected) {
+        try {
+          await fetch("http://localhost:3002/api/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: convId }),
+          });
+        } catch (err) {
+          console.warn("[rollbackToSnapshot] 后端重置失败:", err);
+        }
+      }
+
+      return { success: true, error: undefined };
+    },
+    [isProcessing, backendConnected]
+  );
+
   return {
     conversations,
     activeConversation,
@@ -730,5 +795,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     loadConversationMessages,
     loadedMessageIds,
     loadingMessagesFor,
+    rollbackToSnapshot,
   };
 }

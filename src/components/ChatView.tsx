@@ -35,6 +35,8 @@ interface ChatViewProps {
   onPermissionModeChange?: (mode: PermissionMode) => void;
   /** EditBlock 应用成功回调 */
   onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
+  /** 回滚到指定用户消息（撤销后续 AI 操作） */
+  onRollbackToSnapshot?: (messageId: string) => void;
 }
 
 function TypingIndicator() {
@@ -147,6 +149,7 @@ function ChatView({
   permissionMode = "confirm",
   onPermissionModeChange,
   onEditBlockApply,
+  onRollbackToSnapshot,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -299,6 +302,7 @@ function ChatView({
                   darkMode={darkMode}
                   onEditBlockApply={onEditBlockApply}
                   onRegenerate={msg.role === "assistant" ? () => handleRegenerate(index) : undefined}
+                  onRollback={msg.role === "user" ? () => onRollbackToSnapshot?.(msg.id) : undefined}
                 />
               ))}
             </div>

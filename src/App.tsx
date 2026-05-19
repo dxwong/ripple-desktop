@@ -121,6 +121,29 @@ function App() {
     chat.switchConversation(id, projects.projects);
   }, [chat.switchConversation, projects.projects]);
 
+  // 回滚到指定用户消息（撤销后续 AI 操作）
+  const handleRollbackToSnapshot = useCallback(async (messageId: string) => {
+    if (!currentProject?.directory || !chat.activeConversationId) return;
+    const conv = chat.activeConversation;
+    if (!conv) return;
+    const msg = conv.messages.find((m) => m.id === messageId);
+    if (!msg?.snapshotId) {
+      console.warn("[handleRollbackToSnapshot] 该消息没有关联的快照");
+      return;
+    }
+    const result = await chat.rollbackToSnapshot(
+      msg.snapshotId,
+      messageId,
+      chat.activeConversationId,
+      currentProject.directory
+    );
+    if (result.success) {
+      logger.success(`已回滚到步骤「${msg.content.slice(0, 20)}...」`);
+    } else {
+      logger.error(`回滚失败: ${result.error}`);
+    }
+  }, [currentProject, chat.activeConversation, chat.activeConversationId, chat.rollbackToSnapshot]);
+
   // 新建对话
   const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
     const project = projectId ? projects.projects.find((p) => p.id === projectId) : null;
@@ -191,6 +214,7 @@ function App() {
               onToolConfirm={chat.handleToolConfirm}
               permissionMode={settings.permissionMode}
               onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+              onRollbackToSnapshot={handleRollbackToSnapshot}
             />
 
             {/* 右侧：文件树 + 文件预览/快照面板（只有项目模式才显示） */}
