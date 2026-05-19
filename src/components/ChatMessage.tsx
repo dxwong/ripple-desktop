@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from "react";
-import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw } from "lucide-react";
+import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
@@ -20,6 +20,8 @@ interface ChatMessageProps {
   onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
   /** 重新生成回调 */
   onRegenerate?: () => void;
+  /** 回滚到该消息（撤销后续 AI 操作） */
+  onRollback?: (messageId: string) => void;
 }
 
 /** 从 className 中提取语言 */
@@ -32,7 +34,7 @@ function extractLanguage(className?: string): string | undefined {
 /** 轻量代码块（流式中使用，无 Monaco） */
 function LightweightCodeBlock({ code, language }: { code: string; language?: string }) {
   return (
-    <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark">
+    <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
       {language && (
         <div className="flex items-center px-4 py-1 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]">
           <span className="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">
@@ -78,8 +80,9 @@ function extractCodeInfo(children: React.ReactNode): { code: string; language?: 
  * - 流式中代码块用轻量 <pre>，完成后用 Monaco Editor
  * - 所有代码内容从 ReactMarkdown 的 pre children 正确提取
  */
-const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply, onRegenerate }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply, onRegenerate, onRollback }: ChatMessageProps) {
   const isUser = message.role === "user";
+  const hasSnapshot = isUser && !!message.snapshotId;
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const hasThinking = !!(message.thinking);
   /** 当前显示的内容（EditBlock 应用后会被清理） */
@@ -126,7 +129,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
       </div>
 
       {/* 消息主体 */}
-      <div className={`flex-1 min-w-0 ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
+      <div className={`flex-1 min-w-0 overflow-x-hidden ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
         {/* AI 消息头部 */}
         {!isUser && (
           <div className="flex items-center gap-2 mb-1.5 px-1">
@@ -179,7 +182,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
                   if (!code) {
                     // 没有代码内容时回退到普通 pre
                     return (
-                      <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark">
+                      <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
                         <pre className="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono">
                           {children}
                         </pre>
@@ -222,6 +225,24 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
             <span className="inline-block w-[2px] h-[14px] ml-0.5 bg-accent/70 animate-pulse align-text-bottom" />
           )}
         </div>
+
+        {/* 用户消息回滚按钮 */}
+        {isUser && hasSnapshot && !isStreaming && (
+          <div className="flex justify-start gap-1 mt-1.5 ml-1">
+            <button
+              onClick={() => onRollback?.(message.id)}
+              className="group relative p-1.5 rounded-lg hover:bg-amber-500/10 hover:text-amber-500 transition-all text-content-tertiary/40 dark:text-content-tertiary-dark/40"
+              title="回滚到此步骤"
+            >
+              <RotateCcw size={13} />
+              {/* Tooltip - 下方弹出，避免被遮挡 */}
+              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 px-2.5 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
+                <div className="font-medium text-amber-500">回滚到此步骤</div>
+                <div className="text-content-tertiary dark:text-content-tertiary-dark text-[10px] mt-0.5">撤销后续 AI 的所有操作和回复</div>
+              </div>
+            </button>
+          </div>
+        )}
 
         {/* 操作按钮（非流式时在内容右下角显示） */}
         {!isUser && !isStreaming && (

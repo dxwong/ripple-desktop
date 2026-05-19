@@ -13,6 +13,8 @@ interface SSEClientOptions {
   baseUrl?: string;
   /** 连接超时（毫秒） */
   timeout?: number;
+  /** 流式空闲超时（毫秒），默认 30 秒无数据视为超时 */
+  idleTimeout?: number;
 }
 
 /** SSE 事件回调 */
@@ -52,11 +54,13 @@ export class SSEClient {
   private abortController: AbortController | null = null;
   private baseUrl: string;
   private timeout: number;
+  private idleTimeout: number;
   private _status: SSEStatus = "idle";
 
   constructor(options: SSEClientOptions = {}) {
     this.baseUrl = options.baseUrl || "http://localhost:3002";
-    this.timeout = options.timeout || 120_000; // 默认 2 分钟
+    this.timeout = options.timeout || 120_000;
+    this.idleTimeout = options.idleTimeout || 30_000;
   }
 
   /** 当前连接状态 */
@@ -85,6 +89,10 @@ export class SSEClient {
       model?: string;
       /** 项目工作目录（限制文件操作范围） */
       cwd?: string;
+      /** 会话标题（用于 .jsonl header） */
+      title?: string;
+      /** 请求追踪 ID，用于端到端日志关联 */
+      requestId?: string;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -100,6 +108,7 @@ export class SSEClient {
       callbacks.onError?.("请求超时");
     }, this.timeout);
 
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
     try {
       const response = await fetch(`${this.baseUrl}/api/chat`, {
         method: "POST",
@@ -116,6 +125,8 @@ export class SSEClient {
           apiKey: params.apiKey,
           systemPrompt: params.systemPrompt,
           cwd: params.cwd,
+          title: params.title,
+          requestId: params.requestId,
         }),
         signal,
       });
@@ -141,9 +152,24 @@ export class SSEClient {
       const decoder = new TextDecoder();
       let buffer = "";
 
+
+      const resetIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (this.idleTimeout > 0) {
+          idleTimer = setTimeout(() => {
+            this.abort();
+            callbacks.onError?.(`响应空闲超时（${this.idleTimeout / 1000}秒无数据）`);
+          }, this.idleTimeout);
+        }
+      };
+
+      resetIdleTimer();
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        resetIdleTimer();
 
         buffer += decoder.decode(value, { stream: true });
 
@@ -209,12 +235,14 @@ export class SSEClient {
       }
 
       // 流正常结束
+      if (idleTimer) clearTimeout(idleTimer);
       if (this._status === "streaming") {
         this._status = "done";
         callbacks.onDone?.();
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
+      if (idleTimer) clearTimeout(idleTimer);
       if (err.name === "AbortError") {
         // 主动取消，不触发 onError
         this._status = "idle";

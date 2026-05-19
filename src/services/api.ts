@@ -7,7 +7,7 @@
 import type { BackendModel, BackendSession } from "../types";
 
 /** 后端服务器基础 URL */
-const BASE_URL = "http://localhost:3002";
+export const BASE_URL = "http://localhost:3002";
 
 /** API 响应包装 */
 interface ApiResponse<T> {
@@ -24,12 +24,17 @@ async function request<T>(
 ): Promise<ApiResponse<T>> {
   try {
     const url = `${BASE_URL}${path}`;
+    const timeoutSignal = AbortSignal.timeout(10000);
+    const combinedSignal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
     const res = await fetch(url, {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       ...options,
+      signal: combinedSignal,
     });
 
     if (!res.ok) {
@@ -102,7 +107,7 @@ export async function fetchSession(
  */
 export async function saveSession(
   id: string,
-  data: { title?: string; model?: string; messages?: unknown[] }
+  data: { title?: string; model?: string; messages?: unknown[]; cwd?: string }
 ): Promise<ApiResponse<{ success: boolean }>> {
   return request(`/api/sessions/${id}`, {
     method: "POST",

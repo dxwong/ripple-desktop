@@ -35,6 +35,8 @@ interface ChatViewProps {
   onPermissionModeChange?: (mode: PermissionMode) => void;
   /** EditBlock 应用成功回调 */
   onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
+  /** 回滚到指定用户消息（撤销后续 AI 操作） */
+  onRollbackToSnapshot?: (messageId: string) => void;
 }
 
 function TypingIndicator() {
@@ -147,6 +149,7 @@ function ChatView({
   permissionMode = "confirm",
   onPermissionModeChange,
   onEditBlockApply,
+  onRollbackToSnapshot,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -171,7 +174,7 @@ function ChatView({
   }, [messages, isProcessing]);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
       {/* ===== 顶部栏：窗口拖拽 + 会话信息 + 窗口控制 ===== */}
       <div className="titlebar-drag flex items-center gap-3 px-3 h-9 bg-surface-secondary dark:bg-surface-secondary-dark border-b border-border dark:border-border-dark shrink-0">
         {/* 左侧：会话模式/项目目录 — 始终显示 */}
@@ -230,7 +233,7 @@ function ChatView({
 
       {/* ===== 消息区域 ===== */}
       <div className="flex-1 overflow-y-auto scroll-anchor">
-        <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up">
+        <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up min-w-0">
           {isEmpty ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center animate-fade-in">
               <div className="relative mb-6">
@@ -299,6 +302,7 @@ function ChatView({
                   darkMode={darkMode}
                   onEditBlockApply={onEditBlockApply}
                   onRegenerate={msg.role === "assistant" ? () => handleRegenerate(index) : undefined}
+                  onRollback={msg.role === "user" ? () => onRollbackToSnapshot?.(msg.id) : undefined}
                 />
               ))}
             </div>

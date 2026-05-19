@@ -4,7 +4,10 @@ use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-// ==================== 配置持久化 ====================
+// ==================== 配置持久化（原子写入，防竞态） ====================
+
+/// 配置锁（同一进程内并发安全）
+static CONFIG_MUTEX: Mutex<()> = Mutex::new(());
 
 fn get_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let app_dir = app.path().app_data_dir().map_err(|e| format!("{e}"))?;
@@ -15,15 +18,29 @@ fn get_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
     let config_path = get_config_path(&app)?;
+
+    // 获取进程内锁，防止并发读写冲突
+    let _guard = CONFIG_MUTEX.lock().map_err(|e| format!("锁错误: {e}"))?;
+
+    // 读取现有配置
     let mut config: serde_json::Value = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).map_err(|e| format!("{e}"))?;
         serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
-    if let serde_json::Value::Object(ref mut map) = config { map.insert(key, value); }
-    std::fs::write(&config_path, serde_json::to_string_pretty(&config).map_err(|e| format!("{e}"))?)
-        .map_err(|e| format!("{e}"))?;
+
+    // 更新配置
+    if let serde_json::Value::Object(ref mut map) = config {
+        map.insert(key, value);
+    }
+
+    // 原子写入：先写临时文件，再 rename（POSIX 保证原子性）
+    let temp_path = config_path.with_extension("tmp");
+    let new_content = serde_json::to_string_pretty(&config).map_err(|e| format!("{e}"))?;
+    std::fs::write(&temp_path, &new_content).map_err(|e| format!("{e}"))?;
+    std::fs::rename(&temp_path, &config_path).map_err(|e| format!("{e}"))?;
+
     Ok(())
 }
 
@@ -225,13 +242,14 @@ fn find_backend_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
     // 2. 默认路径（相对于前端项目的同级目录）
     let default_paths = [
-        // 工作目录是 pi-mono（前端项目父目录）
+        // 工作目录是 ripple-desktop-Tauri（cargo run 或 npm run dev）
         std::path::PathBuf::from("../ripple-agent"),
-        std::path::PathBuf::from("../ripple-agent"),
-        // 工作目录是 ripple-desktop-Tauri
-        std::path::PathBuf::from("../ripple-agent"),
-        // 其他可能的位置
-        std::path::PathBuf::from("../ripple-agent"),
+        // 工作目录是 ripple-desktop-Tauri/src-tauri
+        std::path::PathBuf::from("../../ripple-agent"),
+        // 工作目录是 pi-mono（npm run dev 在前端父目录）
+        std::path::PathBuf::from("./ripple-agent"),
+        // 工作目录是 ripple-agent 自身
+        std::path::PathBuf::from("."),
     ];
 
     for path in &default_paths {
