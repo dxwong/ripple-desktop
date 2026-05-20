@@ -32,8 +32,11 @@ const TOOL_NAMES: Record<string, string> = {
 };
 
 /**
- * 状态配置 — 柔和的配色方案
- * 卡片本身保持中性边框，状态通过右侧的图标/指示灯和文字颜色表达
+ * 状态配置 — 柔和且与品牌色系统协调的配色方案
+ * 整体使用暖色调家族，与项目的 warm terracotta 设计语言一致
+ * - 成功/已批准：使用品牌 accent 暖色（替代刺眼的翠绿和蓝）
+ * - 失败/已拒绝：使用暖调玫瑰色（替代刺眼的正红）
+ * - 等待中：使用暖琥珀色
  */
 const STATUS_CONFIG: Record<ToolCallResult['status'], {
   label: string;
@@ -44,28 +47,28 @@ const STATUS_CONFIG: Record<ToolCallResult['status'], {
 }> = {
   pending: {
     label: '等待中',
-    color: 'text-amber-600/70 dark:text-amber-400/70',
-    dotColor: 'bg-amber-500',
+    color: 'text-amber-600/55 dark:text-amber-400/55',
+    dotColor: 'bg-amber-400',
   },
   approved: {
     label: '已批准',
-    color: 'text-blue-600/70 dark:text-blue-400/70',
-    dotColor: 'bg-blue-500',
+    color: 'text-accent/70 dark:text-accent/70',
+    dotColor: 'bg-accent',
   },
   denied: {
     label: '已拒绝',
-    color: 'text-red-500/60 dark:text-red-400/60',
-    dotColor: 'bg-red-500',
+    color: 'text-rose-500/50 dark:text-rose-400/50',
+    dotColor: 'bg-rose-400',
   },
   success: {
-    label: '成功',
-    color: 'text-emerald-600/70 dark:text-emerald-400/70',
-    dotColor: 'bg-emerald-500',
+    label: '已完成',
+    color: 'text-accent/75 dark:text-accent/75',
+    dotColor: 'bg-accent',
   },
   error: {
     label: '失败',
-    color: 'text-red-500/60 dark:text-red-400/60',
-    dotColor: 'bg-red-500',
+    color: 'text-rose-500/50 dark:text-rose-400/50',
+    dotColor: 'bg-rose-400/80',
   },
 };
 
@@ -214,11 +217,11 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
           {/* 错误信息 */}
           {toolCall.error && (
             <div className="mt-2">
-              <div className="flex items-center gap-1 text-[10px] text-red-500/50 mb-0.5">
+              <div className="flex items-center gap-1 text-[10px] text-rose-500/50 dark:text-rose-400/50 mb-0.5">
                 <AlertTriangle size={10} />
                 错误
               </div>
-              <pre className="text-[11px] font-mono bg-red-500/[0.03] rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-red-500/60 leading-relaxed">
+              <pre className="text-[11px] font-mono bg-rose-500/[0.04] dark:bg-rose-400/[0.04] rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-rose-500/55 dark:text-rose-400/55 leading-relaxed">
                 {truncateOutput(toolCall.error)}
               </pre>
             </div>

@@ -109,14 +109,14 @@ function LogPanel() {
 
   const levelColor: Record<string, string> = {
     info: "text-content-tertiary dark:text-content-tertiary-dark",
-    warn: "text-amber-500 dark:text-amber-400",
-    error: "text-red-500 dark:text-red-400",
-    success: "text-emerald-500 dark:text-emerald-400",
+    warn: "text-amber-500/70 dark:text-amber-400/70",
+    error: "text-rose-500/70 dark:text-rose-400/70",
+    success: "text-accent/80 dark:text-accent/80",
   };
 
   const levelIcon: Record<string, string> = {
     info: "·",
-    warn: "⚠",
+    warn: "▲",
     error: "✕",
     success: "✓",
   };
