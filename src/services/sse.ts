@@ -36,6 +36,8 @@ interface SSECallbacks {
   onMessageEnd?: (role: string) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
+  /** usage 事件回调：每次 AI 回复的 token 用量和费用 */
+  onUsage?: (data: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number }) => void;
 }
 
 /** SSE 连接状态 */
@@ -257,6 +259,19 @@ export class SSEClient {
               case "error":
                 this._status = "error";
                 callbacks.onError?.(event.error || "未知错误");
+                break;
+              case "usage":
+                // usage 事件携带 token 用量和费用数据
+                if (typeof event.totalTokens === 'number' && event.totalTokens > 0) {
+                  callbacks.onUsage?.({
+                    input: Number(event.input ?? 0),
+                    output: Number(event.output ?? 0),
+                    cacheRead: Number(event.cacheRead ?? 0),
+                    cacheWrite: Number(event.cacheWrite ?? 0),
+                    totalTokens: event.totalTokens,
+                    cost: Number(event.cost ?? 0),
+                  });
+                }
                 break;
             }
           } catch {

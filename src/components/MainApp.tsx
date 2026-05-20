@@ -260,6 +260,7 @@ export function MainApp() {
             permissionMode={settings.permissionMode}
             onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
             onRollbackToSnapshot={handleRollbackToSnapshot}
+            conversationUsageMap={chat.conversationUsageMap}
           />
 
           {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}

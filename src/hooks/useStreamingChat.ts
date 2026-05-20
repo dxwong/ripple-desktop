@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
 import { useStore } from "./useStore";
@@ -98,6 +98,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const [loadedMessageIds, setLoadedMessageIds] = useState<Set<string>>(new Set());
   // 记录当前正在加载消息的会话 ID（用于 UI 加载态）
   const [loadingMessagesFor, setLoadingMessagesFor] = useState<string | null>(null);
+  /** 按对话累积的使用统计（token 和费用），key = conversationId */
+  const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
   const { saveItem, loadItem } = useStore();
@@ -564,6 +566,22 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 onToolUpdate: (toolCallId, toolName) => {
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
                 },
+                onUsage: (usage) => {
+                  flog.debug('STREAMING', `收到 usage 事件`, usage);
+                  // 按对话累积 token 和费用
+                  setConversationUsageMap((prev) => {
+                    const existing = prev[targetConvId] || { input: 0, output: 0, totalTokens: 0, cost: 0 };
+                    return {
+                      ...prev,
+                      [targetConvId]: {
+                        input: existing.input + (usage.input || 0),
+                        output: existing.output + (usage.output || 0),
+                        totalTokens: existing.totalTokens + (usage.totalTokens || 0),
+                        cost: existing.cost + (usage.cost || 0),
+                      },
+                    };
+                  });
+                },
                 onDone: () => {
                   flog.info('STREAMING', 'SSE 流正常结束');
                   resolve();
@@ -942,5 +960,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     rollbackToSnapshot,
     renameConversation,
     clearAllProjectConversations,
+    /** 按对话累积使用统计（token + 费用） */
+    conversationUsageMap,
   };
 }

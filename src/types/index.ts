@@ -129,7 +129,7 @@ export interface BackendSession {
 /** SSE 事件类型 */
 export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'tool-request' | 'tool-update'
   | 'agent-start' | 'turn-start' | 'turn-end' | 'message-start' | 'message-end'
-  | 'done' | 'error';
+  | 'done' | 'error' | 'usage';
 
 /** 工具执行确认请求 */
 export interface ToolRequestData {
@@ -160,4 +160,76 @@ export interface SSEEvent {
   hasToolResults?: boolean;
   hasError?: boolean;
   role?: string;
+  // usage 事件字段
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  cost?: number;
+}
+
+/** 单次请求的使用统计（SSE usage 事件携带） */
+export interface UsageEventData {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
+}
+
+/** 按对话累积的使用统计 */
+export interface ConversationUsage {
+  input: number;
+  output: number;
+  totalTokens: number;
+  cost: number;
+}
+
+/** 后端使用统计摘要 */
+export interface UsageStats {
+  totalRequests: number;
+  uptime: number;
+  totals: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: number;
+  };
+  cache: {
+    hitRate: number;
+    hitTokens: number;
+    missTokens: number;
+  };
+  avgPerRequest: {
+    input: number;
+    output: number;
+    totalTokens: number;
+    cost: number;
+  };
+  byModel: Record<string, {
+    count: number;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: number;
+  }>;
+  /** 最近一次请求的上下文 token（input + output） */
+  contextTokens: number;
+  lastInputTokens: number;
+  lastOutputTokens: number;
+}
+
+/** 账户余额信息 */
+export interface AccountBalance {
+  success: boolean;
+  /** 当前供应商是否支持余额查询（DeepSeek 支持，其他不支持） */
+  available: boolean;
+  balance: number | null;
+  currency: string;
+  error: string | null;
 }

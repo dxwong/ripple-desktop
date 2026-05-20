@@ -3,8 +3,9 @@ import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X 
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
-import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES } from "../types";
+import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
 import { isTauri } from "../hooks/useTauri";
+import { fetchStatsSummary, fetchAccountBalance } from "../services/api";
 
 interface ChatViewProps {
   conversationId: string;
@@ -37,6 +38,8 @@ interface ChatViewProps {
   onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
   /** 回滚到指定用户消息（撤销后续 AI 操作） */
   onRollbackToSnapshot?: (messageId: string) => void;
+  /** 按对话累积使用统计（key = conversationId） */
+  conversationUsageMap?: Record<string, ConversationUsage>;
 }
 
 function TypingIndicator() {
@@ -150,9 +153,57 @@ function ChatView({
   onPermissionModeChange,
   onEditBlockApply,
   onRollbackToSnapshot,
+  conversationUsageMap = {},
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
+
+  // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
+  const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0 };
+
+  // ===== 使用统计实时展示 =====
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
+  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const balanceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 后端连接时轮询统计和余额
+  useEffect(() => {
+    if (!backendConnected) {
+      setUsageStats(null);
+      setAccountBalance(null);
+      return;
+    }
+
+    const fetchStats = async () => {
+      const result = await fetchStatsSummary();
+      if (result.data) setUsageStats(result.data);
+    };
+
+    // 只在有 API Key 时才轮询余额（避免无效请求）
+    const shouldFetchBalance = !!activeConfig?.apiKey;
+    const fetchBalance = async () => {
+      if (!shouldFetchBalance) return;
+      const result = await fetchAccountBalance(activeConfig.apiKey, activeConfig.endpoint);
+      if (result.data) setAccountBalance(result.data);
+    };
+
+    // 立即执行一次
+    fetchStats();
+    if (shouldFetchBalance) fetchBalance();
+
+    // 每 10 秒轮询统计
+    statsTimerRef.current = setInterval(fetchStats, 10000);
+    // 每 60 秒轮询余额（仅在有关键时）
+    if (shouldFetchBalance) {
+      balanceTimerRef.current = setInterval(fetchBalance, 60000);
+    }
+
+    return () => {
+      if (statsTimerRef.current) clearInterval(statsTimerRef.current);
+      if (balanceTimerRef.current) clearInterval(balanceTimerRef.current);
+    };
+  }, [backendConnected, activeConfig?.apiKey, activeConfig?.endpoint]);
 
   const streamingIdx = getStreamingIndex(messages, isProcessing);
   const shouldShowTyping = isProcessing && streamingIdx === -1;
@@ -387,24 +438,51 @@ function ChatView({
               isProcessing
                 ? "AI 正在回复... 点击停止按钮可中断"
                 : chatMode === "code" || cwd
-                ? "输入编程指令... (Enter 发送, Shift+Enter 换行)"
-                : "输入消息... (Enter 发送, Shift+Enter 换行)"
+                ? "输入编程指令..."
+                : "输入消息..."
             }
           />
-          <div className="flex items-center justify-center gap-2 mt-2">
-            <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark">
-              Enter 发送 · Shift+Enter 换行
-            </span>
-            {activeConfig && (
-              <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark">
-                · 模型: {activeConfig.model}
+          <div className="flex items-center justify-between mt-2 px-1">
+            {/* 左侧：使用统计实时指标 */}
+            <div className="flex items-center gap-3 text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
+              {/* 缓存命中率 */}
+              <span className="flex items-center gap-1" title="缓存命中率">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                缓存 {usageStats ? `${(usageStats.cache?.hitRate ?? 0).toFixed(1)}%` : '--'}
               </span>
-            )}
-            {chatMode === "code" && (
-              <span className="text-xs text-amber-500 dark:text-amber-400 font-medium">
-                · 开发模式
+              {/* 账户余额 */}
+              <span className="flex items-center gap-1" title="账户余额（仅 DeepSeek 支持查询）">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                余额 {!accountBalance
+                  ? '--'
+                  : !accountBalance.available
+                    ? '不支持'
+                    : accountBalance.success && accountBalance.balance != null
+                      ? `${accountBalance.balance.toFixed(2)} ${accountBalance.currency || 'CNY'}`
+                      : accountBalance.error
+                        ? '查询失败'
+                        : '--'}
               </span>
-            )}
+              {/* 当前对话成本 */}
+              <span className="flex items-center gap-1" title="当前对话消耗的 token 预估费用">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                对话成本 ¥{currentConvUsage.cost > 0 ? currentConvUsage.cost.toFixed(4) : '--'}
+              </span>
+              {/* 上下文 token */}
+              <span className="flex items-center gap-1" title="当前对话累积上下文 token">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                上下文 {currentConvUsage.totalTokens > 0 ? currentConvUsage.totalTokens.toLocaleString() : (usageStats?.contextTokens ? usageStats.contextTokens.toLocaleString() : '--')} tokens
+              </span>
+            </div>
+            {/* 右侧：模型信息 */}
+            <div className="flex items-center gap-2 text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
+              {activeConfig && (
+                <span>{activeConfig.model}</span>
+              )}
+              {chatMode === "code" && (
+                <span className="text-amber-500 dark:text-amber-400 font-medium">· 开发模式</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
