@@ -184,6 +184,8 @@ export interface ConversationUsage {
   output: number;
   totalTokens: number;
   cost: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 /** 后端使用统计摘要 */

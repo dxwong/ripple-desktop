@@ -6,6 +6,47 @@ import { ToolConfirmBanner } from "./ToolConfirmBanner";
 import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
 import { isTauri } from "../hooks/useTauri";
 import { fetchStatsSummary, fetchAccountBalance } from "../services/api";
+import { flog } from "../services/frontendLogger";
+
+/** DeepSeek 定价表（CNY 每 1,000,000 个 token，即每 M tokens） */
+const DEEPSEEK_PRICING: Record<string, { inputCacheHit: number; inputCacheMiss: number; output: number }> = {
+  "deepseek-v4-flash": { inputCacheHit: 0.028, inputCacheMiss: 0.5, output: 2 },
+  "deepseek-v4-pro": { inputCacheHit: 0.139, inputCacheMiss: 1.667, output: 3.333 },
+  "deepseek-chat": { inputCacheHit: 0.028, inputCacheMiss: 0.5, output: 2 },
+  "deepseek-reasoner": { inputCacheHit: 0.028, inputCacheMiss: 0.5, output: 2 },
+};
+
+/**
+ * 计算预估成本（参考 Reasonix 实现）
+ * @param model 模型名称
+ * @param inputTokens 输入 token 数
+ * @param outputTokens 输出 token 数
+ * @param cacheReadTokens 缓存命中 token 数
+ * @returns 预估成本（CNY）
+ */
+function calculateEstimatedCost(model: string, inputTokens: number, outputTokens: number, cacheReadTokens: number): number {
+  const pricing = DEEPSEEK_PRICING[model];
+  if (!pricing) return 0;
+  
+  const cacheMissTokens = Math.max(0, inputTokens - cacheReadTokens);
+  return (
+    (cacheReadTokens * pricing.inputCacheHit +
+      cacheMissTokens * pricing.inputCacheMiss +
+      outputTokens * pricing.output) /
+    1000000
+  );
+}
+
+/**
+ * 格式化大数显示，如 100,000 → 100k, 1,500,000 → 1.5M
+ * @param num 数字
+ * @param suffix 是否保留 'tokens' 后缀
+ */
+function formatLargeNumber(num: number): string {
+  if (num < 1000) return num.toLocaleString();
+  if (num < 1000000) return `${(num / 1000).toFixed(1)}k`;
+  return `${(num / 1000000).toFixed(1)}M`;
+}
 
 interface ChatViewProps {
   conversationId: string;
@@ -159,7 +200,29 @@ function ChatView({
   const isEmpty = messages.length === 0;
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
-  const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0 };
+  const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
+  // 按对话计算缓存命中率：cacheHit / (cacheHit + cacheMiss) * 100
+  // cacheHit = cacheRead（从缓存读取的 token）
+  // cacheMiss = input - cacheRead（需要重新计算的 token）
+  const convCacheHitTokens = currentConvUsage.cacheRead;
+  const convCacheMissTokens = Math.max(0, currentConvUsage.input - currentConvUsage.cacheRead);
+  const convCacheHitRate = (convCacheHitTokens + convCacheMissTokens) > 0
+    ? (convCacheHitTokens / (convCacheHitTokens + convCacheMissTokens) * 100)
+    : null;
+
+  // ===== 计算当前对话的预估成本（基于 DeepSeek 定价）=====
+  // ===== 调试信息输出（查看实际的 usage 数据
+  flog.debug('STATS', '当前对话 usage 数据', {
+    conversationId,
+    currentConvUsage,
+    activeModel: activeConfig?.model,
+    estimatedCost: activeConfig?.model ? calculateEstimatedCost(activeConfig.model, currentConvUsage.input, currentConvUsage.output, currentConvUsage.cacheRead) : 0,
+  });
+
+  // ===== 计算当前对话的预估成本（基于 DeepSeek 定价）
+  const estimatedCost = activeConfig?.model
+    ? calculateEstimatedCost(activeConfig.model, currentConvUsage.input, currentConvUsage.output, currentConvUsage.cacheRead)
+    : 0;
 
   // ===== 使用统计实时展示 =====
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
@@ -444,43 +507,39 @@ function ChatView({
           />
           <div className="flex items-center justify-between mt-2 px-1">
             {/* 左侧：使用统计实时指标 */}
-            <div className="flex items-center gap-3 text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
-              {/* 缓存命中率 */}
-              <span className="flex items-center gap-1" title="缓存命中率">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                缓存 {usageStats ? `${(usageStats.cache?.hitRate ?? 0).toFixed(1)}%` : '--'}
+            <div className="flex items-center gap-4 text-[12px] text-content-tertiary dark:text-content-tertiary-dark">
+              {/* 缓存命中率（按当前对话统计） */}
+              <span className="flex items-center gap-1.5" title="当前对话缓存命中率">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                缓存 <span className="text-emerald-600 dark:text-emerald-400 font-medium">{convCacheHitRate !== null ? `${convCacheHitRate.toFixed(1)}%` : '--'}</span>
               </span>
-              {/* 账户余额 */}
-              <span className="flex items-center gap-1" title="账户余额（仅 DeepSeek 支持查询）">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                余额 {!accountBalance
-                  ? '--'
-                  : !accountBalance.available
-                    ? '不支持'
-                    : accountBalance.success && accountBalance.balance != null
-                      ? `${accountBalance.balance.toFixed(2)} ${accountBalance.currency || 'CNY'}`
-                      : accountBalance.error
-                        ? '查询失败'
-                        : '--'}
+              {/* 账户余额（优先适配 DeepSeek） */}
+              <span className="flex items-center gap-1.5" title="账户余额（仅 DeepSeek 支持查询）">
+                <span className="w-2 h-2 rounded-full bg-blue-400" />
+                余额 <span className="text-blue-600 dark:text-blue-400 font-medium">
+                  {accountBalance?.available === false ? '不支持' 
+                    : accountBalance?.success === true && accountBalance.balance != null 
+                      ? `${accountBalance.balance.toFixed(2)} ${accountBalance.currency || 'CNY'}` 
+                      : accountBalance?.error ? '失败' : '--'}
+                </span>
               </span>
-              {/* 当前对话成本 */}
-              <span className="flex items-center gap-1" title="当前对话消耗的 token 预估费用">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                对话成本 ¥{currentConvUsage.cost > 0 ? currentConvUsage.cost.toFixed(4) : '--'}
+              {/* 当前对话预估费用（基于 DeepSeek 定价） */}
+              <span className="flex items-center gap-1.5" title="当前对话预估费用（基于输入/输出 token 和缓存命中计算）">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                预估 <span className="text-amber-600 dark:text-amber-400 font-medium">{estimatedCost > 0 ? `¥${estimatedCost.toFixed(2)}` : '--'}</span>
               </span>
-              {/* 上下文 token */}
-              <span className="flex items-center gap-1" title="当前对话累积上下文 token">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-                上下文 {currentConvUsage.totalTokens > 0 ? currentConvUsage.totalTokens.toLocaleString() : (usageStats?.contextTokens ? usageStats.contextTokens.toLocaleString() : '--')} tokens
+              {/* 上下文 token（按当前对话累积） */}
+              <span className="flex items-center gap-1.5" title="当前对话累积上下文 token（输入+输出）">
+                <span className="w-2 h-2 rounded-full bg-purple-400" />
+                上下文 <span className="text-purple-600 dark:text-purple-400 font-medium">{currentConvUsage.totalTokens > 0 ? `${formatLargeNumber(currentConvUsage.totalTokens)}` : '--'}</span>
               </span>
             </div>
-            {/* 右侧：模型信息 */}
-            <div className="flex items-center gap-2 text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
-              {activeConfig && (
-                <span>{activeConfig.model}</span>
-              )}
-              {chatMode === "code" && (
-                <span className="text-amber-500 dark:text-amber-400 font-medium">· 开发模式</span>
+            {/* 右侧：模式信息 */}
+            <div className="text-[12px]">
+              {chatMode === "code" ? (
+                <span className="text-amber-600 dark:text-amber-400 font-medium">· 开发模式</span>
+              ) : (
+                <span className="text-sky-600 dark:text-sky-400 font-medium">· 对话模式</span>
               )}
             </div>
           </div>

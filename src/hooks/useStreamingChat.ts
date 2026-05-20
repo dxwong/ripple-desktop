@@ -378,7 +378,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         contentLength: content.length,
         contentPreview: content.slice(0, 50),
         useBackend,
+        backendConnected: backendConnected,
         hasModelConfig: !!modelConfig,
+        modelConfigId: modelConfig?.id || '(none)',
         cwd: cwd || '(none)',
       });
 
@@ -567,18 +569,29 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
                 },
                 onUsage: (usage) => {
-                  flog.debug('STREAMING', `收到 usage 事件`, usage);
-                  // 按对话累积 token 和费用
+                  flog.debug('STREAMING', `收到 usage 事件`, {
+                    targetConvId,
+                    usage,
+                  });
+                  // 按对话累积 token、费用和缓存
                   setConversationUsageMap((prev) => {
-                    const existing = prev[targetConvId] || { input: 0, output: 0, totalTokens: 0, cost: 0 };
+                    const existing = prev[targetConvId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
+                    const newUsage = {
+                      input: existing.input + (usage.input ?? 0),
+                      output: existing.output + (usage.output ?? 0),
+                      totalTokens: existing.totalTokens + (usage.totalTokens ?? 0),
+                      cost: existing.cost + (usage.cost ?? 0),
+                      cacheRead: existing.cacheRead + (usage.cacheRead ?? 0),
+                      cacheWrite: existing.cacheWrite + (usage.cacheWrite ?? 0),
+                    };
+                    flog.debug('STREAMING', '更新对话 usage 数据', {
+                      before: existing,
+                      adding: usage,
+                      after: newUsage,
+                    });
                     return {
                       ...prev,
-                      [targetConvId]: {
-                        input: existing.input + (usage.input || 0),
-                        output: existing.output + (usage.output || 0),
-                        totalTokens: existing.totalTokens + (usage.totalTokens || 0),
-                        cost: existing.cost + (usage.cost || 0),
-                      },
+                      [targetConvId]: newUsage,
                     };
                   });
                 },
@@ -588,13 +601,12 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                 },
                 onError: (error) => {
                   flog.error('STREAMING', `SSE 流错误`, { error });
-                  if (!hasContent) {
-                    appendToConversation(
-                      targetConvId,
-                      `\n\n> ❌ **错误**: ${error}\n\n`
-                    );
-                  }
-                  reject(new Error(error));
+                  const errorMsg = `**❌ 请求失败**\n\n\`\`\`\n${error}\n\`\`\`\n\n> 💡 **建议**：\n> - 检查 API 额度是否充足\n> - 切换到其他模型\n> - 重启应用后重试`;
+                  appendToConversation(
+                    targetConvId,
+                    `\n\n${errorMsg}\n\n`
+                  );
+                  resolve();
                 },
               }
             );

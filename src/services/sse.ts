@@ -66,6 +66,7 @@ export class SSEClient {
   private timeout: number;
   private idleTimeout: number;
   private _status: SSEStatus = "idle";
+  private currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   constructor(options: SSEClientOptions = {}) {
     this.baseUrl = options.baseUrl || "http://localhost:3002";
@@ -146,14 +147,20 @@ export class SSEClient {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         this._status = "error";
-        callbacks.onError?.(body.error || `HTTP ${response.status}`);
+        const statusCode = response.status;
+        let errorHint = "";
+        if (statusCode === 401) errorHint = "（API 密钥无效或已过期）";
+        else if (statusCode === 403) errorHint = "（权限不足）";
+        else if (statusCode === 429) errorHint = "（请求过于频繁，请稍后重试）";
+        else if (statusCode >= 500) errorHint = "（服务端错误）";
+        callbacks.onError?.(body.error || `HTTP ${statusCode}${errorHint}`);
         return;
       }
 
       this._status = "streaming";
 
-      const reader = response.body?.getReader();
-      if (!reader) {
+      this.currentReader = response.body?.getReader() ?? null;
+      if (!this.currentReader) {
         this._status = "error";
         callbacks.onError?.("响应体不可读");
         return;
@@ -176,8 +183,12 @@ export class SSEClient {
       resetIdleTimer();
 
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done, value } = await this.currentReader.read();
+        if (done) {
+          this.currentReader.releaseLock();
+          this.currentReader = null;
+          break;
+        }
 
         resetIdleTimer();
 
@@ -262,16 +273,15 @@ export class SSEClient {
                 break;
               case "usage":
                 // usage 事件携带 token 用量和费用数据
-                if (typeof event.totalTokens === 'number' && event.totalTokens > 0) {
-                  callbacks.onUsage?.({
-                    input: Number(event.input ?? 0),
-                    output: Number(event.output ?? 0),
-                    cacheRead: Number(event.cacheRead ?? 0),
-                    cacheWrite: Number(event.cacheWrite ?? 0),
-                    totalTokens: event.totalTokens,
-                    cost: Number(event.cost ?? 0),
-                  });
-                }
+                // 注意：即使 totalTokens 为 0，也需要处理（可能是工具调用后的空用量）
+                callbacks.onUsage?.({
+                  input: Number(event.input ?? 0),
+                  output: Number(event.output ?? 0),
+                  cacheRead: Number(event.cacheRead ?? 0),
+                  cacheWrite: Number(event.cacheWrite ?? 0),
+                  totalTokens: Number(event.totalTokens ?? 0),
+                  cost: Number(event.cost ?? 0),
+                });
                 break;
             }
           } catch {
@@ -303,6 +313,10 @@ export class SSEClient {
    * 取消当前 SSE 连接
    */
   abort(): void {
+    if (this.currentReader) {
+      this.currentReader.releaseLock();
+      this.currentReader = null;
+    }
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;

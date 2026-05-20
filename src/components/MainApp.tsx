@@ -160,6 +160,7 @@ export function MainApp() {
 
   // 发送消息
   const handleSendMessage = useCallback(async (content: string) => {
+    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id });
     await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd);
   }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd]);
 
