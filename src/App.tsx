@@ -8,7 +8,6 @@ import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 import { useStreamingChat } from "./hooks/useStreamingChat";
 import { useSettings } from "./hooks/useSettings";
-import { useProjects } from "./hooks/useProjects";
 import { useFolderPicker } from "./hooks/useFolderPicker";
 import { ChatMode } from "./types";
 import { fetchModels } from "./services/api";
@@ -33,7 +32,6 @@ function App() {
     setActiveModel,
   } = useSettings();
   const chat = useStreamingChat(settings.permissionMode);
-  const projects = useProjects();
   const { pickFolder } = useFolderPicker();
 
   // 启动时检查后端连接
@@ -68,14 +66,13 @@ function App() {
     init();
   }, []);
 
-  // 等项目列表从本地存储加载完成后，再加载后端历史会话
-  // 避免竞态：loadSessionsFromBackend 需要 projects 才能做 cwd → projectId 匹配
+  // 后端连接就绪后加载历史会话
   useEffect(() => {
-    if (!chat.backendConnected || !projects.loaded) return;
-    logger.info("项目列表已加载，正在恢复后端历史会话...");
-    chat.loadSessionsFromBackend(projects.projects);
+    if (!chat.backendConnected) return;
+    logger.info("正在恢复后端历史会话...");
+    chat.loadSessionsFromBackend();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.backendConnected, projects.loaded]);
+  }, [chat.backendConnected]);
 
   // Tauri 环境下监听后端日志事件
   useEffect(() => {
@@ -104,26 +101,23 @@ function App() {
     };
   }, []);
 
-  // 获取当前会话关联的项目和模式
-  const currentProject = chat.activeConversation?.projectId
-    ? projects.projects.find((p) => p.id === chat.activeConversation?.projectId)
-    : null;
+  // 当前会话的目录（有 cwd 表示是项目对话，文件树等面板可显示）
+  const currentCwd = chat.activeConversation?.cwd;
   const currentMode = chat.activeConversation?.mode || "chat";
-  const isCodeMode = currentMode === "code";
 
-  // 发送消息 - 后端可用走后端，否则走模拟（仅开发测试）
+  // 发送消息
   const handleSendMessage = useCallback(async (content: string) => {
-    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentProject?.directory);
-  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentProject?.directory]);
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd);
+  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd]);
 
-  // 切换对话时自动懒加载消息
+  // 切换对话
   const handleSwitchConversation = useCallback((id: string) => {
-    chat.switchConversation(id, projects.projects);
-  }, [chat.switchConversation, projects.projects]);
+    chat.switchConversation(id);
+  }, [chat.switchConversation]);
 
   // 回滚到指定用户消息（撤销后续 AI 操作）
   const handleRollbackToSnapshot = useCallback(async (messageId: string) => {
-    if (!currentProject?.directory || !chat.activeConversationId) return;
+    if (!currentCwd || !chat.activeConversationId) return;
     const conv = chat.activeConversation;
     if (!conv) return;
     const msg = conv.messages.find((m) => m.id === messageId);
@@ -135,41 +129,23 @@ function App() {
       msg.snapshotId,
       messageId,
       chat.activeConversationId,
-      currentProject.directory
+      currentCwd
     );
     if (result.success) {
       logger.success(`已回滚到步骤「${msg.content.slice(0, 20)}...」`);
     } else {
       logger.error(`回滚失败: ${result.error}`);
     }
-  }, [currentProject, chat.activeConversation, chat.activeConversationId, chat.rollbackToSnapshot]);
+  }, [currentCwd, chat.activeConversation, chat.activeConversationId, chat.rollbackToSnapshot]);
 
-  // 新建对话
-  const handleNewConversation = (mode: ChatMode = "chat", projectId?: string) => {
-    const project = projectId ? projects.projects.find((p) => p.id === projectId) : null;
-    chat.newConversation(mode, projectId, undefined, project?.directory);
+  // 新建普通对话（无 cwd）
+  const handleNewConversation = (mode: ChatMode = "chat") => {
+    chat.newConversation(mode, undefined, undefined);
   };
 
-  // 添加项目 = 创建一条聊天记录
-  const handleAddProject = (name: string, directory: string) => {
-    const newProject = projects.addProject(name, directory);
-    if (newProject) {
-      chat.newConversation("chat", newProject.id, name, directory);
-    }
-  };
-
-  // 点击项目 → 切换到关联的聊天记录
-  const handleSelectProjectConversation = (projectId: string) => {
-    projects.setActiveProject(projectId);
-    const existingConv = chat.conversations.find(
-      (c) => c.projectId === projectId
-    );
-    if (existingConv) {
-      chat.switchConversation(existingConv.id, projects.projects);
-    } else {
-      const project = projects.projects.find((p) => p.id === projectId);
-      chat.newConversation("chat", projectId, project?.name || "项目对话", project?.directory);
-    }
+  // 新建项目对话 = 创建一条带 cwd 的对话
+  const handleNewProjectConversation = (name: string, directory: string) => {
+    chat.newConversation("chat", name, directory);
   };
 
   return (
@@ -187,12 +163,7 @@ function App() {
             onSwitchConversation={handleSwitchConversation}
             onDeleteConversation={chat.deleteConversation}
             onOpenSettings={() => setShowSettings(true)}
-            projects={projects.projects}
-            activeProjectId={projects.activeProjectId}
-            onAddProject={handleAddProject}
-            onSwitchProject={projects.setActiveProject}
-            onDeleteProject={projects.deleteProject}
-            onSelectProjectConversation={handleSelectProjectConversation}
+            onNewProjectConversation={handleNewProjectConversation}
             onPickFolder={pickFolder}
           />
 
@@ -209,7 +180,7 @@ function App() {
               modelConfigs={settings.modelConfigs}
               onSwitchModel={setActiveModel}
               chatMode={currentMode}
-              project={currentProject}
+              cwd={currentCwd}
               backendConnected={chat.backendConnected}
               backendModels={backendModels}
               pendingToolRequests={chat.pendingToolRequests}
@@ -219,11 +190,11 @@ function App() {
               onRollbackToSnapshot={handleRollbackToSnapshot}
             />
 
-            {/* 右侧：文件树 + 文件预览/快照面板（只有项目模式才显示） */}
-            {currentProject && (
+            {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
+            {currentCwd && (
               <div className="flex">
                 <FileTree
-                  directory={currentProject?.directory || ""}
+                  directory={currentCwd}
                   onFileClick={(path) => {
                     setSelectedFilePath(path);
                     setShowCheckpointPanel(false);
@@ -231,7 +202,7 @@ function App() {
                   onClose={() => setFileTreeExpanded(false)}
                   isExpanded={fileTreeExpanded}
                   onToggleExpand={() => setFileTreeExpanded(!fileTreeExpanded)}
-                  showPanel={!!currentProject}
+                  showPanel={!!currentCwd}
                   onToggleCheckpointPanel={() => setShowCheckpointPanel(v => !v)}
                   isCheckpointPanelActive={showCheckpointPanel}
                 />
@@ -239,7 +210,7 @@ function App() {
                 {/* 文件预览面板 / 快照面板（互斥） */}
                 {showCheckpointPanel ? (
                   <CheckpointPanel
-                    cwd={currentProject?.directory || null}
+                    cwd={currentCwd}
                     onClose={() => setShowCheckpointPanel(false)}
                   />
                 ) : (
@@ -253,7 +224,7 @@ function App() {
           </div>
         </div>
 
-        {/* 底部日志面板 — 在 flex 列布局内，不影响上方内容 */}
+        {/* 底部日志面板 */}
         <LogPanel />
       </div>
 

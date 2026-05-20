@@ -3,7 +3,7 @@ import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X 
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
-import { Message, ModelConfig, ChatMode, Project, ToolRequestData, PermissionMode, PERMISSION_MODES } from "../types";
+import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES } from "../types";
 import { isTauri } from "../hooks/useTauri";
 
 interface ChatViewProps {
@@ -19,8 +19,8 @@ interface ChatViewProps {
   onSwitchModel?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
-  /** 当前关联的项目 */
-  project?: Project | null;
+  /** 当前项目目录（有值表示是项目对话） */
+  cwd?: string;
   /** 后端连接状态 */
   backendConnected?: boolean;
   /** 后端可用模型列表 */
@@ -141,7 +141,7 @@ function ChatView({
   modelConfigs,
   onSwitchModel,
   chatMode = "chat",
-  project,
+  cwd,
   backendConnected = false,
   backendModels,
   pendingToolRequests = [],
@@ -179,7 +179,7 @@ function ChatView({
       <div className="titlebar-drag flex items-center gap-3 px-3 h-9 bg-surface-secondary dark:bg-surface-secondary-dark border-b border-border dark:border-border-dark shrink-0">
         {/* 左侧：会话模式/项目目录 — 始终显示 */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {(chatMode === "code" || project) ? (
+          {(chatMode === "code" || cwd) ? (
             <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium shrink-0">
               <Code size={13} />
               <span>编程开发</span>
@@ -190,12 +190,12 @@ function ChatView({
               <span>对话</span>
             </div>
           )}
-          {project?.directory && (
+          {cwd && (
             <>
               <span className="text-content-tertiary dark:text-content-tertiary-dark text-xs">·</span>
               <div className="flex items-center gap-1 text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">
                 <FolderOpen size={12} />
-                <span className="truncate">{project.directory}</span>
+                <span className="truncate">{cwd}</span>
               </div>
             </>
           )}
@@ -222,7 +222,7 @@ function ChatView({
       </div>
 
       {/* ===== 会话信息栏（项目对话但没有目录时的提示） ===== */}
-      {(chatMode === "code" || project) && !project?.directory && (
+      {chatMode === "code" && !cwd && (
         <div className="px-4 py-1.5 bg-amber-50/50 dark:bg-amber-900/10 border-b border-border dark:border-border-dark">
           <div className="max-w-5xl mx-auto flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
             <MessageCircle size={12} />
@@ -238,7 +238,7 @@ function ChatView({
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center animate-fade-in">
               <div className="relative mb-6">
                 <div className="w-16 h-16 rounded-2xl bg-accent/10 dark:bg-accent/10 flex items-center justify-center">
-                  {(chatMode === "code" || project) ? (
+                  {(chatMode === "code" || cwd) ? (
                     <Code size={28} className="text-amber-500" />
                   ) : (
                     <Sparkles size={28} className="text-accent" />
@@ -248,13 +248,13 @@ function ChatView({
               </div>
 
               <h2 className="text-xl font-semibold mb-2">
-                {(chatMode === "code" || project) ? "开始编程开发" : "开始新的对话"}
+                {(chatMode === "code" || cwd) ? "开始编程开发" : "开始新的对话"}
               </h2>
               <p className="text-base text-content-secondary dark:text-content-secondary-dark max-w-sm leading-relaxed">
                 {chatMode === "code"
                   ? "在当前项目目录中执行代码操作。输入你的需求，我会帮你处理。"
                   : "输入你的问题，Ripple 将为你提供 AI 辅助编程帮助。"}
-                {chatMode === "code" && project && !project.directory && (
+                {chatMode === "code" && !cwd && (
                   <span className="block mt-1 text-blue-500 dark:text-blue-400">
                     ℹ️ 请先设置项目目录以启用完整功能
                   </span>
@@ -262,7 +262,7 @@ function ChatView({
               </p>
 
               <div className="mt-6 grid grid-cols-2 gap-2 w-full max-w-sm">
-                {((chatMode === "code" || project)
+                {((chatMode === "code" || cwd)
                   ? [
                       { label: "初始化项目", desc: "创建项目结构" },
                       { label: "生成代码", desc: "根据需求编写" },
@@ -382,11 +382,11 @@ function ChatView({
             modelConfigs={modelConfigs}
             onSwitchModel={onSwitchModel}
             chatMode={chatMode}
-            hasProject={!!project}
+            hasProject={!!cwd}
             placeholder={
               isProcessing
                 ? "AI 正在回复... 点击停止按钮可中断"
-                : chatMode === "code" || !!project
+                : chatMode === "code" || cwd
                 ? "输入编程指令... (Enter 发送, Shift+Enter 换行)"
                 : "输入消息... (Enter 发送, Shift+Enter 换行)"
             }

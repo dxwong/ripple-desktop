@@ -1,12 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, Project } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
 import { useStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
 
-const genId = () => Math.random().toString(36).substring(2, 10);
+const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
 
 async function* simulateStreamResponse(userMessage: string, mode: ChatMode): AsyncGenerator<string> {
   const responses: Record<string, Record<ChatMode, string[]>> = {
@@ -193,14 +193,14 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   }, []);
 
   // ===== 懒加载单个会话的消息详情 =====
-  const loadConversationMessages = useCallback(async (convId: string, projects: Project[]) => {
+  const loadConversationMessages = useCallback(async (convId: string) => {
     if (loadedMessageIds.has(convId) || loadingMessagesFor === convId) {
       flog.debug('STREAMING', `跳过已加载/正在加载的会话`, { convId });
       return;
     }
     setLoadingMessagesFor(convId);
     
-    flog.info('STREAMING', `开始加载会话消息`, { convId, projectsCount: projects.length });
+    flog.info('STREAMING', `开始加载会话消息`, { convId });
     
     try {
       const result = await fetchSession(convId);
@@ -216,38 +216,20 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         title: sessionData.title || '(none)',
         messageCount: (sessionData.messages || []).length,
       });
-      
-      const dirToProjectId = new Map<string, string>();
-      for (const p of projects) {
-        if (p.directory) {
-          dirToProjectId.set(p.directory.toLowerCase().replace(/\\/g, '/'), p.id);
-        }
-      }
-      const inferProjectId = (cwd?: string): string | undefined => {
-        if (!cwd) return undefined;
-        const normalized = cwd.toLowerCase().replace(/\\/g, '/');
-        if (dirToProjectId.has(normalized)) return dirToProjectId.get(normalized);
-        for (const [dir, pid] of dirToProjectId.entries()) {
-          if (normalized === dir || normalized.startsWith(dir + '/')) return pid;
-        }
-        return undefined;
-      };
-      const projectId = inferProjectId(sessionData.cwd);
+
+      // 有 cwd 的项目对话自动标记为 code 模式
+      const inferredMode: ChatMode = sessionData.cwd ? 'code' : ((sessionData.mode as ChatMode) || 'chat');
+
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== convId) return c;
           if (c.messages && c.messages.length > 0) {
-            return {
-              ...c,
-              cwd: sessionData.cwd || c.cwd,
-              projectId: projectId || c.projectId,
-            };
+            return { ...c, cwd: sessionData.cwd || c.cwd };
           }
           return {
             ...c,
             messages: (sessionData.messages || []) as Message[],
-            mode: projectId ? 'code' : ((sessionData.mode as ChatMode) || c.mode),
-            projectId: projectId || c.projectId,
+            mode: inferredMode,
             cwd: sessionData.cwd || c.cwd,
           };
         })
@@ -257,7 +239,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         convId,
         messageCount: (sessionData.messages || []).length,
         cwd: sessionData.cwd || '(none)',
-        projectId: projectId || '(none)',
       });
     } finally {
       setLoadingMessagesFor((v) => (v === convId ? null : v));
@@ -350,7 +331,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       });
       const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now(), ...extraFields };
       let newTitle: string | undefined;
-      let newProjectId: string | undefined;
       setConversations((prev) =>
         prev.map((conv) => {
           if (conv.id !== convId) return conv;
@@ -360,7 +340,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
             : conv.title;
           if (isFirstUserMessage) {
             newTitle = title;
-            newProjectId = conv.projectId;
           }
           return {
             ...conv,
@@ -375,19 +354,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         // 立即保存到本地存储（不等待 debounce）
         const active = conversationsRef.current.filter((c) => !deletedIdsRef.current.has(c.id));
         saveItemRef.current("conversations", active);
-        // 同时同步到后端 .json 元数据文件
-        // 注意：只传 cwd（项目目录），不传 projectId。cwd 用于后端正确路由，projectId 是前端内部标识
-        const body: { title: string; cwd?: string } = { title: newTitle };
-        if (newProjectId) {
-          // 如果是项目对话，从 conversation 中获取正确的 cwd
-          const conv = conversationsRef.current.find((c) => c.id === convId);
-          if (conv && conv.projectId) {
-            // projectId 存在说明是项目对话，但 cwd 存储在后端 .json 中
-            // 这里不传 cwd，让后端从 .json 读取已有的 cwd
-            // body.cwd 会通过 loadConversationMessages 时从后端获取并更新到前端
-          }
-        }
-        saveSession(convId, body).catch((err) => {
+        // 同步到后端 .json 元数据文件
+        saveSession(convId, { title: newTitle }).catch((err) => {
           console.warn(`[addMessage] 同步标题到后端失败 ${convId}:`, err);
         });
       }
@@ -630,7 +598,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   }, [backendConnected]);
 
   // ===== 新建对话 =====
-  const newConversation = useCallback((mode: ChatMode = "chat", projectId?: string, title?: string, cwd?: string) => {
+  const newConversation = useCallback((mode: ChatMode = "chat", title?: string, cwd?: string) => {
     const newConv: Conversation = {
       id: genId(),
       title: title || (mode === "code" ? "新开发会话" : "新对话"),
@@ -638,14 +606,12 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       mode,
-      projectId,
       cwd,
     };
     flog.info('STREAMING', `新建对话`, {
       id: newConv.id,
       title: newConv.title,
       mode,
-      projectId: projectId || '(none)',
       cwd: cwd || '(none)',
     });
     setConversations((prev) => [newConv, ...prev]);
@@ -656,7 +622,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   }, []);
 
   // ===== 切换对话 =====
-  const switchConversation = useCallback((id: string, projects: Project[] = []) => {
+  const switchConversation = useCallback((id: string) => {
     const target = conversationsRef.current.find(c => c.id === id);
     flog.info('STREAMING', `切换对话`, {
       fromId: activeConversationIdRef.current,
@@ -674,7 +640,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     setPendingToolRequests([]);
     setActiveConversationId(id);
     if (!loadedMessageIds.has(id)) {
-      loadConversationMessages(id, projects);
+      loadConversationMessages(id);
     }
   }, [isProcessing, loadedMessageIds, loadConversationMessages]);
 
@@ -761,7 +727,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   }, [pendingToolRequests, autoConfirm, handleToolConfirm]);
 
   // ===== 从后端加载历史会话列表（仅合并元数据，不拉取消息） =====
-  const loadSessionsFromBackend = useCallback(async (projects: Project[]) => {
+  const loadSessionsFromBackend = useCallback(async () => {
     flog.info('STREAMING', '从后端加载历史会话列表');
     const result = await fetchSessions();
     if (result.error || !result.data) {
@@ -769,34 +735,16 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       return;
     }
 
-    const dirToProjectId = new Map<string, string>();
-    for (const p of projects) {
-      if (p.directory) {
-        const normalized = p.directory.toLowerCase().replace(/\\/g, '/');
-        dirToProjectId.set(normalized, p.id);
-      }
-    }
-
-    const inferProjectId = (cwd?: string): string | undefined => {
-      if (!cwd) return undefined;
-      const normalized = cwd.toLowerCase().replace(/\\/g, '/');
-      if (dirToProjectId.has(normalized)) return dirToProjectId.get(normalized);
-      for (const [dir, pid] of dirToProjectId.entries()) {
-        if (normalized === dir || normalized.startsWith(dir + '/')) return pid;
-      }
-      return undefined;
-    };
-
+    // 根据 cwd 推断 mode：有 cwd 则为 code 模式
     const backendConversations = result.data.map((session) => {
-      const projectId = inferProjectId(session.cwd);
+      const inferredMode: ChatMode = session.cwd ? 'code' : ((session.mode as ChatMode) || 'chat');
       return {
         id: session.id,
         title: session.title,
         messages: [] as Message[],
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        mode: projectId ? 'code' : ((session.mode as ChatMode) || 'chat'),
-        projectId,
+        mode: inferredMode,
         cwd: session.cwd,
       };
     });

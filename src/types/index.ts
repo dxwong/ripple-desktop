@@ -17,15 +17,6 @@ export const PERMISSION_MODES: { value: PermissionMode; label: string; descripti
   { value: "read-only", label: "只读模式", description: "仅允许读取文件，禁止写操作" },
 ];
 
-/** 项目类型 */
-export interface Project {
-  id: string;
-  name: string;
-  directory: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 /** 工具执行结果 */
 export interface ToolCallResult {
   toolName: string;
@@ -61,9 +52,7 @@ export interface Conversation {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
-  /** 关联的项目 ID（编程模式下使用） */
-  projectId?: string;
-  /** 工作目录（后端 Agent 的 cwd，用于项目对话） */
+  /** 工作目录。不为空时表示是项目会话，AI 有权操作此文件夹 */
   cwd?: string;
   /** 聊天模式 */
   mode: ChatMode;
@@ -133,8 +122,7 @@ export interface BackendSession {
   /** 完整消息列表（从 /api/sessions/:id 获取时包含） */
   messages?: Message[];
   mode?: ChatMode;
-  projectId?: string;
-  /** 后端 JSONL 中的工作目录，前端用它匹配本地项目 */
+  /** 后端 JSONL 中的工作目录 */
   cwd?: string;
 }
 
