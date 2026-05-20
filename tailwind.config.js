@@ -9,8 +9,8 @@ export default {
         surface: {
           DEFAULT: "#F7F7F5",       // 主背景
           dark: "#141416",          // 深色主背景
-          secondary: "#FFFFFF",     // 卡片/侧栏背景
-          "secondary-dark": "#1C1C1F", // 深色卡片
+          secondary: "#FAFAFA",     // 侧栏背景（接近主背景的浅灰）
+          "secondary-dark": "#1A1A1C", // 深色侧栏背景
           elevated: "#FFFFFF",      // 浮层背景
           "elevated-dark": "#252528", // 深色浮层
         },

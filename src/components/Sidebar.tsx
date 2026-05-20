@@ -82,14 +82,21 @@ function Sidebar({
   // 普通对话 = 无 cwd 的对话
   const normalConversations = conversations.filter(c => !c.cwd);
 
-  /** 新建普通对话 */
+  /** 新建普通对话或定位到已有空对话 */
   const handleNewConversation = () => {
-    onNewConversation("chat");
+    // 查找已存在的空普通对话
+    const existingEmptyConv = normalConversations.find(c => c.messages.length === 0);
+    if (existingEmptyConv) {
+      // 如果存在空对话，定位到该对话
+      onSwitchConversation(existingEmptyConv.id);
+    } else {
+      // 否则创建新对话
+      onNewConversation("chat");
+    }
   };
 
-  // 当前活跃是普通对话且为空时，禁用"新建"按钮（防止创建多个空普通对话）
-  const activeConv = conversations.find(c => c.id === activeConversationId);
-  const isNewDisabled = activeConv !== undefined && !activeConv.cwd && activeConv.messages.length === 0;
+  // 检测是否存在空的普通对话
+  const hasEmptyConversation = normalConversations.some(c => c.messages.length === 0);
 
   /** 打开新建项目对话弹窗 */
   const handleOpenAddProject = () => {
@@ -142,9 +149,8 @@ function Sidebar({
           {/* + 新建普通对话 */}
           <button
             onClick={handleNewConversation}
-            disabled={isNewDisabled}
-            className={`icon-btn ${isNewDisabled ? 'opacity-30 cursor-not-allowed' : ''}`}
-            title={isNewDisabled ? '当前对话为空，无需新建' : '新建对话'}
+            className={`icon-btn ${hasEmptyConversation ? 'opacity-70' : ''}`}
+            title={hasEmptyConversation ? '已有空对话，点击定位' : '新建对话'}
           >
             <Plus size={18} />
           </button>

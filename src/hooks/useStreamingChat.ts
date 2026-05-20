@@ -102,17 +102,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   const sseClientRef = useRef<SSEClient | null>(null);
   const { saveItem, loadItem } = useStore();
   const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
-  // 追踪已删除的会话 ID（持久化到 localStorage，防止重启后"复活"）
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
 
   // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
-  // 用于 addMessage 中捕获 saveItem/deletedIds 的最新引用（避免闭包过期）
-  const deletedIdsRef = useRef(deletedIds);
-  deletedIdsRef.current = deletedIds;
+  // 用于 addMessage 中捕获 saveItem 的最新引用（避免闭包过期）
   const saveItemRef = useRef(saveItem);
   saveItemRef.current = saveItem;
 
@@ -127,67 +123,70 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     loadedInitRef.current = true;
     (async () => {
       flog.info('STREAMING', '初始化：从本地存储加载会话');
-      // 加载已删除 ID 集合
-      const savedDeleted = await loadItem<string[]>("deletedConversationIds", []);
-      if (savedDeleted && savedDeleted.length > 0) {
-        setDeletedIds(new Set(savedDeleted));
-        flog.info('STREAMING', `加载已删除会话记录`, { count: savedDeleted.length });
-      }
-      // 加载会话列表（排除已删除的）
+      // 加载会话列表
       const saved = await loadItem<Conversation[]>("conversations", []);
       if (saved && saved.length > 0) {
-        const active = saved.filter((c) => !savedDeleted?.includes(c.id));
-        active.sort((a, b) => b.updatedAt - a.updatedAt);
-        setConversations(active);
+        saved.sort((a, b) => b.updatedAt - a.updatedAt);
+        setConversations(saved);
         const ids = new Set<string>();
-        for (const c of active) {
+        for (const c of saved) {
           if (c.messages && c.messages.length > 0) ids.add(c.id);
         }
         setLoadedMessageIds(ids);
         flog.info('STREAMING', `从本地存储加载会话`, {
-          total: active.length,
-          excluded: saved.length - active.length,
+          total: saved.length,
           withMessages: ids.size,
         });
       } else {
         flog.info('STREAMING', '本地无已保存会话');
       }
+      // 清理旧的软删除标记（已改为物理删除）
+      const oldDeletedIds = await loadItem<string[]>("deletedConversationIds", []);
+      if (oldDeletedIds && oldDeletedIds.length > 0) {
+        localStorage.removeItem("ripple-deletedConversationIds");
+        flog.info('STREAMING', `已清理旧的软删除标记（${oldDeletedIds.length}条）`);
+      }
     })();
   }, []);
 
-  // ===== 持久化：保存会话到本地存储（排除已删除） =====
-  // 每次 conversations/deletedIds 变化时触发（带防抖）
+  // ===== 持久化：保存会话到本地存储（物理删除） =====
+  // 每次 conversations 变化时触发（带防抖）
   useEffect(() => {
     if (!loadedInitRef.current) return;
     const timer = setTimeout(async () => {
-      const active = conversations.filter((c) => !deletedIds.has(c.id));
       try {
-        await saveItem("conversations", active);
-        await saveItem("deletedConversationIds", Array.from(deletedIds));
+        await saveItem("conversations", conversations);
       } catch (err) {
         flog.warn('STREAMING', '保存会话到本地存储失败', { error: String(err) });
       }
     }, 100);
     return () => clearTimeout(timer);
-  }, [conversations, deletedIds, saveItem]);
+  }, [conversations, saveItem]);
 
   // ===== 窗口关闭前强制保存 =====
   useEffect(() => {
     const handleBeforeUnload = async () => {
-      const active = conversationsRef.current.filter((c) => !deletedIdsRef.current.has(c.id));
-      await saveItem("conversations", active);
-      await saveItem("deletedConversationIds", Array.from(deletedIdsRef.current));
+      await saveItem("conversations", conversationsRef.current);
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [saveItem]);
 
   // ===== 通过 SSE 实时检测后端连接状态（替代轮询） =====
+  // 用 ref 记录上次连接状态，避免连接稳定后频繁重复日志
+  const prevConnectedRef = useRef<boolean | null>(null);
   useEffect(() => {
     flog.info('STREAMING', '启动 SSE 健康检测');
+    prevConnectedRef.current = null;
     healthSSEClient.connect((connected) => {
       setBackendConnected(connected);
-      flog.info('STREAMING', `SSE 健康检测: ${connected ? '已连接' : '未连接'}`);
+      // 仅当状态发生变化时输出 INFO 日志，稳定心跳用 DEBUG
+      if (prevConnectedRef.current !== connected) {
+        prevConnectedRef.current = connected;
+        flog.info('STREAMING', `SSE 健康检测: ${connected ? '已连接' : '未连接'}`);
+      } else {
+        flog.debug('STREAMING', `SSE 心跳: ${connected ? '已连接' : '未连接'}`);
+      }
     });
     return () => healthSSEClient.close();
   }, []);
@@ -250,17 +249,18 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
   activeModeRef.current = activeConversation?.mode || "chat";
 
   // ===== 检查后端连接状态（仅返回结果，不修改状态——状态由 SSE 健康检测管理） =====
+  // 日志用 DEBUG 级别，避免启动时大量 INFO 刷屏
   const checkBackendConnection = useCallback(async () => {
-    flog.info('STREAMING', '检查后端连接状态');
+    flog.debug('STREAMING', '检查后端连接状态');
     const ok = await checkHealth();
     if (!ok) {
-      flog.warn('STREAMING', '首次连接失败，1秒后重试');
+      flog.debug('STREAMING', '首次连接失败，1秒后重试');
       await new Promise(r => setTimeout(r, 1000));
       const retryOk = await checkHealth();
-      flog.info('STREAMING', `重试后端连接状态: ${retryOk ? '已连接' : '未连接'}`);
+      flog.debug('STREAMING', `重试后端连接状态: ${retryOk ? '已连接' : '未连接'}`);
       return retryOk;
     }
-    flog.info('STREAMING', `后端连接状态: ${ok ? '已连接' : '未连接'}`);
+    flog.debug('STREAMING', `后端连接状态: ${ok ? '已连接' : '未连接'}`);
     return ok;
   }, []);
 
@@ -352,8 +352,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       // 同步标题到后端（使用 ref 确保拿到最新值），防止快速关闭导致标题丢失
       if (newTitle !== undefined) {
         // 立即保存到本地存储（不等待 debounce）
-        const active = conversationsRef.current.filter((c) => !deletedIdsRef.current.has(c.id));
-        saveItemRef.current("conversations", active);
+        saveItemRef.current("conversations", conversationsRef.current);
         // 同步到后端 .json 元数据文件
         saveSession(convId, { title: newTitle }).catch((err) => {
           console.warn(`[addMessage] 同步标题到后端失败 ${convId}:`, err);
@@ -644,7 +643,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     }
   }, [isProcessing, loadedMessageIds, loadConversationMessages]);
 
-  // ===== 删除对话 =====
+  // ===== 删除对话（物理删除） =====
   const deleteConversation = useCallback(
     (id: string) => {
       const target = conversationsRef.current.find(c => c.id === id);
@@ -655,7 +654,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         messageCount: target?.messages?.length || 0,
       });
       setConversations((prev) => prev.filter((c) => c.id !== id));
-      setDeletedIds((prev) => new Set([...prev, id]));
       setLoadedMessageIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -753,7 +751,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         const merged = new Map<string, Conversation>();
         for (const c of prev) merged.set(c.id, c);
         for (const c of backendConversations) {
-          if (deletedIds.has(c.id)) continue;
           const backendConv = c as Conversation;
           if (!merged.has(c.id)) {
             merged.set(c.id, backendConv);
@@ -771,11 +768,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
         flog.info('STREAMING', `后端会话合并完成`, {
           backendCount: backendConversations.length,
           mergedCount: arr.length,
-          filteredDeleted: deletedIds.size,
         });
         return arr;
       });
-  }, [deletedIds]);
+  }, []);
 
   // ===== 回滚到指定消息的快照 =====
   const rollbackToSnapshot = useCallback(
@@ -843,11 +839,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
 
     const ids = projectConversations.map(c => c.id);
     setConversations((prev) => prev.filter((c) => !c.cwd));
-    setDeletedIds((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) next.add(id);
-      return next;
-    });
     setLoadedMessageIds((prev) => {
       const next = new Set(prev);
       for (const id of ids) next.delete(id);
