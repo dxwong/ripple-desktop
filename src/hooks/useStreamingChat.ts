@@ -431,6 +431,9 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
           const sseClient = new SSEClient();
           sseClientRef.current = sseClient;
 
+          // 预先添加一个空的 assistant 消息，以便后续能在上面显示错误或内容
+          addMessage("assistant", "");
+
           await new Promise<void>((resolve, reject) => {
             let hasContent = false;
 
@@ -557,7 +560,26 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   flog.debug('STREAMING', '新轮次开始');
                 },
                 onTurnEnd: (data) => {
-                  flog.debug('STREAMING', `轮次结束`, { hasToolResults: data.hasToolResults, hasError: data.hasError });
+                  flog.debug('STREAMING', `轮次结束`, { 
+                    hasToolResults: data.hasToolResults, 
+                    hasError: data.hasError, 
+                    errorMessage: data.errorMessage 
+                  });
+                  
+                  // 如果有错误，显示到对话中
+                  if (data.hasError) {
+                    let errorContent = data.errorMessage;
+                    
+                    if (!errorContent) {
+                      errorContent = "请求处理过程中发生未知错误";
+                      flog.warn('STREAMING', `turn-end 有错误但 errorMessage 为空，使用默认提示`);
+                    }
+                    
+                    flog.error('STREAMING', `收到错误消息，显示到对话中`, { errorMessage: errorContent });
+                    const sanitized = errorContent.replace(/<[^>]+>/g, '');
+                    const errorMsg = `\n\n❌ ${sanitized}\n\n`;
+                    appendToConversation(targetConvId, errorMsg);
+                  }
                 },
                 onMessageStart: (role) => {
                   flog.debug('STREAMING', `消息开始`, { role });
@@ -599,13 +621,30 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   flog.info('STREAMING', 'SSE 流正常结束');
                   resolve();
                 },
-                onError: (error) => {
-                  flog.error('STREAMING', `SSE 流错误`, { error });
-                  const errorMsg = `**❌ 请求失败**\n\n\`\`\`\n${error}\n\`\`\`\n\n> 💡 **建议**：\n> - 检查 API 额度是否充足\n> - 切换到其他模型\n> - 重启应用后重试`;
-                  appendToConversation(
-                    targetConvId,
-                    `\n\n${errorMsg}\n\n`
-                  );
+                onError: (error, errorDetails) => {
+                  flog.error('STREAMING', `SSE 流错误`, { error, errorDetails });
+                  
+                  // 构建完整的错误信息
+                  let fullErrorMessage = error;
+                  if (errorDetails) {
+                    if (errorDetails.response) {
+                      const { status, statusText, data } = errorDetails.response;
+                      fullErrorMessage = `${error}\n\nHTTP ${status} ${statusText}`;
+                      if (data) {
+                        fullErrorMessage += `\n\n响应数据: ${typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data)}`;
+                      }
+                    }
+                    if (errorDetails.code) {
+                      fullErrorMessage += `\n错误代码: ${errorDetails.code}`;
+                    }
+                    if (errorDetails.stack) {
+                      fullErrorMessage += `\n\n堆栈信息:\n${errorDetails.stack}`;
+                    }
+                  }
+                  
+                  const sanitized = fullErrorMessage.replace(/<[^>]+>/g, '');
+                  const errorMsg = `\n\n❌ ${sanitized}\n\n`;
+                  appendToConversation(targetConvId, errorMsg);
                   resolve();
                 },
               }

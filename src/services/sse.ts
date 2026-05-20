@@ -6,6 +6,7 @@
  */
 
 import type { SSEEvent, ToolRequestData } from "../types";
+import { flog } from "./frontendLogger";
 
 /** SSE 连接配置 */
 interface SSEClientOptions {
@@ -31,11 +32,11 @@ interface SSECallbacks {
   /** Agent/轮次/消息生命周期事件 */
   onAgentStart?: () => void;
   onTurnStart?: () => void;
-  onTurnEnd?: (data: { hasToolResults: boolean; hasError: boolean }) => void;
+  onTurnEnd?: (data: { hasToolResults: boolean; hasError: boolean; errorMessage?: string }) => void;
   onMessageStart?: (role: string) => void;
   onMessageEnd?: (role: string) => void;
   onDone?: () => void;
-  onError?: (error: string) => void;
+  onError?: (error: string, errorDetails?: any) => void;
   /** usage 事件回调：每次 AI 回复的 token 用量和费用 */
   onUsage?: (data: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number }) => void;
 }
@@ -121,6 +122,7 @@ export class SSEClient {
 
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     try {
+      flog.debug('SSE', `发起 SSE 连接请求`, { url: `${this.baseUrl}/api/chat` });
       const response = await fetch(`${this.baseUrl}/api/chat`, {
         method: "POST",
         headers: {
@@ -142,6 +144,8 @@ export class SSEClient {
         signal,
       });
 
+      flog.debug('SSE', `收到 SSE 响应`, { ok: response.ok, status: response.status, statusText: response.statusText });
+
       clearTimeout(timeoutId);
 
       if (!response.ok) {
@@ -153,7 +157,9 @@ export class SSEClient {
         else if (statusCode === 403) errorHint = "（权限不足）";
         else if (statusCode === 429) errorHint = "（请求过于频繁，请稍后重试）";
         else if (statusCode >= 500) errorHint = "（服务端错误）";
-        callbacks.onError?.(body.error || `HTTP ${statusCode}${errorHint}`);
+        const errorMsg = body.error || `HTTP ${statusCode}${errorHint}`;
+        flog.error('SSE', `请求失败`, { statusCode, errorMsg, body });
+        callbacks.onError?.(errorMsg);
         return;
       }
 
@@ -205,6 +211,7 @@ export class SSEClient {
           try {
             const jsonStr = trimmed.slice(6); // 去掉 "data: " 前缀
             const event: SSEEvent = JSON.parse(jsonStr);
+            flog.debug('SSE', `收到 SSE 事件`, { type: event.type, data: event });
 
             switch (event.type) {
               case "text":
@@ -255,6 +262,7 @@ export class SSEClient {
                 callbacks.onTurnEnd?.({
                   hasToolResults: event.hasToolResults === true,
                   hasError: event.hasError === true,
+                  errorMessage: event.errorMessage,
                 });
                 break;
               case "message-start":
@@ -267,9 +275,13 @@ export class SSEClient {
                 this._status = "done";
                 callbacks.onDone?.();
                 break;
-              case "error":
+              case 'error':
                 this._status = "error";
-                callbacks.onError?.(event.error || "未知错误");
+                const errMsg = event.error || "未知错误";
+                flog.error('SSE', `收到 error 事件`, { 
+                  error: errMsg, 
+                  errorDetails: event.errorDetails });
+                callbacks.onError?.(errMsg, event.errorDetails);
                 break;
               case "usage":
                 // usage 事件携带 token 用量和费用数据
@@ -301,9 +313,11 @@ export class SSEClient {
       if (idleTimer) clearTimeout(idleTimer);
       if (err.name === "AbortError") {
         // 主动取消，不触发 onError
+        flog.debug('SSE', `连接被主动取消`);
         this._status = "idle";
         return;
       }
+      flog.error('SSE', `连接异常`, { error: err.message, stack: err.stack });
       this._status = "error";
       callbacks.onError?.(err.message || "连接失败");
     }

@@ -159,6 +159,7 @@ export interface SSEEvent {
   /** turn-end / message-start / message-end 事件字段 */
   hasToolResults?: boolean;
   hasError?: boolean;
+  errorMessage?: string;
   role?: string;
   // usage 事件字段
   input?: number;

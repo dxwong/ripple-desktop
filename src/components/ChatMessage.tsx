@@ -184,6 +184,11 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               : "bg-message-ai dark:bg-message-ai-dark"
           }`}
         >
+          {!isUser && displayContent.startsWith('❌') ? (
+            <div className="text-red-600 dark:text-red-400 font-semibold text-[14px] leading-relaxed whitespace-pre-wrap break-all">
+              {displayContent.replace(/<[^>]+>/g, '')}
+            </div>
+          ) : (
           <div className="markdown-body selectable-text">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -231,6 +236,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               {displayContent}
             </ReactMarkdown>
           </div>
+          )}
 
           {/* 流式闪烁光标 */}
           {isStreaming && (
