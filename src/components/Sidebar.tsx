@@ -12,9 +12,11 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Pencil,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Conversation, ChatMode } from "../types";
+import { syncStore } from "../hooks/useStore";
 
 interface SidebarProps {
   darkMode: boolean;
@@ -27,6 +29,8 @@ interface SidebarProps {
   onOpenSettings: () => void;
   /** 新建项目对话（带文件夹路径） */
   onNewProjectConversation: (name: string, directory: string) => void;
+  /** 重命名对话 */
+  onRenameConversation: (id: string, title: string) => void;
   /** 打开文件夹选择器 */
   onPickFolder: () => Promise<string | null>;
 }
@@ -55,15 +59,23 @@ function Sidebar({
   onDeleteConversation,
   onOpenSettings,
   onNewProjectConversation,
+  onRenameConversation,
   onPickFolder,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [projectsCollapsed, setProjectsCollapsed] = useState<boolean>(() => syncStore.getItem("sidebar-projects-collapsed", true) as boolean);
   const [showAddProject, setShowAddProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [projectDir, setProjectDir] = useState("");
   const [pickingFolder, setPickingFolder] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  // 持久化项目折叠状态
+  useEffect(() => {
+    syncStore.setItem("sidebar-projects-collapsed", projectsCollapsed);
+  }, [projectsCollapsed]);
 
   // 项目对话 = 有 cwd 的对话
   const projectConversations = conversations.filter(c => c.cwd);
@@ -75,7 +87,7 @@ function Sidebar({
     onNewConversation("chat");
   };
 
-  // 当前活跃对话是普通对话且为空时，禁用"新建"按钮
+  // 当前活跃是普通对话且为空时，禁用"新建"按钮（防止创建多个空普通对话）
   const activeConv = conversations.find(c => c.id === activeConversationId);
   const isNewDisabled = activeConv !== undefined && !activeConv.cwd && activeConv.messages.length === 0;
 
@@ -91,7 +103,14 @@ function Sidebar({
     setPickingFolder(true);
     try {
       const dir = await onPickFolder();
-      if (dir) setProjectDir(dir);
+      if (dir) {
+        setProjectDir(dir);
+        // 自动以文件夹名作为默认对话名称
+        const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+        if (folderName && !newProjectName) {
+          setNewProjectName(folderName);
+        }
+      }
     } finally {
       setPickingFolder(false);
     }
@@ -197,7 +216,31 @@ function Sidebar({
                       conv.id === activeConversationId ? "opacity-100" : "opacity-60"
                     }`} />
                     <div className="flex-1 min-w-0 overflow-hidden">
-                      <div className="truncate">{conv.title}</div>
+                      {renamingId === conv.id ? (
+                        <input
+                          type="text"
+                          value={renameText}
+                          onChange={(e) => setRenameText(e.target.value)}
+                          onBlur={() => {
+                            if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                            setRenamingId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                              setRenamingId(null);
+                            } else if (e.key === "Escape") {
+                              setRenamingId(null);
+                            }
+                            e.stopPropagation();
+                          }}
+                          className="w-full text-sm bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div className="truncate">{conv.title}</div>
+                      )}
                       {conv.cwd && (
                         <div className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark truncate">
                           {conv.cwd}
@@ -205,13 +248,22 @@ function Sidebar({
                       )}
                     </div>
                   </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
-                    title="删除对话"
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
+                      title="重命名"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
+                      title="删除对话"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -257,15 +309,50 @@ function Sidebar({
                     }`}
                   >
                     <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
-                    <span className="truncate flex-1">{conv.title}</span>
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                      {renamingId === conv.id ? (
+                        <input
+                          type="text"
+                          value={renameText}
+                          onChange={(e) => setRenameText(e.target.value)}
+                          onBlur={() => {
+                            if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                            setRenamingId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                              setRenamingId(null);
+                            } else if (e.key === "Escape") {
+                              setRenamingId(null);
+                            }
+                            e.stopPropagation();
+                          }}
+                          className="w-full text-sm bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="truncate">{conv.title}</span>
+                      )}
+                    </div>
                   </button>
-                  <button
-                    onClick={() => onDeleteConversation(conv.id)}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
-                    title="删除对话"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
+                      title="重命名"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      onClick={() => onDeleteConversation(conv.id)}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
+                      title="删除对话"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

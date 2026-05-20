@@ -828,6 +828,44 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     [isProcessing, backendConnected]
   );
 
+  // ===== 重命名对话 =====
+  const renameConversation = useCallback((id: string, title: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c))
+    );
+    saveSession(id, { title }).catch(() => {});
+  }, []);
+
+  // ===== 清空所有项目对话（有 cwd 的对话） =====
+  const clearAllProjectConversations = useCallback(() => {
+    const projectConversations = conversationsRef.current.filter(c => c.cwd);
+    if (projectConversations.length === 0) return;
+
+    const ids = projectConversations.map(c => c.id);
+    setConversations((prev) => prev.filter((c) => !c.cwd));
+    setDeletedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+    setLoadedMessageIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+    if (ids.includes(activeConversationId)) {
+      const remaining = conversationsRef.current.filter((c) => !ids.includes(c.id));
+      setActiveConversationId(remaining.length > 0 ? remaining[remaining.length - 1].id : "");
+    }
+    // 异步批量删除后端记录
+    for (const id of ids) {
+      deleteSession(id).catch((err) => {
+        flog.warn('STREAMING', `后端删除项目对话失败`, { id, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+    flog.info('STREAMING', `清空项目对话`, { count: ids.length, ids });
+  }, [activeConversationId]);
+
   return {
     conversations,
     activeConversation,
@@ -850,5 +888,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
     loadedMessageIds,
     loadingMessagesFor,
     rollbackToSnapshot,
+    renameConversation,
+    clearAllProjectConversations,
   };
 }

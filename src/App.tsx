@@ -164,6 +164,7 @@ function App() {
             onDeleteConversation={chat.deleteConversation}
             onOpenSettings={() => setShowSettings(true)}
             onNewProjectConversation={handleNewProjectConversation}
+            onRenameConversation={chat.renameConversation}
             onPickFolder={pickFolder}
           />
 
