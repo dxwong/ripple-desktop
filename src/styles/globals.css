@@ -156,16 +156,25 @@
   }
 
   .markdown-body table {
-    @apply w-full border-collapse mb-2 text-sm;
+    @apply w-full border-collapse mb-3 text-sm;
+    @apply rounded-lg overflow-hidden;
   }
 
   .markdown-body th,
   .markdown-body td {
-    @apply border border-border dark:border-border-dark px-3 py-1.5 text-left;
+    @apply border border-border/50 dark:border-border-dark/50 px-3 py-2 text-left;
   }
 
   .markdown-body th {
-    @apply bg-message-ai dark:bg-message-ai-dark font-medium;
+    @apply bg-message-ai dark:bg-message-ai-dark font-medium text-content-secondary;
+  }
+
+  .markdown-body td {
+    @apply bg-white/[0.01];
+  }
+
+  .markdown-body tr:last-child td {
+    @apply border-b border-border/50 dark:border-border-dark/50;
   }
 
   .markdown-body hr {
