@@ -466,7 +466,25 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   appendThinkingToConversation(targetConvId, text);
                 },
                 onToolStart: (toolCallId, toolName) => {
-                  flog.debug('STREAMING', `工具开始`, { toolCallId, toolName });
+                  flog.debug('STREAMING', `工具开始执行`, { toolCallId, toolName });
+                  if (activeConversationIdRef.current !== targetConvId) return;
+                  // 将工具调用状态推进到执行中（后续 onToolEnd 变为 success/error）
+                  setConversations((prev) => {
+                    const convId = targetConvId;
+                    return prev.map((conv) => {
+                      if (conv.id !== convId) return conv;
+                      const msgs = [...conv.messages];
+                      const last = msgs[msgs.length - 1];
+                      if (!last || last.role !== "assistant") return conv;
+                      const toolCalls = [...(last.toolCalls || [])];
+                      const idx = toolCalls.findIndex((tc) => tc.toolCallId === toolCallId);
+                      if (idx >= 0) {
+                        toolCalls[idx] = { ...toolCalls[idx], status: "approved" };
+                      }
+                      msgs[msgs.length - 1] = { ...last, toolCalls };
+                      return { ...conv, messages: msgs, updatedAt: Date.now() };
+                    });
+                  });
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
@@ -526,6 +544,25 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                       return { ...conv, messages: msgs, updatedAt: Date.now() };
                     })
                   );
+                },
+                // Agent 生命周期事件（日志级别，用于追踪）
+                onAgentStart: () => {
+                  flog.debug('STREAMING', 'Agent 开始处理');
+                },
+                onTurnStart: () => {
+                  flog.debug('STREAMING', '新轮次开始');
+                },
+                onTurnEnd: (data) => {
+                  flog.debug('STREAMING', `轮次结束`, { hasToolResults: data.hasToolResults, hasError: data.hasError });
+                },
+                onMessageStart: (role) => {
+                  flog.debug('STREAMING', `消息开始`, { role });
+                },
+                onMessageEnd: (role) => {
+                  flog.debug('STREAMING', `消息结束`, { role });
+                },
+                onToolUpdate: (toolCallId, toolName) => {
+                  flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
                 },
                 onDone: () => {
                   flog.info('STREAMING', 'SSE 流正常结束');
@@ -630,6 +667,30 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       isProcessing,
     });
     if (isProcessing) {
+      // 切换前清理当前会话中未完成的工具调用（中断所有 pending/approved 工具）
+      const fromConvId = activeConversationIdRef.current;
+      if (fromConvId) {
+        setConversations((prev) =>
+          prev.map((conv) => {
+            if (conv.id !== fromConvId) return conv;
+            const msgs = conv.messages.map((msg) => {
+              if (msg.role !== "assistant" || !msg.toolCalls?.length) return msg;
+              const hasActiveTool = msg.toolCalls.some(
+                (tc) => tc.status === "pending" || tc.status === "approved"
+              );
+              if (!hasActiveTool) return msg;
+              const toolCalls = msg.toolCalls.map((tc) =>
+                tc.status === "pending" || tc.status === "approved"
+                  ? { ...tc, status: "error" as const, error: "用户切换会话，工具执行已中断" }
+                  : tc
+              );
+              return { ...msg, toolCalls };
+            });
+            return { ...conv, messages: msgs, updatedAt: Date.now() };
+          })
+        );
+      }
+
       abortRef.current?.abort();
       sseClientRef.current?.abort();
       sseClientRef.current = null;

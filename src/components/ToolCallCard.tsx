@@ -114,14 +114,14 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
 
   return (
     <div
-      className={`rounded-xl border ${statusCfg.borderClass} ${statusCfg.bgClass} overflow-hidden animate-slide-down mt-2`}
+      className={`rounded-lg border ${statusCfg.borderClass} ${statusCfg.bgClass} overflow-hidden mt-1.5`}
     >
       {/* 标题栏 */}
-      <div className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
-        <Icon size={14} className={statusCfg.iconClass} />
+      <div className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
+        <Icon size={13} className={statusCfg.iconClass} />
 
         {/* 工具名 */}
-        <span className="text-xs font-medium text-content dark:text-content-dark flex-shrink-0">
+        <span className="text-xs text-content-secondary flex-shrink-0">
           {toolLabel}
         </span>
 
@@ -157,12 +157,12 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
           </button>
         )}
 
-        {/* 状态标签 */}
+        {/* 状态标签 — 右侧显示旋转 loading 或状态图标 */}
         <div className={`flex items-center gap-1 shrink-0 ${statusCfg.iconClass}`}>
           {toolCall.status === 'pending' ? (
-            <Loader2 size={12} className="animate-spin" />
+            <Loader2 size={11} className="animate-spin" />
           ) : (
-            <StatusIcon size={12} />
+            <StatusIcon size={11} />
           )}
           <span className="text-[11px] font-medium">{statusCfg.label}</span>
         </div>
@@ -202,8 +202,8 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
           {/* 输出结果 */}
           {toolCall.output && (
             <div className="mt-2">
-              <div className="text-[11px] text-content-tertiary mb-1">输出:</div>
-              <pre className="text-[11px] font-mono bg-black/5 dark:bg-white/5 rounded-lg p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-green-600 dark:text-green-400 leading-relaxed">
+              <div className="text-[10px] text-content-tertiary/50 mb-0.5">输出:</div>
+              <pre className="text-[11px] font-mono bg-black/3 dark:bg-white/3 rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-content-tertiary leading-relaxed">
                 {truncateOutput(toolCall.output)}
               </pre>
             </div>
@@ -212,11 +212,11 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
           {/* 错误信息 */}
           {toolCall.error && (
             <div className="mt-2">
-              <div className="flex items-center gap-1 text-[11px] text-red-500 mb-1">
-                <AlertTriangle size={11} />
+              <div className="flex items-center gap-1 text-[10px] text-red-500/60 mb-0.5">
+                <AlertTriangle size={10} />
                 错误
               </div>
-              <pre className="text-[11px] font-mono bg-red-500/5 rounded-lg p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-red-600 dark:text-red-400 leading-relaxed">
+              <pre className="text-[11px] font-mono bg-red-500/5 rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-red-500/70 leading-relaxed">
                 {truncateOutput(toolCall.error)}
               </pre>
             </div>

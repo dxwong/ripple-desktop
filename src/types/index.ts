@@ -127,7 +127,9 @@ export interface BackendSession {
 }
 
 /** SSE 事件类型 */
-export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'tool-request' | 'done' | 'error';
+export type SSEEventType = 'text' | 'thinking' | 'tool-start' | 'tool-end' | 'tool-request' | 'tool-update'
+  | 'agent-start' | 'turn-start' | 'turn-end' | 'message-start' | 'message-end'
+  | 'done' | 'error';
 
 /** 工具执行确认请求 */
 export interface ToolRequestData {
@@ -146,12 +148,16 @@ export interface SSEEvent {
   error?: string;
   isError?: boolean;
   toolRequest?: ToolRequestData;
-  // tool-request / tool-start / tool-end 事件的扁平字段
+  // tool-request / tool-start / tool-end / tool-update 事件的扁平字段
   toolCallId?: string;
   toolName?: string;
   args?: Record<string, unknown>;
   description?: string;
   riskLevel?: 'low' | 'medium' | 'high';
-  /** tool-end 事件的输出结果 */
+  /** tool-end 事件的输出/错误结果 */
   output?: string;
+  /** turn-end / message-start / message-end 事件字段 */
+  hasToolResults?: boolean;
+  hasError?: boolean;
+  role?: string;
 }

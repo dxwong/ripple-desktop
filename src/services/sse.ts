@@ -26,6 +26,14 @@ interface SSECallbacks {
   /** 工具执行结束（包含结果） */
   onToolEnd?: (toolCallId: string, toolName: string, result: { output?: string; error?: string }) => void;
   onToolRequest?: (data: ToolRequestData) => void;
+  /** 工具部分执行结果更新 */
+  onToolUpdate?: (toolCallId: string, toolName: string) => void;
+  /** Agent/轮次/消息生命周期事件 */
+  onAgentStart?: () => void;
+  onTurnStart?: () => void;
+  onTurnEnd?: (data: { hasToolResults: boolean; hasError: boolean }) => void;
+  onMessageStart?: (role: string) => void;
+  onMessageEnd?: (role: string) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
 }
@@ -193,13 +201,13 @@ export class SSEClient {
                 if (event.text) callbacks.onThinking?.(event.text);
                 break;
               case "tool-start":
-                // tool-start 事件携带 toolCallId 和 toolName
+                // tool-start 事件携带 toolCallId 和 name
                 if (event.toolCallId && event.name) {
                   callbacks.onToolStart?.(event.toolCallId as string, event.name as string);
                 }
                 break;
               case "tool-end":
-                // tool-end 事件携带 toolCallId、toolName 和 result
+                // tool-end 事件携带 toolCallId、name、output、error
                 if (event.toolCallId && event.name) {
                   callbacks.onToolEnd?.(
                     event.toolCallId as string,
@@ -218,6 +226,29 @@ export class SSEClient {
                     riskLevel: (event.riskLevel as "low" | "medium" | "high") || "medium",
                   });
                 }
+                break;
+              case "tool-update":
+                if (event.toolCallId && event.name) {
+                  callbacks.onToolUpdate?.(event.toolCallId as string, event.name as string);
+                }
+                break;
+              case "agent-start":
+                callbacks.onAgentStart?.();
+                break;
+              case "turn-start":
+                callbacks.onTurnStart?.();
+                break;
+              case "turn-end":
+                callbacks.onTurnEnd?.({
+                  hasToolResults: event.hasToolResults === true,
+                  hasError: event.hasError === true,
+                });
+                break;
+              case "message-start":
+                if (event.role) callbacks.onMessageStart?.(event.role as string);
+                break;
+              case "message-end":
+                if (event.role) callbacks.onMessageEnd?.(event.role as string);
                 break;
               case "done":
                 this._status = "done";

@@ -164,6 +164,18 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
           </div>
         )}
 
+        {/* 工具调用卡片（在思考之后、文本之前，默认折叠） */}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-2">
+            {message.toolCalls.map((toolCall) => (
+              <ToolCallCard
+                key={toolCall.toolCallId}
+                toolCall={toolCall}
+              />
+            ))}
+          </div>
+        )}
+
         {/* 消息气泡 */}
         <div
           className={`rounded-2xl px-4 py-3 ${
@@ -269,19 +281,6 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
                 <Copy size={14} />
               )}
             </button>
-          </div>
-        )}
-
-        {/* 工具调用卡片（结构化展示） */}
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mt-2">
-            {message.toolCalls.map((toolCall) => (
-              <ToolCallCard
-                key={toolCall.toolCallId}
-                toolCall={toolCall}
-                defaultExpanded={toolCall.status === 'pending' || toolCall.status === 'approved'}
-              />
-            ))}
           </div>
         )}
 
