@@ -276,11 +276,12 @@ export async function getCheckpoints(
 export async function createCheckpoint(
   cwd: string,
   name?: string,
-  description?: string
+  description?: string,
+  source: string = "manual"
 ): Promise<ApiResponse<{ success: boolean; checkpoint: CheckpointSummary }>> {
   return request(`/api/checkpoints`, {
     method: "POST",
-    body: JSON.stringify({ cwd, name, description, source: "manual" }),
+    body: JSON.stringify({ cwd, name, description, source }),
   });
 }
 

@@ -407,19 +407,29 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       let snapshotId: string | undefined;
       if (effectiveCwd) {
         try {
-          const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
-          const cpRes = await Promise.race([
-            createCheckpoint(effectiveCwd, `pre-msg-${targetConvId.slice(0, 8)}-${Date.now()}`, `AI处理前快照: ${content.slice(0, 30)}`),
-            timeoutPromise,
-          ]);
-          if (cpRes && (cpRes as any).data?.checkpoint?.id) {
+          const label = `AI处理前 - ${content.slice(0, 20).replace(/\n/g, ' ')}`;
+          const cpRes = await createCheckpoint(
+            effectiveCwd,
+            label,
+            `AI处理前自动快照: ${content.slice(0, 60)}`,
+            "auto"
+          );
+          if ((cpRes as any).data?.checkpoint?.id) {
             snapshotId = (cpRes as any).data.checkpoint.id;
-            flog.debug('STREAMING', `创建快照成功`, { snapshotId });
-          } else if (cpRes === null) {
-            flog.debug('STREAMING', '创建快照超时，跳过快照');
+            flog.info('STREAMING', '创建快照成功', { snapshotId, cwd: effectiveCwd });
+            // 通知 CheckpointPanel 刷新快照列表（实时更新）
+            window.dispatchEvent(new CustomEvent('checkpoint-created', { detail: { cwd: effectiveCwd } }));
+          } else {
+            flog.warn('STREAMING', '创建快照返回异常（不影响消息发送）', {
+              cwd: effectiveCwd,
+              error: (cpRes as any).error || 'unknown',
+            });
           }
-        } catch {
-          flog.debug('STREAMING', '创建快照失败（不影响消息发送）');
+        } catch (err) {
+          flog.warn('STREAMING', '创建快照失败（不影响消息发送）', {
+            cwd: effectiveCwd,
+            error: String(err),
+          });
         }
       }
 
@@ -887,10 +897,20 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
             continue;
           }
           const localConv = merged.get(c.id)!;
+          // 构建合并字段，优先保留本地非默认值，同时从后端补齐缺失数据
+          const mergedFields: Partial<Conversation> = {};
           const isLocalDefault = !localConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(localConv.title);
           const isBackendDefault = !backendConv.title || /^(新对话|新开发会话|会话\s+\w+|未命名对话)$/.test(backendConv.title);
           if (isLocalDefault && !isBackendDefault) {
-            merged.set(c.id, { ...localConv, title: backendConv.title });
+            mergedFields.title = backendConv.title;
+          }
+          // 本地缺少 cwd 时从后端补齐（确保项目对话快照功能可用）
+          if (backendConv.cwd && !localConv.cwd) {
+            mergedFields.cwd = backendConv.cwd;
+            mergedFields.mode = backendConv.mode;
+          }
+          if (Object.keys(mergedFields).length > 0) {
+            merged.set(c.id, { ...localConv, ...mergedFields });
           }
         }
         const arr = Array.from(merged.values());
@@ -911,8 +931,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         return { success: false, error: "正在处理中，无法回滚" };
       }
 
-      // 1. 恢复文件快照
-      if (cwd) {
+      // 1. 恢复文件快照（有 snapshotId 和 cwd 时才恢复）
+      if (cwd && snapshotId) {
         const res = await restoreCheckpoint(snapshotId, cwd);
         if (res.error) {
           return { success: false, error: res.error };
@@ -922,19 +942,28 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         }
       }
 
-      // 2. 截断对话：删除该消息之后的所有消息
+      // 2. 截断对话：删除该消息之后的所有消息，并捕获截断后的消息用于持久化
+      let truncatedMessages: Message[] | undefined;
       setConversations((prev) =>
         prev.map((conv) => {
           if (conv.id !== convId) return conv;
           const msgIndex = conv.messages.findIndex((m) => m.id === messageId);
           if (msgIndex < 0) return conv;
+          truncatedMessages = conv.messages.slice(0, msgIndex + 1);
           return {
             ...conv,
-            messages: conv.messages.slice(0, msgIndex + 1),
+            messages: truncatedMessages,
             updatedAt: Date.now(),
           };
         })
       );
+
+      // 2.1 持久化截断后的对话（写入 .json，确保重启后 GET 直接返回截断消息，不再从 .jsonl 完整读取）
+      if (truncatedMessages) {
+        saveSession(convId, { messages: truncatedMessages }).catch((err) => {
+          flog.warn('STREAMING', '回滚后持久化失败', { convId, error: String(err) });
+        });
+      }
 
       // 3. 通知后端重置会话（清理 Agent 上下文）
       if (backendConnected) {
@@ -947,6 +976,11 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         } catch (err) {
           console.warn("[rollbackToSnapshot] 后端重置失败:", err);
         }
+      }
+
+      // 4. 通知 CheckpointPanel 刷新快照列表（回滚可能创建了备份快照）
+      if (cwd) {
+        window.dispatchEvent(new CustomEvent('checkpoint-created', { detail: { cwd } }));
       }
 
       return { success: true, error: undefined };

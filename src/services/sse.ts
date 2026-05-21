@@ -287,10 +287,8 @@ export class SSEClient {
               case 'error':
                 this._status = "error";
                 const errMsg = event.error || "未知错误";
-                flog.error('SSE', `收到 error 事件`, { 
-                  error: errMsg, 
-                  errorDetails: event.errorDetails });
-                callbacks.onError?.(errMsg, event.errorDetails);
+                flog.error('SSE', `收到 error 事件`, { error: errMsg });
+                callbacks.onError?.(errMsg);
                 break;
               case "usage":
                 // usage 事件携带 token 用量和费用数据

@@ -184,11 +184,11 @@ export function MainApp() {
     const conv = chat.activeConversation;
     if (!conv) return;
     const msg = conv.messages.find((m) => m.id === messageId);
-    if (!msg?.snapshotId) {
-      console.warn("[handleRollbackToSnapshot] 该消息没有关联的快照");
-      return;
-    }
-    const result = await chat.rollbackToSnapshot(msg.snapshotId, messageId, conv.id, currentCwd);
+    if (!msg) return;
+    // 无快照时仅截断对话，不恢复文件
+    const result = await chat.rollbackToSnapshot(
+      msg.snapshotId || '', messageId, conv.id, msg.snapshotId ? currentCwd : undefined
+    );
     if (result.success) {
       logger.success(`已回滚到步骤「${msg.content.slice(0, 20)}...」`);
     } else {
@@ -275,7 +275,7 @@ export function MainApp() {
 
           {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
           {currentCwd && (
-            <div className="flex">
+            <div className="flex shrink-0">
               <FileTree
                 directory={currentCwd}
                 onFileClick={(path) => {
