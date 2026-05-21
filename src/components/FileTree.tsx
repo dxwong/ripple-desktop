@@ -13,6 +13,8 @@ interface FileTreeProps {
   onToggleCheckpointPanel?: () => void;
   /** 快照面板是否激活 */
   isCheckpointPanelActive?: boolean;
+  /** Agent 引擎网关地址 */
+  agentGatewayUrl?: string;
 }
 
 /** 根据文件扩展名返回对应的图标 */
@@ -144,8 +146,8 @@ function TreeNode({
 }
 
 /** 加载目录结构 */
-async function loadDirectory(path: string): Promise<FileItem[]> {
-  const response = await fetch(`http://localhost:3002/api/files/tree?path=${encodeURIComponent(path)}&depth=2`);
+async function loadDirectory(path: string, baseUrl: string = 'http://localhost:3002'): Promise<FileItem[]> {
+  const response = await fetch(`${baseUrl}/api/files/tree?path=${encodeURIComponent(path)}&depth=2`);
 
   if (!response.ok) {
     throw new Error('Failed to load directory');
@@ -156,7 +158,7 @@ async function loadDirectory(path: string): Promise<FileItem[]> {
 }
 
 /** 文件树面板 */
-export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggleExpand, showPanel, onToggleCheckpointPanel, isCheckpointPanelActive }: FileTreeProps) {
+export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggleExpand, showPanel, onToggleCheckpointPanel, isCheckpointPanelActive, agentGatewayUrl = 'http://localhost:3002' }: FileTreeProps) {
   const [state, setState] = useState<FileTreeState>({
     isExpanded: false,
     selectedPath: null,
@@ -175,7 +177,7 @@ export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggle
 
     setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const data = await loadDirectory(directory);
+      const data = await loadDirectory(directory, agentGatewayUrl);
       setItems(data);
       setState((prev) => ({ ...prev, loading: false }));
     } catch (err) {
@@ -185,7 +187,7 @@ export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggle
         error: err instanceof Error ? err.message : 'Failed to load directory',
       }));
     }
-  }, [directory]);
+  }, [directory, agentGatewayUrl]);
 
   useEffect(() => {
     loadDir();

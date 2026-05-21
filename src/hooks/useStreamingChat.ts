@@ -685,7 +685,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     const targetConvId = activeConversationIdRef.current;
     if (targetConvId && backendConnected) {
       try {
-        await fetch('http://localhost:3002/api/chat/abort', {
+        await fetch(`${agentGatewayUrl}/api/chat/abort`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -700,7 +700,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     }
     
     setIsProcessing(false);
-  }, [backendConnected]);
+  }, [backendConnected, agentGatewayUrl]);
 
   // ===== 新建对话 =====
   const newConversation = useCallback((mode: ChatMode = "chat", title?: string, cwd?: string) => {
@@ -939,7 +939,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       // 3. 通知后端重置会话（清理 Agent 上下文）
       if (backendConnected) {
         try {
-          await fetch("http://localhost:3002/api/reset", {
+          await fetch(`${agentGatewayUrl}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sessionId: convId }),
@@ -951,7 +951,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
 
       return { success: true, error: undefined };
     },
-    [isProcessing, backendConnected]
+    [isProcessing, backendConnected, agentGatewayUrl]
   );
 
   // ===== 重命名对话 =====

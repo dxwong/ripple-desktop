@@ -288,6 +288,7 @@ export function MainApp() {
                 showPanel={!!currentCwd}
                 onToggleCheckpointPanel={() => setShowCheckpointPanel(v => !v)}
                 isCheckpointPanelActive={showCheckpointPanel}
+                agentGatewayUrl={settings.agentGatewayUrl}
               />
 
               {/* 文件预览面板 / 快照面板（互斥） */}
@@ -300,6 +301,7 @@ export function MainApp() {
                 <FilePreview
                   filePath={selectedFilePath}
                   onClose={() => setSelectedFilePath(null)}
+                  agentGatewayUrl={settings.agentGatewayUrl}
                 />
               )}
             </div>
