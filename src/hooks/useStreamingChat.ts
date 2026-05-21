@@ -406,13 +406,22 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
       flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
 
-      // 重新生成时：移除最后一条 AI 回复，避免旧的回复与新回复重复
+      // 重新生成时：移除最后一个完整轮次（AI 回复 + 触发它的用户消息）
+      // 用户消息将由 handleRegenerate 重新提交，确保不在上下文中重复出现
       if (regenerate) {
-        setConversations(prev => prev.map(conv =>
-          conv.id === targetConvId && conv.messages.length > 0 && conv.messages[conv.messages.length - 1].role === 'assistant'
-            ? { ...conv, messages: conv.messages.slice(0, -1) }
-            : conv
-        ));
+        setConversations(prev => prev.map(conv => {
+          if (conv.id !== targetConvId) return conv;
+          let msgs = conv.messages;
+          // 移除最后一条 AI 回复
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+            msgs = msgs.slice(0, -1);
+          }
+          // 移除触发该回复的用户消息（将由 handleRegenerate 重新发送）
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'user') {
+            msgs = msgs.slice(0, -1);
+          }
+          return { ...conv, messages: msgs };
+        }));
       }
 
       let snapshotId: string | undefined;
@@ -463,6 +472,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
             const backendParams = {
               message: content,
               sessionId: targetConvId,
+              regenerate: regenerate || false,
               modelId: modelConfig?.model || "deepseek-v4-flash",
               model: modelConfig?.model,
               endpoint: modelConfig?.endpoint,

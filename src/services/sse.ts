@@ -105,6 +105,8 @@ export class SSEClient {
       title?: string;
       /** 请求追踪 ID，用于端到端日志关联 */
       requestId?: string;
+      /** 重新生成标志：清空旧上下文后重新回答 */
+      regenerate?: boolean;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -148,6 +150,7 @@ export class SSEClient {
           cwd: params.cwd,
           title: params.title,
           requestId: params.requestId,
+          regenerate: params.regenerate,
         }),
         signal,
       });
