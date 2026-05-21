@@ -372,7 +372,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       content: string,
       useBackend = false,
       modelConfig?: ModelConfig,
-      cwd?: string
+      cwd?: string,
+      regenerate?: boolean
     ) => {
       flog.info('STREAMING', `发送消息请求`, {
         contentLength: content.length,
@@ -382,6 +383,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         hasModelConfig: !!modelConfig,
         modelConfigId: modelConfig?.id || '(none)',
         cwd: cwd || '(none)',
+        regenerate,
       });
 
       if (isProcessing) {
@@ -404,12 +406,14 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
       flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
 
-      // 如果最后一条消息是 AI 回复，先移除（重新生成或继续对话时清理旧回复）
-      setConversations(prev => prev.map(conv =>
-        conv.id === targetConvId && conv.messages.length > 0 && conv.messages[conv.messages.length - 1].role === 'assistant'
-          ? { ...conv, messages: conv.messages.slice(0, -1) }
-          : conv
-      ));
+      // 重新生成时：移除最后一条 AI 回复，避免旧的回复与新回复重复
+      if (regenerate) {
+        setConversations(prev => prev.map(conv =>
+          conv.id === targetConvId && conv.messages.length > 0 && conv.messages[conv.messages.length - 1].role === 'assistant'
+            ? { ...conv, messages: conv.messages.slice(0, -1) }
+            : conv
+        ));
+      }
 
       let snapshotId: string | undefined;
       if (effectiveCwd) {
@@ -820,6 +824,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   // ===== 确认或拒绝工具执行 =====
   const handleToolConfirm = useCallback(
     async (toolCallId: string, approved: boolean, reason?: string) => {
+      // read-only 模式下禁止批准任何工具执行
+      if (approved && permissionMode === "read-only") {
+        flog.warn('STREAMING', 'read-only 模式下拒绝了工具执行', { toolCallId });
+        setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+        return;
+      }
+
       const sessionId = activeConversationIdRef.current;
       flog.info('STREAMING', `工具执行确认: ${approved ? '批准' : '拒绝'}`, {
         toolCallId,
@@ -828,6 +839,23 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         sessionId,
       });
       if (!sessionId) return;
+
+      // 幂等检查：避免同一 toolCallId 被确认/拒绝多次
+      const existingConv = conversationsRef.current.find(c => c.id === sessionId);
+      if (existingConv) {
+        const msgs = existingConv.messages;
+        const lastAssistantMsg = [...msgs].reverse().find(m => m.role === 'assistant');
+        if (lastAssistantMsg) {
+          const existingTc = (lastAssistantMsg as any).toolCalls?.find(
+            (tc: any) => tc.toolCallId === toolCallId
+          );
+          if (existingTc && existingTc.status !== 'pending') {
+            flog.warn('STREAMING', `工具 ${toolCallId} 已被确认/拒绝，跳过重复操作`, { status: existingTc.status });
+            setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+            return;
+          }
+        }
+      }
 
       setConversations((prev): Conversation[] =>
         prev.map((conv): Conversation => {
@@ -857,13 +885,33 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
 
       setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
     },
-    []
+    [permissionMode]
   );
 
   // ===== Auto 确认：队列变化时自动批准 =====
   useEffect(() => {
     if (!autoConfirm || pendingToolRequests.length === 0) return;
     const req = pendingToolRequests[0];
+
+    // 二次验证：确认该 toolCallId 在当前会话中仍是 pending 状态
+    // 防止 100ms 窗口内用户手动拒绝后 auto-confirm 仍批准
+    const currentConv = conversationsRef.current.find(
+      c => c.id === activeConversationIdRef.current
+    );
+    if (currentConv) {
+      const msgs = currentConv.messages;
+      const lastAssistantMsg = [...msgs].reverse().find(m => m.role === 'assistant');
+      if (lastAssistantMsg) {
+        const targetTc = (lastAssistantMsg as any).toolCalls?.find(
+          (tc: any) => tc.toolCallId === req.toolCallId
+        );
+        if (targetTc && targetTc.status !== 'pending') {
+          flog.debug('STREAMING', `auto-confirm 跳过：工具 ${req.toolCallId} 状态已变更为 ${targetTc.status}`);
+          return;
+        }
+      }
+    }
+
     // 延迟一小段时间再确认，让 UI 有时间反应
     const timer = setTimeout(() => {
       handleToolConfirm(req.toolCallId, true);

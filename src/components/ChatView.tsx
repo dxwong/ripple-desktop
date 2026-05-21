@@ -51,7 +51,7 @@ function formatLargeNumber(num: number): string {
 interface ChatViewProps {
   conversationId: string;
   messages: Message[];
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, regenerate?: boolean) => void;
   isProcessing: boolean;
   /** 停止 AI 处理的回调 */
   onStop?: () => void;
@@ -285,7 +285,7 @@ function ChatView({
     // 向前查找用户消息
     for (let i = msgIdx - 1; i >= 0; i--) {
       if (messages[i].role === "user") {
-        onSendMessage(messages[i].content);
+        onSendMessage(messages[i].content, true);  // true = 重新生成，会先移除旧 AI 回复
         break;
       }
     }

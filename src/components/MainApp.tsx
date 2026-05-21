@@ -175,9 +175,9 @@ export function MainApp() {
   const currentMode = chat.activeConversation?.mode || "chat";
 
   // 发送消息
-  const handleSendMessage = useCallback(async (content: string) => {
-    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id });
-    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd);
+  const handleSendMessage = useCallback(async (content: string, regenerate?: boolean) => {
+    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id, regenerate });
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd, regenerate);
   }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd]);
 
   // 切换对话
