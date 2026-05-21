@@ -3,7 +3,11 @@
  * 每个操作同时输出到浏览器控制台，并通过 HTTP 发送到后端保存到磁盘 logs 文件夹
  */
 
-const LOG_API = 'http://localhost:3002/api/client-log';
+let LOG_API = 'http://localhost:3002/api/client-log';
+
+export function setLogApiUrl(url: string) {
+  LOG_API = `${url}/api/client-log`;
+}
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
@@ -21,7 +25,7 @@ class FrontendLogger {
   private readonly FLUSH_INTERVAL = 1000;
 
   constructor() {
-    window.addEventListener('beforeunload', () => this.flush());
+    window.addEventListener('beforeunload', () => this.flush(true));
   }
 
   private async sendToBackend(entry: LogEntry) {
@@ -36,11 +40,21 @@ class FrontendLogger {
     }
   }
 
-  private flush() {
+  private flush(isUnloading = false) {
     if (this.logs.length === 0) return;
     const logsToSend = [...this.logs];
     this.logs = [];
-    logsToSend.forEach(entry => this.sendToBackend(entry));
+    
+    if (isUnloading && navigator.sendBeacon) {
+      // 页面卸载时使用 sendBeacon，更可靠
+      logsToSend.forEach(entry => {
+        try {
+          navigator.sendBeacon(LOG_API, JSON.stringify(entry));
+        } catch {}
+      });
+    } else {
+      logsToSend.forEach(entry => this.sendToBackend(entry));
+    }
   }
 
   private push(level: LogLevel, category: string, message: string, data?: any) {

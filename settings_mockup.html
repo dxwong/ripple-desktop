@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ripple Desktop - 设置页面设计方案</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --surface: #F7F7F5;
+            --surface-dark: #141416;
+            --surface-secondary: #FAFAFA;
+            --surface-secondary-dark: #1A1A1C;
+            --surface-elevated: #FFFFFF;
+            --surface-elevated-dark: #252528;
+            --accent: #D97757;
+            --accent-hover: #E0886A;
+            --accent-muted: #F5E6E0;
+            --accent-muted-dark: #2D1F1A;
+            --content: #1A1A1A;
+            --content-dark: #E8E8E8;
+            --content-secondary: #8A8A8A;
+            --content-secondary-dark: #6B6B6B;
+            --content-tertiary: #B0B0B0;
+            --content-tertiary-dark: #555555;
+            --border: #E8E8E5;
+            --border-dark: #2C2C30;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 15px;
+            font-weight: 450;
+            background: var(--surface);
+            color: var(--content);
+            overflow: hidden;
+        }
+
+        /* 导航项样式 - ripple 风格 */
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 14px;
+            color: var(--content-secondary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+
+        .nav-item:hover {
+            background: rgba(0, 0, 0, 0.05);
+            color: var(--content);
+        }
+
+        .nav-item.active {
+            background: var(--accent-muted);
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .nav-item.active i {
+            color: var(--accent);
+        }
+
+        /* 展开/折叠箭头 */
+        .nav-item .chevron {
+            margin-left: auto;
+            font-size: 10px;
+            transition: transform 0.2s ease;
+        }
+
+        .nav-item.expanded .chevron {
+            transform: rotate(180deg);
+        }
+
+        /* 子菜单 */
+        .sub-nav {
+            padding-left: 24px;
+            overflow: hidden;
+            max-height: 0;
+            transition: max-height 0.3s ease;
+        }
+
+        .sub-nav.expanded {
+            max-height: 500px;
+        }
+
+        .sub-nav .nav-item {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+
+        /* 图标按钮 - ripple 风格 */
+        .icon-btn {
+            padding: 6px;
+            border-radius: 8px;
+            color: var(--content-tertiary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .icon-btn:hover {
+            background: rgba(0, 0, 0, 0.05);
+            color: var(--content-secondary);
+        }
+
+        /* 主按钮 - ripple 风格 */
+        .btn-primary {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px 16px;
+            background: var(--accent);
+            color: white;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-primary:active {
+            transform: scale(0.98);
+        }
+
+        /* 次要按钮 */
+        .btn-secondary {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px 16px;
+            background: transparent;
+            color: var(--content);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 0, 0, 0.03);
+        }
+
+        /* 输入框 - ripple 风格 */
+        .input-field {
+            width: 100%;
+            padding: 8px 14px;
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 14px;
+            color: var(--content);
+            transition: all 0.15s ease;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: rgba(217, 119, 87, 0.4);
+            background: transparent;
+        }
+
+        .input-field::placeholder {
+            color: var(--content-tertiary);
+        }
+
+        /* 开关 - ripple 风格 */
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: var(--content-tertiary);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-switch.active {
+            background: var(--accent);
+        }
+
+        .toggle-switch.active::after {
+            left: 22px;
+        }
+
+        /* 配置卡片 - ripple 风格 */
+        .config-card {
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .config-card:hover {
+            border-color: rgba(217, 119, 87, 0.3);
+        }
+
+        .config-card.active {
+            border-color: var(--accent);
+            background: rgba(217, 119, 87, 0.05);
+        }
+
+        /* 提供商选择卡片 */
+        .provider-card {
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: left;
+        }
+
+        .provider-card:hover {
+            border-color: rgba(217, 119, 87, 0.3);
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .provider-card.selected {
+            border-color: var(--accent);
+            background: rgba(217, 119, 87, 0.05);
+        }
+
+        /* 权限选择卡片 */
+        .permission-card {
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .permission-card:hover {
+            border-color: rgba(217, 119, 87, 0.3);
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .permission-card.selected {
+            border-color: var(--accent);
+            background: rgba(217, 119, 87, 0.05);
+        }
+
+        /* 分隔线 */
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 16px 0;
+        }
+
+        /* 页面标题 */
+        .page-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            color: var(--content);
+        }
+
+        /* 区块标题 */
+        .section-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--content-secondary);
+            margin-bottom: 12px;
+        }
+
+        /* 标签 */
+        .label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--content-secondary);
+            margin-bottom: 8px;
+        }
+
+        .label i {
+            font-size: 13px;
+            color: var(--content-tertiary);
+        }
+
+        /* 提示文本 */
+        .hint-text {
+            font-size: 12px;
+            color: var(--content-tertiary);
+            margin-top: 6px;
+        }
+
+        /* 成功提示 */
+        .alert-success {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 12px;
+            font-size: 14px;
+            color: #059669;
+        }
+
+        /* 错误提示 */
+        .alert-error {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 12px;
+            font-size: 14px;
+            color: #DC2626;
+        }
+
+        /* 滚动条 */
+        ::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 0, 0, 0.25);
+        }
+
+        /* 深色主题 */
+        .dark {
+            --surface: #141416;
+            --surface-secondary: #1A1A1C;
+            --surface-elevated: #252528;
+            --accent-muted: #2D1F1A;
+            --content: #E8E8E8;
+            --content-secondary: #6B6B6B;
+            --content-tertiary: #555555;
+            --border: #2C2C30;
+        }
+
+        .dark body {
+            background: var(--surface);
+            color: var(--content);
+        }
+
+        .dark .nav-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .dark .nav-item.active {
+            background: var(--accent-muted);
+        }
+
+        .dark .input-field {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .dark .input-field:focus {
+            border-color: rgba(217, 119, 87, 0.4);
+        }
+
+        .dark .icon-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .dark .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .dark .config-card:hover,
+        .dark .provider-card:hover,
+        .dark .permission-card:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        /* 主题切换按钮 */
+        .theme-toggle {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(217, 119, 87, 0.3);
+            z-index: 100;
+        }
+
+        .theme-toggle:hover {
+            transform: scale(1.1);
+        }
+
+        /* 动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-in {
+            animation: fadeIn 0.2s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div style="display: flex; height: 100vh; overflow: hidden;">
+        <!-- 左侧导航栏 -->
+        <aside style="width: 260px; background: var(--surface-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0;">
+            <!-- 顶部标题 -->
+            <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 32px; height: 32px; border-radius: 10px; background: var(--accent); display: flex; align-items: center; justify-content: center;">
+                        <span style="color: white; font-size: 16px; font-weight: bold;">R</span>
+                    </div>
+                    <span style="font-size: 16px; font-weight: 600;">设置</span>
+                </div>
+            </div>
+
+            <!-- 搜索框 -->
+            <div style="padding: 12px;">
+                <div style="position: relative;">
+                    <i class="fas fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--content-tertiary); font-size: 12px;"></i>
+                    <input type="text" placeholder="搜索设置..." class="input-field" style="padding-left: 32px; font-size: 13px;">
+                </div>
+            </div>
+
+            <!-- 导航菜单 -->
+            <nav style="flex: 1; overflow-y: auto; padding: 0 8px;">
+                <!-- API 配置 -->
+                <button class="nav-item active" onclick="showSection('api')">
+                    <i class="fas fa-key" style="font-size: 13px;"></i>
+                    <span>API 配置</span>
+                </button>
+
+                <!-- 模型管理 -->
+                <div>
+                    <button class="nav-item" id="models-toggle" onclick="toggleSection('models')">
+                        <i class="fas fa-robot" style="font-size: 13px;"></i>
+                        <span>模型管理</span>
+                        <i class="fas fa-chevron-down chevron" style="font-size: 10px;"></i>
+                    </button>
+                    <div class="sub-nav expanded" id="models-subnav">
+                        <button class="nav-item" onclick="showSection('model-config')">
+                            <span>模型配置</span>
+                        </button>
+                        <button class="nav-item" onclick="showSection('provider-settings')">
+                            <span>提供商设置</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 权限设置 -->
+                <button class="nav-item" onclick="showSection('permissions')">
+                    <i class="fas fa-shield-alt" style="font-size: 13px;"></i>
+                    <span>权限设置</span>
+                </button>
+
+                <!-- 外观 -->
+                <button class="nav-item" onclick="showSection('appearance')">
+                    <i class="fas fa-palette" style="font-size: 13px;"></i>
+                    <span>外观</span>
+                </button>
+
+                <!-- 连接 -->
+                <button class="nav-item" onclick="showSection('connection')">
+                    <i class="fas fa-plug" style="font-size: 13px;"></i>
+                    <span>连接</span>
+                </button>
+
+                <!-- 关于 -->
+                <button class="nav-item" onclick="showSection('about')">
+                    <i class="fas fa-info-circle" style="font-size: 13px;"></i>
+                    <span>关于</span>
+                </button>
+            </nav>
+
+            <!-- 底部 -->
+            <div style="padding: 12px; border-top: 1px solid var(--border);">
+                <button class="btn-secondary" style="width: 100%; font-size: 13px;">
+                    <i class="fas fa-code" style="font-size: 12px;"></i>
+                    打开设置文件
+                </button>
+            </div>
+        </aside>
+
+        <!-- 右侧内容区 -->
+        <main style="flex: 1; overflow-y: auto; background: var(--surface);">
+            <div style="max-width: 640px; margin: 0 auto; padding: 32px;">
+                
+                <!-- API 配置 -->
+                <section id="section-api" class="animate-in">
+                    <h1 class="page-title">API 配置</h1>
+
+                    <!-- 当前配置 -->
+                    <div style="margin-bottom: 24px;">
+                        <div class="section-title">当前配置</div>
+                        <div class="config-card active" style="display: flex; align-items: center; gap: 12px;">
+                            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent);"></div>
+                            <div style="flex: 1;">
+                                <div style="font-size: 14px; font-weight: 500;">DeepSeek 工作</div>
+                                <div style="font-size: 12px; color: var(--content-tertiary);">deepseek-chat · https://api.deepseek.com</div>
+                            </div>
+                            <div class="icon-btn">
+                                <i class="fas fa-ellipsis-v"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <!-- 编辑配置 -->
+                    <div style="margin-bottom: 24px;">
+                        <div class="section-title">编辑配置</div>
+
+                        <!-- 配置名称 -->
+                        <div style="margin-bottom: 16px;">
+                            <label class="label">
+                                <i class="fas fa-tag"></i>
+                                配置名称
+                            </label>
+                            <input type="text" class="input-field" value="DeepSeek 工作" placeholder="例如：我的 OpenAI、工作用 DeepSeek">
+                        </div>
+
+                        <!-- 提供商 -->
+                        <div style="margin-bottom: 16px;">
+                            <label class="label">
+                                <i class="fas fa-server"></i>
+                                API 提供商
+                            </label>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                <div class="provider-card">
+                                    <div style="font-size: 14px; font-weight: 500;">自定义</div>
+                                    <div style="font-size: 11px; color: var(--content-tertiary);">OpenAI 兼容</div>
+                                </div>
+                                <div class="provider-card selected">
+                                    <div style="font-size: 14px; font-weight: 500;">DeepSeek</div>
+                                    <div style="font-size: 11px; color: var(--content-tertiary);">api.deepseek.com</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 模型名称 -->
+                        <div style="margin-bottom: 16px;">
+                            <label class="label">
+                                <i class="fas fa-microchip"></i>
+                                模型名称
+                            </label>
+                            <input type="text" class="input-field" value="deepseek-chat" placeholder="gpt-4o / deepseek-chat">
+                        </div>
+
+                        <!-- 接口地址 -->
+                        <div style="margin-bottom: 16px;">
+                            <label class="label">
+                                <i class="fas fa-globe"></i>
+                                接口地址
+                            </label>
+                            <input type="url" class="input-field" value="https://api.deepseek.com" placeholder="https://api.openai.com/v1">
+                        </div>
+
+                        <!-- API Key -->
+                        <div style="margin-bottom: 20px;">
+                            <label class="label">
+                                <i class="fas fa-key"></i>
+                                API Key
+                            </label>
+                            <div style="position: relative;">
+                                <input type="password" class="input-field" value="sk-1234567890abcdef" style="padding-right: 40px;">
+                                <button class="icon-btn" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%);">
+                                    <i class="fas fa-eye" style="font-size: 13px;"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 操作按钮 -->
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn-primary" style="flex: 1;">
+                                <i class="fas fa-check"></i>
+                                保存配置
+                            </button>
+                            <button class="btn-secondary" style="flex: 1;">
+                                <i class="fas fa-sync-alt"></i>
+                                测试连接
+                            </button>
+                        </div>
+
+                        <!-- 测试结果 -->
+                        <div class="alert-success" style="margin-top: 12px;">
+                            <i class="fas fa-check-circle"></i>
+                            连接成功！响应时间：234ms
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 权限设置 -->
+                <section id="section-permissions" class="animate-in" style="display: none;">
+                    <h1 class="page-title">权限设置</h1>
+
+                    <div class="section-title">操作权限</div>
+
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div class="permission-card">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 500;">自动执行</div>
+                                    <div style="font-size: 12px; color: var(--content-tertiary); margin-top: 2px;">所有操作自动执行，无需确认</div>
+                                </div>
+                                <i class="fas fa-check" style="color: var(--accent); font-size: 14px;"></i>
+                            </div>
+                        </div>
+
+                        <div class="permission-card selected">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 500;">每次确认</div>
+                                    <div style="font-size: 12px; color: var(--content-tertiary); margin-top: 2px;">高风险操作需要用户确认</div>
+                                </div>
+                                <i class="fas fa-check" style="color: var(--accent); font-size: 14px;"></i>
+                            </div>
+                        </div>
+
+                        <div class="permission-card">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 500;">只读模式</div>
+                                    <div style="font-size: 12px; color: var(--content-tertiary); margin-top: 2px;">仅允许读取文件，禁止写操作</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 外观 -->
+                <section id="section-appearance" class="animate-in" style="display: none;">
+                    <h1 class="page-title">外观</h1>
+
+                    <div class="section-title">主题</div>
+
+                    <div style="display: flex; gap: 12px;">
+                        <div class="config-card" style="flex: 1; text-align: center;" onclick="setTheme('light')">
+                            <div style="width: 100%; height: 80px; background: #F7F7F5; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; justify-content: center;">
+                                <i class="fas fa-sun" style="font-size: 24px; color: #F59E0B;"></i>
+                            </div>
+                            <div style="font-size: 13px; font-weight: 500;">浅色</div>
+                        </div>
+
+                        <div class="config-card active" style="flex: 1; text-align: center;" onclick="setTheme('dark')">
+                            <div style="width: 100%; height: 80px; background: #141416; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; justify-content: center;">
+                                <i class="fas fa-moon" style="font-size: 24px; color: #6366F1;"></i>
+                            </div>
+                            <div style="font-size: 13px; font-weight: 500;">深色</div>
+                        </div>
+
+                        <div class="config-card" style="flex: 1; text-align: center;">
+                            <div style="width: 100%; height: 80px; background: linear-gradient(135deg, #F7F7F5 50%, #141416 50%); border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; justify-content: center;">
+                                <i class="fas fa-desktop" style="font-size: 24px; color: var(--content-secondary);"></i>
+                            </div>
+                            <div style="font-size: 13px; font-weight: 500;">跟随系统</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 连接 -->
+                <section id="section-connection" class="animate-in" style="display: none;">
+                    <h1 class="page-title">连接</h1>
+
+                    <div class="section-title">Agent 引擎</div>
+
+                    <div style="margin-bottom: 16px;">
+                        <label class="label">
+                            <i class="fas fa-server"></i>
+                            网关地址
+                        </label>
+                        <input type="url" class="input-field" value="http://localhost:3002" placeholder="http://localhost:3002">
+                        <div class="hint-text">设置 ripple-agent 后端服务器地址</div>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div style="width: 8px; height: 8px; border-radius: 50%; background: #10B981;"></div>
+                            <span style="font-size: 14px;">后端服务已连接</span>
+                        </div>
+                        <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">
+                            <i class="fas fa-sync-alt"></i>
+                            重连
+                        </button>
+                    </div>
+                </section>
+
+                <!-- 关于 -->
+                <section id="section-about" class="animate-in" style="display: none;">
+                    <h1 class="page-title">关于</h1>
+
+                    <div style="display: flex; align-items: center; gap: 16px; padding: 20px; background: var(--surface-secondary); border: 1px solid var(--border); border-radius: 16px; margin-bottom: 24px;">
+                        <div style="width: 64px; height: 64px; border-radius: 14px; background: var(--accent); display: flex; align-items: center; justify-content: center;">
+                            <span style="color: white; font-size: 28px; font-weight: bold;">R</span>
+                        </div>
+                        <div>
+                            <div style="font-size: 18px; font-weight: 600;">Ripple Desktop</div>
+                            <div style="font-size: 13px; color: var(--content-secondary); margin-top: 4px;">版本 0.1.0</div>
+                            <div style="font-size: 12px; color: var(--content-tertiary); margin-top: 2px;">基于 Tauri + React 构建的 AI 编程助手</div>
+                        </div>
+                    </div>
+
+                    <button class="btn-secondary" style="width: 100%;">
+                        <i class="fas fa-external-link-alt"></i>
+                        检查更新
+                    </button>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- 主题切换按钮 -->
+    <button class="theme-toggle" onclick="toggleTheme()">
+        <i class="fas fa-moon" id="theme-icon"></i>
+    </button>
+
+    <script>
+        let currentTheme = 'light';
+
+        function toggleTheme() {
+            currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.classList.toggle('dark', currentTheme === 'dark');
+            document.getElementById('theme-icon').className = 
+                currentTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+        }
+
+        function setTheme(theme) {
+            currentTheme = theme;
+            document.documentElement.classList.toggle('dark', theme === 'dark');
+            document.getElementById('theme-icon').className = 
+                theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+            
+            // 更新主题选择卡片
+            document.querySelectorAll('#section-appearance .config-card').forEach(card => {
+                card.classList.remove('active');
+            });
+            event.currentTarget.classList.add('active');
+        }
+
+        function showSection(sectionId) {
+            // 隐藏所有section
+            document.querySelectorAll('main section').forEach(section => {
+                section.style.display = 'none';
+            });
+
+            // 显示目标section
+            const targetSection = document.getElementById('section-' + sectionId);
+            if (targetSection) {
+                targetSection.style.display = 'block';
+                targetSection.classList.remove('animate-in');
+                void targetSection.offsetWidth; // 触发重排以重新应用动画
+                targetSection.classList.add('animate-in');
+            }
+
+            // 更新导航状态
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            event.currentTarget.classList.add('active');
+        }
+
+        function toggleSection(sectionId) {
+            const toggleBtn = document.getElementById(sectionId + '-toggle');
+            const subNav = document.getElementById(sectionId + '-subnav');
+            
+            toggleBtn.classList.toggle('expanded');
+            subNav.classList.toggle('expanded');
+        }
+
+        // API 提供商选择
+        document.querySelectorAll('.provider-card').forEach(card => {
+            card.addEventListener('click', function() {
+                document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
+                this.classList.add('selected');
+            });
+        });
+
+        // 权限选择
+        document.querySelectorAll('.permission-card').forEach(card => {
+            card.addEventListener('click', function() {
+                document.querySelectorAll('.permission-card').forEach(c => {
+                    c.classList.remove('selected');
+                    const checkIcon = c.querySelector('.fa-check');
+                    if (checkIcon) checkIcon.remove();
+                });
+                this.classList.add('selected');
+                const checkIcon = document.createElement('i');
+                checkIcon.className = 'fas fa-check';
+                checkIcon.style.cssText = 'color: var(--accent); font-size: 14px;';
+                this.querySelector('div').appendChild(checkIcon);
+            });
+        });
+    </script>
+</body>
+</html>

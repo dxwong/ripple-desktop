@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   modelName: "gpt-4o",
   darkMode: false,
   permissionMode: "confirm",
+  agentGatewayUrl: "http://localhost:3002",
 };
 
 /** 设置存储键名 */

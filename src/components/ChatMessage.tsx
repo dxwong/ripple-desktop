@@ -31,6 +31,18 @@ function extractLanguage(className?: string): string | undefined {
   return match ? match[1] : undefined;
 }
 
+/** 格式化时间戳为 YYYY/MM/DD HH:mm */
+function formatTimestamp(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const Y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, "0");
+  const D = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${Y}/${M}/${D} ${h}:${m}`;
+}
+
 /** 轻量代码块（流式中使用，无 Monaco） */
 function LightweightCodeBlock({ code, language }: { code: string; language?: string }) {
   return (
@@ -164,6 +176,18 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
           </div>
         )}
 
+        {/* 工具调用卡片（在思考之后、文本之前，默认折叠） */}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-2">
+            {message.toolCalls.map((toolCall) => (
+              <ToolCallCard
+                key={toolCall.toolCallId}
+                toolCall={toolCall}
+              />
+            ))}
+          </div>
+        )}
+
         {/* 消息气泡 */}
         <div
           className={`rounded-2xl px-4 py-3 ${
@@ -172,6 +196,11 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               : "bg-message-ai dark:bg-message-ai-dark"
           }`}
         >
+          {!isUser && displayContent.includes('__RIPPLE_ERROR__') ? (
+            <div className="text-red-600 dark:text-red-400 font-semibold text-[14px] leading-relaxed whitespace-pre-wrap break-all">
+              {displayContent.replace(/__RIPPLE_ERROR__/g, '').replace(/__RIPPLE_ERROR_END__/g, '').trim()}
+            </div>
+          ) : (
           <div className="markdown-body selectable-text">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -219,6 +248,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               {displayContent}
             </ReactMarkdown>
           </div>
+          )}
 
           {/* 流式闪烁光标 */}
           {isStreaming && (
@@ -226,20 +256,37 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
           )}
         </div>
 
-        {/* 用户消息回滚按钮 */}
-        {isUser && hasSnapshot && !isStreaming && (
-          <div className="flex justify-start gap-1 mt-1.5 ml-1">
+        {/* 用户消息操作栏：时间 · 回撤 · 复制，全部靠右 */}
+        {isUser && !isStreaming && (
+          <div className="flex items-center justify-end mt-1.5 px-1 gap-1">
+            {/* 发送时间 */}
+            <span className="text-[11px] text-content-tertiary/50 dark:text-content-tertiary-dark/50 select-none">
+              {formatTimestamp(message.timestamp)}
+            </span>
+            {/* 回滚按钮（撤销后续 AI 操作和对话） */}
             <button
               onClick={() => onRollback?.(message.id)}
               className="group relative p-1.5 rounded-lg hover:bg-amber-500/10 hover:text-amber-500 transition-all text-content-tertiary/40 dark:text-content-tertiary-dark/40"
               title="回滚到此步骤"
             >
               <RotateCcw size={13} />
-              {/* Tooltip - 下方弹出，避免被遮挡 */}
-              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 px-2.5 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
+              {/* Tooltip */}
+              <div className="absolute right-0 top-full mt-1.5 px-2.5 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
                 <div className="font-medium text-amber-500">回滚到此步骤</div>
                 <div className="text-content-tertiary dark:text-content-tertiary-dark text-[10px] mt-0.5">撤销后续 AI 的所有操作和回复</div>
               </div>
+            </button>
+            {/* 复制按钮 */}
+            <button
+              onClick={handleCopy}
+              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 hover:text-content-secondary dark:hover:text-content-secondary-dark transition-all text-content-tertiary/30 dark:text-content-tertiary-dark/30"
+              title="复制消息"
+            >
+              {copied ? (
+                <Check size={13} className="text-green-500" />
+              ) : (
+                <Copy size={13} />
+              )}
             </button>
           </div>
         )}
@@ -269,19 +316,6 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
                 <Copy size={14} />
               )}
             </button>
-          </div>
-        )}
-
-        {/* 工具调用卡片（结构化展示） */}
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mt-2">
-            {message.toolCalls.map((toolCall) => (
-              <ToolCallCard
-                key={toolCall.toolCallId}
-                toolCall={toolCall}
-                defaultExpanded={toolCall.status === 'pending' || toolCall.status === 'approved'}
-              />
-            ))}
           </div>
         )}
 

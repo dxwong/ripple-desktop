@@ -438,6 +438,31 @@ function SettingsPanel({
               {/* ===== 通用 ===== */}
               {activeTab === "general" && (
                 <div className="space-y-4 max-w-lg">
+                  {/* Agent 引擎网关地址 */}
+                  <section>
+                    <label className="text-sm font-medium text-content-secondary dark:text-content-secondary-dark mb-2 block">
+                      Agent 引擎网关地址
+                    </label>
+                    <input
+                      type="url"
+                      value={settings.agentGatewayUrl}
+                      onChange={(e) => onUpdate({ agentGatewayUrl: e.target.value })}
+                      placeholder="http://localhost:3002"
+                      className="w-full px-3.5 py-2 text-sm rounded-xl
+                                 bg-black/[0.03] dark:bg-white/[0.05]
+                                 border border-border dark:border-border-dark
+                                 text-content dark:text-content-dark
+                                 placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
+                                 focus:outline-none focus:border-accent/40 focus:bg-transparent
+                                 transition-all duration-150"
+                    />
+                    <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1.5">
+                      设置 ripple-agent 后端服务器地址，默认 http://localhost:3002
+                    </p>
+                  </section>
+
+                  <hr className="border-border dark:border-border-dark" />
+
                   {/* 权限设置 */}
                   <section>
                     <label className="text-sm font-medium text-content-secondary dark:text-content-secondary-dark mb-3 block">
@@ -469,6 +494,8 @@ function SettingsPanel({
                       ))}
                     </div>
                   </section>
+
+                  <hr className="border-border dark:border-border-dark" />
 
                   {/* 关于信息 */}
                   <div className="p-4 rounded-xl bg-black/[0.02] dark:bg-white/[0.02] border border-border dark:border-border-dark">

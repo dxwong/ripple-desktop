@@ -5,6 +5,8 @@ import { readFile as apiReadFile } from '../services/api';
 interface FilePreviewProps {
   filePath: string | null;
   onClose: () => void;
+  /** Agent 引擎网关地址 */
+  agentGatewayUrl?: string;
 }
 
 /** 判断是否为图片文件 */
@@ -24,7 +26,7 @@ function isTextFile(path: string): boolean {
 }
 
 /** 文件预览面板 */
-export function FilePreview({ filePath, onClose }: FilePreviewProps) {
+export function FilePreview({ filePath, onClose, agentGatewayUrl = 'http://localhost:3002' }: FilePreviewProps) {
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +104,7 @@ export function FilePreview({ filePath, onClose }: FilePreviewProps) {
         ) : isImage ? (
           <div className="h-full flex items-center justify-center p-2 bg-black/5">
             <img
-              src={`http://localhost:3002/api/files/read?path=${encodeURIComponent(filePath)}`}
+              src={`${agentGatewayUrl}/api/files/read?path=${encodeURIComponent(filePath)}`}
               alt={fileName}
               className="max-w-full max-h-full object-contain rounded-lg"
               onError={(e) => {

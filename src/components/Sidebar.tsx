@@ -12,27 +12,25 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Pencil,
 } from "lucide-react";
-import { useState } from "react";
-import { Conversation, Project, ChatMode } from "../types";
+import { useState, useEffect } from "react";
+import { Conversation, ChatMode } from "../types";
+import { syncStore } from "../hooks/useStore";
 
 interface SidebarProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   conversations: Conversation[];
   activeConversationId: string;
-  onNewConversation: (mode?: ChatMode, projectId?: string) => void;
+  onNewConversation: (mode?: ChatMode) => void;
   onSwitchConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onOpenSettings: () => void;
-  // 项目相关
-  projects: Project[];
-  activeProjectId: string;
-  onAddProject: (name: string, directory: string) => void;
-  onSwitchProject: (id: string) => void;
-  onDeleteProject: (id: string) => void;
-  /** 点击项目名称 → 打开关联的对话（和正常聊天一样） */
-  onSelectProjectConversation: (projectId: string) => void;
+  /** 新建项目对话（带文件夹路径） */
+  onNewProjectConversation: (name: string, directory: string) => void;
+  /** 重命名对话 */
+  onRenameConversation: (id: string, title: string) => void;
   /** 打开文件夹选择器 */
   onPickFolder: () => Promise<string | null>;
 }
@@ -43,14 +41,13 @@ interface SidebarProps {
  * ┌──────────────────────────────┐
  * │  顶部：Logo + 搜索 + [+]      │
  * ├──────────────────────────────┤
- * │  上半部分：项目列表           │
- * │  - 新建项目（选择本地文件夹）    │
- * │  - 删除项目                   │
+ * │  上半部分：项目对话列表        │
+ * │  （有 cwd 的对话）            │
+ * │  [+] 新建项目对话             │
  * ├──────────────────────────────┤
- * │  下半部分：对话列表           │
+ * │  下半部分：普通对话列表        │
+ * │  （无 cwd 的对话）            │
  * └──────────────────────────────┘
- *
- * 模式切换按钮已移除，对话模式由是否关联项目自动决定。
  */
 function Sidebar({
   darkMode,
@@ -61,62 +58,84 @@ function Sidebar({
   onSwitchConversation,
   onDeleteConversation,
   onOpenSettings,
-  projects,
-  activeProjectId,
-  onAddProject,
-  onSwitchProject,
-  onDeleteProject,
-  onSelectProjectConversation,
+  onNewProjectConversation,
+  onRenameConversation,
   onPickFolder,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [projectsCollapsed, setProjectsCollapsed] = useState<boolean>(() => syncStore.getItem("sidebar-projects-collapsed", true) as boolean);
   const [showAddProject, setShowAddProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [projectDir, setProjectDir] = useState("");
   const [pickingFolder, setPickingFolder] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
 
-  // 对话列表：只显示普通对话（有关联项目的对话已在项目列表中展示，避免重复）
-  const filteredConversations = conversations.filter((c) =>
-    !c.projectId && c.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // 持久化项目折叠状态
+  useEffect(() => {
+    syncStore.setItem("sidebar-projects-collapsed", projectsCollapsed);
+  }, [projectsCollapsed]);
 
-  /** 新建对话：+号始终创建普通对话模式（项目对话通过点击项目名称进入） */
+  // 项目对话 = 有 cwd 的对话
+  const projectConversations = conversations.filter(c => c.cwd);
+  // 普通对话 = 无 cwd 的对话
+  const normalConversations = conversations.filter(c => !c.cwd);
+
+  /** 新建普通对话或定位到已有空对话 */
   const handleNewConversation = () => {
-    onNewConversation("chat");
+    // 查找已存在的空普通对话
+    const existingEmptyConv = normalConversations.find(c => c.messages.length === 0);
+    if (existingEmptyConv) {
+      // 如果存在空对话，定位到该对话
+      onSwitchConversation(existingEmptyConv.id);
+    } else {
+      // 否则创建新对话
+      onNewConversation("chat");
+    }
   };
 
-  /** 打开新建项目弹窗 */
+  // 检测是否存在空的普通对话
+  const hasEmptyConversation = normalConversations.some(c => c.messages.length === 0);
+
+  /** 打开新建项目对话弹窗 */
   const handleOpenAddProject = () => {
     setNewProjectName("");
     setProjectDir("");
     setShowAddProject(true);
   };
 
-  /** 选择文件夹 */
+  /** 选择文件夹（调用 Tauri 或浏览器 API） */
   const handlePickFolder = async () => {
     setPickingFolder(true);
-    const dir = await onPickFolder();
-    setPickingFolder(false);
-    if (dir) {
-      setProjectDir(dir);
-      // 如果还没有名称，自动从路径提取
-      if (!newProjectName.trim()) {
-        const defaultName = dir.split(/[/\\]/).filter(Boolean).pop() || "新项目";
-        setNewProjectName(defaultName);
+    try {
+      const dir = await onPickFolder();
+      if (dir) {
+        setProjectDir(dir);
+        // 自动以文件夹名作为默认对话名称
+        const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+        if (folderName && !newProjectName) {
+          setNewProjectName(folderName);
+        }
       }
+    } finally {
+      setPickingFolder(false);
     }
   };
 
-  /** 确认创建项目（只创建，不再弹文件夹选择器） */
+  /** 确认创建项目对话 */
   const confirmAddProject = () => {
     if (!newProjectName.trim() || !projectDir.trim()) return;
-    onAddProject(newProjectName.trim(), projectDir);
+    onNewProjectConversation(newProjectName.trim(), projectDir);
     setShowAddProject(false);
     setNewProjectName("");
     setProjectDir("");
   };
+
+  /** 根据搜索过滤普通对话 */
+  const filteredNormalConversations = normalConversations.filter(c =>
+    c.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <aside className="w-72 min-w-[18rem] flex flex-col bg-surface-secondary dark:bg-surface-secondary-dark border-r border-border dark:border-border-dark shrink-0">
@@ -127,11 +146,11 @@ function Sidebar({
             <span className="text-white text-base font-bold">R</span>
           </div>
           <span className="flex-1 text-base font-semibold">Ripple</span>
-          {/* + 新建对话 */}
+          {/* + 新建普通对话 */}
           <button
             onClick={handleNewConversation}
-            className="icon-btn"
-            title="新建对话"
+            className={`icon-btn ${hasEmptyConversation ? 'opacity-70' : ''}`}
+            title={hasEmptyConversation ? '已有空对话，点击定位' : '新建对话'}
           >
             <Plus size={18} />
           </button>
@@ -139,29 +158,23 @@ function Sidebar({
 
         {/* 搜索框 */}
         <div className="titlebar-no-drag relative">
-          <Search
-            size={14}
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-content-tertiary dark:text-content-tertiary-dark"
-          />
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-content-tertiary dark:text-content-tertiary-dark" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索对话..."
-            className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg
-                       bg-black/[0.04] dark:bg-white/[0.06]
-                       border border-transparent
-                       placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
+            className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg bg-surface dark:bg-surface-dark
+                       border border-border dark:border-border-dark
                        text-content dark:text-content-dark
-                       focus:outline-none focus:border-accent/30 focus:bg-transparent
-                       transition-all duration-150"
+                       placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
+                       focus:outline-none focus:border-accent/40 transition-all duration-150"
           />
         </div>
       </div>
 
-      {/* ===== 上半部分：项目列表（可折叠） ===== */}
-      <div className="border-t border-border dark:border-border-dark">
-        {/* 项目头部 — 点击可折叠 */}
+      {/* ===== 上半部分：项目对话列表（有 cwd 的对话） ===== */}
+      <div className="min-w-0">
         <button
           onClick={() => setProjectsCollapsed(!projectsCollapsed)}
           className="w-full flex items-center justify-between px-3 py-2 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
@@ -176,57 +189,87 @@ function Sidebar({
             <span className="text-xs font-medium text-content-tertiary dark:text-content-tertiary-dark">项目</span>
           </div>
           <div className="flex items-center gap-0.5">
-            <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark mr-1">{projects.length}</span>
-            {/* 添加项目按钮 */}
+            <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark mr-1">{projectConversations.length}</span>
+            {/* 新建项目对话按钮 */}
             <button
               onClick={(e) => { e.stopPropagation(); handleOpenAddProject(); }}
               className="icon-btn !p-1"
-              title="添加本地项目文件夹"
+              title="添加本地文件夹作为项目对话"
             >
               <FolderPlus size={15} />
             </button>
           </div>
         </button>
-        {/* 项目列表内容 — 可折叠 */}
         {!projectsCollapsed && (
         <div className="px-2 pb-2 max-h-[40vh] overflow-y-auto min-w-0">
-          {projects.length === 0 ? (
+          {projectConversations.length === 0 ? (
             <div className="text-center py-4">
               <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark">暂无项目</p>
             </div>
           ) : (
             <div className="space-y-0.5">
-              {projects.map((project) => (
-                <div key={project.id} className="group relative">
+              {projectConversations.map((conv) => (
+                <div key={conv.id} className="group relative">
                   <button
-                    onClick={() => onSelectProjectConversation(project.id)}
+                    onClick={() => onSwitchConversation(conv.id)}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-all duration-150 ${
-                      project.id === activeProjectId
+                      conv.id === activeConversationId
                         ? "sidebar-btn active"
                         : "sidebar-btn"
                     }`}
                   >
                     <Code size={14} className={`shrink-0 ${
-                      project.id === activeProjectId ? "opacity-100" : "opacity-60"
+                      conv.id === activeConversationId ? "opacity-100" : "opacity-60"
                     }`} />
                     <div className="flex-1 min-w-0 overflow-hidden">
-                      <div className="truncate">{project.name}</div>
-                      {project.directory && (
+                      {renamingId === conv.id ? (
+                        <input
+                          type="text"
+                          value={renameText}
+                          onChange={(e) => setRenameText(e.target.value)}
+                          onBlur={() => {
+                            if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                            setRenamingId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                              setRenamingId(null);
+                            } else if (e.key === "Escape") {
+                              setRenamingId(null);
+                            }
+                            e.stopPropagation();
+                          }}
+                          className="w-full text-sm bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div className="truncate">{conv.title}</div>
+                      )}
+                      {conv.cwd && (
                         <div className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark truncate">
-                          {project.directory}
+                          {conv.cwd}
                         </div>
                       )}
                     </div>
                   </button>
-                  {projects.length > 1 && (
+                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
                     <button
-                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm(project.id); }}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
-                      title="删除项目"
+                      onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
+                      title="重命名"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
+                      title="删除对话"
                     >
                       <Trash2 size={12} />
                     </button>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -235,7 +278,7 @@ function Sidebar({
         )}
       </div>
 
-      {/* ===== 下半部分：对话列表 ===== */}
+      {/* ===== 下半部分：普通对话列表（无 cwd 的对话） ===== */}
       <div className="flex-1 overflow-y-auto border-t border-border dark:border-border-dark min-w-0">
         <div className="px-3 py-2 flex items-center justify-between">
           <div className="flex items-center gap-1.5">
@@ -245,12 +288,12 @@ function Sidebar({
             </span>
           </div>
           <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark">
-            {filteredConversations.length}
+            {filteredNormalConversations.length}
           </span>
         </div>
 
         <div className="px-2 pb-2">
-          {filteredConversations.length === 0 ? (
+          {filteredNormalConversations.length === 0 ? (
             <div className="text-center py-8">
               <div className="w-10 h-10 rounded-full bg-black/[0.03] dark:bg-white/[0.03] flex items-center justify-center mx-auto mb-2">
                 <MessageSquare size={16} className="text-content-tertiary dark:text-content-tertiary-dark" />
@@ -261,7 +304,7 @@ function Sidebar({
             </div>
           ) : (
             <div className="space-y-0.5">
-              {filteredConversations.map((conv) => (
+              {filteredNormalConversations.map((conv) => (
                 <div key={conv.id} className="group relative">
                   <button
                     onClick={() => onSwitchConversation(conv.id)}
@@ -271,20 +314,51 @@ function Sidebar({
                         : "sidebar-btn"
                     }`}
                   >
-                    {conv.mode === "code" ? (
-                      <Code size={14} className="shrink-0 text-amber-500 dark:text-amber-400 opacity-80" />
-                    ) : (
-                      <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
-                    )}
-                    <span className="truncate flex-1">{conv.title}</span>
+                    <MessageSquare size={14} className="shrink-0 opacity-60 group-hover:opacity-80 transition-opacity" />
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                      {renamingId === conv.id ? (
+                        <input
+                          type="text"
+                          value={renameText}
+                          onChange={(e) => setRenameText(e.target.value)}
+                          onBlur={() => {
+                            if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                            setRenamingId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                              setRenamingId(null);
+                            } else if (e.key === "Escape") {
+                              setRenamingId(null);
+                            }
+                            e.stopPropagation();
+                          }}
+                          className="w-full text-sm bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="truncate">{conv.title}</span>
+                      )}
+                    </div>
                   </button>
-                  <button
-                    onClick={() => onDeleteConversation(conv.id)}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
-                    title="删除对话"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
+                      title="重命名"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      onClick={() => onDeleteConversation(conv.id)}
+                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
+                      title="删除对话"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -304,25 +378,25 @@ function Sidebar({
         </button>
       </div>
 
-      {/* ===== 新建项目弹窗 ===== */}
+      {/* ===== 新建项目对话弹窗 ===== */}
       {showAddProject && (
         <div className="fixed inset-0 bg-black/30 dark:bg-black/50 flex items-center justify-center z-50">
           <div className="bg-surface-secondary dark:bg-surface-secondary-dark rounded-2xl p-5 w-96 shadow-elevated border border-border dark:border-border-dark">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold">新建项目</h3>
+              <h3 className="text-sm font-semibold">新建项目对话</h3>
               <button onClick={() => { setShowAddProject(false); setProjectDir(""); }} className="icon-btn !p-1">
                 <X size={15} />
               </button>
             </div>
 
             <label className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5 block">
-              项目名称
+              对话名称
             </label>
             <input
               type="text"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="输入项目名称"
+              placeholder="输入名称"
               className="w-full px-3 py-2 text-sm rounded-xl border border-border dark:border-border-dark
                          bg-surface dark:bg-surface-dark text-content dark:text-content-dark
                          placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
@@ -385,13 +459,13 @@ function Sidebar({
         </div>
       )}
 
-      {/* ===== 删除项目确认弹窗 ===== */}
+      {/* ===== 删除对话确认弹窗 ===== */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/30 dark:bg-black/50 flex items-center justify-center z-50">
           <div className="bg-surface-secondary dark:bg-surface-secondary-dark rounded-2xl p-5 w-80 shadow-elevated border border-border dark:border-border-dark">
             <h3 className="text-sm font-semibold mb-2">确认删除</h3>
             <p className="text-sm text-content-secondary dark:text-content-secondary-dark mb-4">
-              确定要删除项目「{projects.find((p) => p.id === deleteConfirm)?.name}」吗？此操作不可撤销。
+              确定要删除这条对话记录吗？后端数据也将被删除，此操作不可撤销。
             </p>
             <div className="flex gap-2">
               <button
@@ -405,7 +479,7 @@ function Sidebar({
               </button>
               <button
                 onClick={() => {
-                  onDeleteProject(deleteConfirm);
+                  onDeleteConversation(deleteConfirm);
                   setDeleteConfirm(null);
                 }}
                 className="flex-1 px-4 py-2 text-sm font-medium rounded-xl

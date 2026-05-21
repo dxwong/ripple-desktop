@@ -171,7 +171,7 @@ function MessageInput({
               onClick={handleSend}
               disabled={!hasInput}
               className="send-btn"
-              title="发送 (Enter)"
+              title="发送"
             >
               <ArrowUp size={18} />
             </button>

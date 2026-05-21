@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X, RotateCcw, Plus, Clock, AlertTriangle, CheckCircle,
-  ChevronDown, ChevronRight, Trash2, GitBranch
+  ChevronDown, ChevronRight, Trash2, GitBranch, RefreshCw
 } from 'lucide-react';
 import {
   getCheckpoints, createCheckpoint, restoreCheckpoint,
@@ -29,20 +29,12 @@ function formatBytes(bytes: number): string {
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
-
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const day = d.getDate().toString().padStart(2, '0');
   const hour = d.getHours().toString().padStart(2, '0');
   const min = d.getMinutes().toString().padStart(2, '0');
-
-  if (diff < 7 * 86400000) return `${month}/${day} ${hour}:${min}`;
-  return `${d.getFullYear()}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+  const sec = d.getSeconds().toString().padStart(2, '0');
+  return `${month}-${day} ${hour}:${min}:${sec}`;
 }
 
 /** Diff 预览弹窗 */
@@ -52,9 +44,9 @@ function DiffModal({ diff, checkpointName, onClose }: {
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/15">
       <div className="bg-surface dark:bg-surface-dark rounded-xl border border-border dark:border-border-dark w-[600px] max-h-[80vh] flex flex-col shadow-2xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border dark:border-border-dark">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border dark:border-border-dark shrink-0">
           <div className="flex items-center gap-2">
             <GitBranch size={16} className="text-blue-500" />
             <span className="text-sm font-medium">差异预览：{checkpointName}</span>
@@ -130,6 +122,21 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
   const [restoring, setRestoring] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  const loadDiff = useCallback(async () => {
+    setLoadingDiff(true);
+    try {
+      const res = await getCheckpointDiff(checkpoint.id, cwd);
+      if (res.data?.diff) {
+        setDiff(res.data.diff);
+        setShowDiff(true);
+      }
+    } catch (err: any) {
+      console.warn('[ConfirmRestoreModal] 加载差异失败', err);
+    } finally {
+      setLoadingDiff(false);
+    }
+  }, [checkpoint.id, cwd]);
+
   const handleRestore = async () => {
     setRestoring(true);
     const res = await restoreCheckpoint(checkpoint.id, cwd);
@@ -148,7 +155,7 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
 
   if (result) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/15">
         <div className="bg-surface dark:bg-surface-dark rounded-xl border border-border dark:border-border-dark w-[400px] p-6 shadow-2xl">
           <div className="flex flex-col items-center gap-3">
             {result.success ? (
@@ -167,7 +174,7 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/15">
       <div className="bg-surface dark:bg-surface-dark rounded-xl border border-border dark:border-border-dark w-[500px] shadow-2xl">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border dark:border-border-dark">
           <RotateCcw size={16} className="text-amber-500" />
@@ -189,7 +196,7 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
         </div>
         <div className="flex items-center gap-2 px-4 pb-4">
           <button
-            onClick={() => setShowDiff(!showDiff)}
+            onClick={loadDiff}
             className="btn-secondary flex-1"
             disabled={loadingDiff}
           >
@@ -200,7 +207,7 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
           </button>
           <button
             onClick={handleRestore}
-            className="btn-primary flex-1 !bg-amber-500 hover:!bg-amber-600"
+            className="flex-1 px-3 py-2 rounded-lg text-xs font-medium bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-50"
             disabled={restoring}
           >
             {restoring ? '回滚中...' : '确认回滚'}
@@ -228,6 +235,7 @@ function CheckpointCard({
   const [showDiff, setShowDiff] = useState(false);
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const loadDiff = useCallback(async () => {
@@ -243,6 +251,8 @@ function CheckpointCard({
   const handleDelete = async () => {
     setDeleting(true);
     await onDelete(checkpoint.id);
+    setDeleting(false);
+    setShowDeleteConfirm(false);
   };
 
   return (
@@ -277,27 +287,29 @@ function CheckpointCard({
 
         {/* 展开内容 */}
         {expanded && (
-          <div className="px-3 pb-3 pt-1 border-t border-border dark:border-border-dark flex items-center gap-2">
+          <div className="px-3 pb-3 pt-1 border-t border-border dark:border-border-dark flex items-center gap-2 overflow-hidden">
             <button
               onClick={() => loadDiff()}
-              className="btn-secondary !text-xs !py-1 flex-1"
+              className="btn-secondary !text-xs !py-1 flex-1 min-w-0"
               disabled={loadingDiff}
             >
               {loadingDiff ? '加载中...' : '差异'}
             </button>
             <button
               onClick={() => setShowConfirm(true)}
-              className="btn-secondary !text-xs !py-1 !text-amber-500 hover:!bg-amber-500/10 flex-1"
+              className="btn-secondary !text-xs !py-1 !text-amber-500 hover:!bg-amber-500/10 flex-1 min-w-0 whitespace-nowrap"
             >
               <RotateCcw size={12} className="inline mr-1" />
               回滚
             </button>
             <button
-              onClick={handleDelete}
-              className="btn-secondary !text-xs !py-1 !text-red-500 hover:!bg-red-500/10"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="btn-secondary !text-xs !py-1 !text-red-500 hover:!bg-red-500/10 flex items-center gap-1 shrink-0 whitespace-nowrap"
               disabled={deleting}
+              title="删除快照"
             >
               <Trash2 size={12} />
+              <span>删除</span>
             </button>
           </div>
         )}
@@ -321,6 +333,38 @@ function CheckpointCard({
           onCancel={() => setShowConfirm(false)}
         />
       )}
+
+      {/* 删除确认弹窗 */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/15">
+          <div className="bg-surface dark:bg-surface-dark rounded-xl border border-border dark:border-border-dark w-[400px] p-6 shadow-2xl">
+            <div className="flex flex-col items-center gap-3">
+              <AlertTriangle size={48} className="text-red-500" />
+              <p className="text-sm font-medium">确认删除快照？</p>
+              <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark text-center">
+                {checkpoint.name}
+                <br />
+                此操作不可恢复！
+              </p>
+              <div className="flex gap-2 w-full mt-2">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="btn-secondary flex-1"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleDelete}
+                  className="flex-1 px-3 py-2 rounded-lg text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
+                  disabled={deleting}
+                >
+                  {deleting ? '删除中...' : '确认删除'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -331,23 +375,43 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false); // 用 ref 防并发，避免闭包捕获过期 loading 状态
 
   const loadCheckpoints = useCallback(async () => {
     if (!cwd) return;
+    if (loadingRef.current) return; // 防重复请求
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
-    const res = await getCheckpoints(cwd);
-    setLoading(false);
-    if (res.error) {
-      setError(res.error);
-    } else {
-      setCheckpoints(res.data || []);
+    try {
+      const res = await getCheckpoints(cwd);
+      if (res.error) {
+        setError(res.error);
+      } else {
+        setCheckpoints(res.data || []);
+      }
+    } catch (err) {
+      setError('加载快照失败');
+    } finally {
+      setLoading(false);
+      loadingRef.current = false;
     }
   }, [cwd]);
 
   useEffect(() => {
     loadCheckpoints();
-  }, [loadCheckpoints]);
+  }, [cwd]);
+
+  // 监听自定义事件：新快照创建时实时刷新列表
+  useEffect(() => {
+    const handleCheckpointCreated = (e: CustomEvent) => {
+      if (e.detail?.cwd === cwd) {
+        loadCheckpoints();
+      }
+    };
+    window.addEventListener('checkpoint-created', handleCheckpointCreated as EventListener);
+    return () => window.removeEventListener('checkpoint-created', handleCheckpointCreated as EventListener);
+  }, [cwd, loadCheckpoints]);
 
   const handleCreate = async () => {
     if (!cwd) return;
@@ -375,14 +439,14 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
 
   if (!cwd) {
     return (
-      <div className="flex-1 max-w-80 bg-surface-secondary dark:bg-surface-secondary-dark border-l border-border dark:border-border-dark flex flex-col">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border dark:border-border-dark">
+<div className="min-w-[260px] flex-1 max-w-80 bg-surface-secondary dark:bg-surface-secondary-dark border-l border-border dark:border-border-dark flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border dark:border-border-dark shrink-0">
           <div className="flex items-center gap-2">
             <GitBranch size={14} className="text-blue-500" />
             <span className="text-xs font-medium">快照管理</span>
           </div>
-          <button onClick={onClose} className="icon-btn !p-1">
-            <X size={15} />
+          <button onClick={onClose} className="p-1 rounded-lg text-content-secondary dark:text-content-secondary-dark hover:bg-black/10 dark:hover:bg-white/10 hover:text-content dark:hover:text-content-dark transition-colors" title="关闭快照面板">
+            <X size={16} />
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -395,30 +459,36 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
   }
 
   return (
-    <div className="flex-1 max-w-80 bg-surface-secondary dark:bg-surface-secondary-dark border-l border-border dark:border-border-dark flex flex-col">
+    <div className="min-w-[260px] flex-1 max-w-80 bg-surface-secondary dark:bg-surface-secondary-dark border-l border-border dark:border-border-dark flex flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border dark:border-border-dark">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border dark:border-border-dark shrink-0">
         <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
           <GitBranch size={14} className="text-blue-500 shrink-0" />
           <span className="text-xs font-medium text-content-tertiary dark:text-content-tertiary-dark truncate min-w-0">
             快照管理
           </span>
         </div>
-        <button onClick={onClose} className="icon-btn !p-1 shrink-0">
-          <X size={15} />
-        </button>
-      </div>
-
-      {/* 创建快照按钮 */}
-      <div className="px-3 py-2 border-b border-border dark:border-border-dark">
-        <button
-          onClick={handleCreate}
-          disabled={creating}
-          className="btn-secondary w-full !text-xs flex items-center justify-center gap-1.5"
-        >
-          <Plus size={14} />
-          {creating ? '创建中...' : '创建快照'}
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={handleCreate}
+            disabled={creating}
+            className="p-1.5 rounded-lg text-content-secondary dark:text-content-secondary-dark hover:bg-black/10 dark:hover:bg-white/10 hover:text-content dark:hover:text-content-dark transition-colors"
+            title="创建快照"
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            onClick={loadCheckpoints}
+            disabled={loading}
+            className="p-1.5 rounded-lg text-content-secondary dark:text-content-secondary-dark hover:bg-black/10 dark:hover:bg-white/10 hover:text-content dark:hover:text-content-dark transition-colors"
+            title="刷新快照列表"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-content-secondary dark:text-content-secondary-dark hover:bg-black/10 dark:hover:bg-white/10 hover:text-content dark:hover:text-content-dark transition-colors" title="关闭快照面板">
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {/* 快照列表 */}

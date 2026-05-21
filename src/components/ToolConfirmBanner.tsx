@@ -17,11 +17,11 @@ const TOOL_ICONS: Record<string, React.ElementType> = {
   create_dir: Folder,
 };
 
-/** 风险等级颜色 */
+/** 风险等级颜色 — 与品牌暖色系统协调 */
 const RISK_COLORS: Record<string, string> = {
-  low: "bg-green-500/10 text-green-600 border-green-500/20",
-  medium: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
-  high: "bg-red-500/10 text-red-600 border-red-500/20",
+  low: "bg-accent/8 text-accent/80 border-accent/15",
+  medium: "bg-amber-500/10 text-amber-600/80 border-amber-500/20 dark:text-amber-400/80",
+  high: "bg-rose-500/10 text-rose-600/80 border-rose-500/20 dark:text-rose-400/80",
 };
 
 /** 工具名称中文映射 */
@@ -80,7 +80,7 @@ export function ToolConfirmBanner({ requests, onConfirm }: ToolConfirmBannerProp
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => onConfirm(toolCallId, false, "用户拒绝")}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-message-ai hover:bg-red-500/20 text-content transition-colors"
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-message-ai hover:bg-rose-500/15 text-content transition-colors"
                 >
                   <X size={12} />
                   拒绝

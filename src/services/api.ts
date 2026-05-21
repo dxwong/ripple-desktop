@@ -4,10 +4,14 @@
  * 封装所有 REST API 调用，统一处理请求/响应格式和错误。
  */
 
-import type { BackendModel, BackendSession } from "../types";
+import type { BackendModel, BackendSession, UsageStats, AccountBalance } from "../types";
 
 /** 后端服务器基础 URL */
-export const BASE_URL = "http://localhost:3002";
+let BASE_URL = "http://localhost:3002";
+
+export function setBaseUrl(url: string) {
+  BASE_URL = url;
+}
 
 /** API 响应包装 */
 interface ApiResponse<T> {
@@ -272,11 +276,12 @@ export async function getCheckpoints(
 export async function createCheckpoint(
   cwd: string,
   name?: string,
-  description?: string
+  description?: string,
+  source: string = "manual"
 ): Promise<ApiResponse<{ success: boolean; checkpoint: CheckpointSummary }>> {
   return request(`/api/checkpoints`, {
     method: "POST",
-    body: JSON.stringify({ cwd, name, description, source: "manual" }),
+    body: JSON.stringify({ cwd, name, description, source }),
   });
 }
 
@@ -436,5 +441,32 @@ export async function applyEditBlocks(
       minSimilarity, 
       createCheckpoint 
     }),
+  });
+}
+
+// ============================================
+// 统计 API
+// ============================================
+
+/**
+ * 获取使用统计摘要（缓存命中率、累计成本、上下文 token 等）
+ */
+export async function fetchStatsSummary(): Promise<ApiResponse<UsageStats>> {
+  return request<UsageStats>("/api/stats/summary");
+}
+
+// ============================================
+// 账户余额 API
+// ============================================
+
+/**
+ * 查询 AI 提供商账户余额
+ * @param apiKey API 密钥（可选，默认使用后端环境变量）
+ * @param endpoint API 端点（用于判断 Provider 类型）
+ */
+export async function fetchAccountBalance(apiKey?: string, endpoint?: string): Promise<ApiResponse<AccountBalance>> {
+  return request<AccountBalance>("/api/account/balance", {
+    method: "POST",
+    body: JSON.stringify({ apiKey, endpoint }),
   });
 }
