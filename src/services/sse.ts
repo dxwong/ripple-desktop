@@ -71,8 +71,8 @@ export class SSEClient {
 
   constructor(options: SSEClientOptions = {}) {
     this.baseUrl = options.baseUrl || "http://localhost:3002";
-    this.timeout = options.timeout || 120_000;
-    this.idleTimeout = options.idleTimeout || 30_000;
+    this.timeout = options.timeout || 120_000; // 总超时时间
+    this.idleTimeout = options.idleTimeout || 30_000; // 流式空闲超时
   }
 
   /** 当前连接状态 */
@@ -115,10 +115,18 @@ export class SSEClient {
     this._status = "connecting";
 
     const { signal } = this.abortController;
-    const timeoutId = setTimeout(() => {
+    // 总超时（120秒）
+    const totalTimeoutId = setTimeout(() => {
       this.abort();
       callbacks.onError?.("请求超时");
     }, this.timeout);
+    // 快速连接超时（15秒）- 用于快速发现后端挂掉
+    const connectTimeoutId = setTimeout(() => {
+      if (this._status === "connecting") {
+        this.abort();
+        callbacks.onError?.("连接超时，请检查后端服务是否正常启动");
+      }
+    }, 15_000);
 
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -146,7 +154,8 @@ export class SSEClient {
 
       flog.debug('SSE', `收到 SSE 响应`, { ok: response.ok, status: response.status, statusText: response.statusText });
 
-      clearTimeout(timeoutId);
+      clearTimeout(totalTimeoutId);
+      clearTimeout(connectTimeoutId);
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -309,7 +318,8 @@ export class SSEClient {
         callbacks.onDone?.();
       }
     } catch (err: any) {
-      clearTimeout(timeoutId);
+      clearTimeout(totalTimeoutId);
+      clearTimeout(connectTimeoutId);
       if (idleTimer) clearTimeout(idleTimer);
       if (err.name === "AbortError") {
         // 主动取消，不触发 onError

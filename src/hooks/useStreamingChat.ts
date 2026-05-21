@@ -86,7 +86,7 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
   }
 }
 
-export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
+export function useStreamingChat(permissionMode: PermissionMode = "confirm", agentGatewayUrl: string = "http://localhost:3002") {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -428,7 +428,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
       try {
         if (useBackend) {
           flog.info('STREAMING', '使用后端模式发送');
-          const sseClient = new SSEClient();
+          const sseClient = new SSEClient({ baseUrl: agentGatewayUrl });
           sseClientRef.current = sseClient;
 
           // 预先添加一个空的 assistant 消息，以便后续能在上面显示错误或内容
@@ -577,7 +577,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                     
                     flog.error('STREAMING', `收到错误消息，显示到对话中`, { errorMessage: errorContent });
                     const sanitized = errorContent.replace(/<[^>]+>/g, '');
-                    const errorMsg = `\n\n❌ ${sanitized}\n\n`;
+                    const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ ${sanitized}\n__RIPPLE_ERROR_END__\n\n`;
                     appendToConversation(targetConvId, errorMsg);
                   }
                 },
@@ -643,7 +643,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm") {
                   }
                   
                   const sanitized = fullErrorMessage.replace(/<[^>]+>/g, '');
-                  const errorMsg = `\n\n❌ ${sanitized}\n\n`;
+                  const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ ${sanitized}\n__RIPPLE_ERROR_END__\n\n`;
                   appendToConversation(targetConvId, errorMsg);
                   resolve();
                 },

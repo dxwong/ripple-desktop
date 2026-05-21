@@ -13,9 +13,11 @@ import { useSettings } from "../hooks/useSettings";
 import { useFolderPicker } from "../hooks/useFolderPicker";
 import { syncStore } from "../hooks/useStore";
 import { ChatMode } from "../types";
-import { fetchModels } from "../services/api";
+import { fetchModels, setBaseUrl } from "../services/api";
 import { logger } from "./LogPanel";
 import { isTauri } from "../hooks/useTauri";
+import { healthSSEClient } from "../services/healthSSEClient";
+import { setLogApiUrl } from "../services/frontendLogger";
 
 export function MainApp() {
   // 启动状态管理
@@ -46,7 +48,14 @@ export function MainApp() {
     deleteModelConfig,
     setActiveModel,
   } = useSettings();
-  const chat = useStreamingChat(settings.permissionMode);
+  const chat = useStreamingChat(settings.permissionMode, settings.agentGatewayUrl);
+
+  // 当 gateway URL 变化时，更新所有服务
+  useEffect(() => {
+    setBaseUrl(settings.agentGatewayUrl);
+    healthSSEClient.setBaseUrl(settings.agentGatewayUrl);
+    setLogApiUrl(settings.agentGatewayUrl);
+  }, [settings.agentGatewayUrl]);
   const { pickFolder } = useFolderPicker();
 
   // 用 ref 持有 chat 中的稳定方法，避免 [chat] 对象引用变化导致 effect 反复执行

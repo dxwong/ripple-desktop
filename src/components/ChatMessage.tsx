@@ -184,9 +184,9 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               : "bg-message-ai dark:bg-message-ai-dark"
           }`}
         >
-          {!isUser && displayContent.startsWith('❌') ? (
+          {!isUser && displayContent.includes('__RIPPLE_ERROR__') ? (
             <div className="text-red-600 dark:text-red-400 font-semibold text-[14px] leading-relaxed whitespace-pre-wrap break-all">
-              {displayContent.replace(/<[^>]+>/g, '')}
+              {displayContent.replace(/__RIPPLE_ERROR__/g, '').replace(/__RIPPLE_ERROR_END__/g, '').trim()}
             </div>
           ) : (
           <div className="markdown-body selectable-text">

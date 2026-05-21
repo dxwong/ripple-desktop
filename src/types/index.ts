@@ -83,6 +83,8 @@ export interface AppSettings {
   darkMode: boolean;
   /** 权限模式：auto（自动执行）、confirm（每次确认）、read-only（只读） */
   permissionMode: PermissionMode;
+  /** Agent 引擎网关地址（默认为 http://localhost:3002） */
+  agentGatewayUrl: string;
   // 以下为兼容字段（当前激活配置的快捷引用）
   apiProvider: ApiProvider;
   apiEndpoint: string;

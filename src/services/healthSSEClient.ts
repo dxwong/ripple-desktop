@@ -3,8 +3,6 @@
  * 替代轮询 health check，通过 SSE 实时感知后端状态
  */
 
-import { BASE_URL } from "./api";
-
 type HealthCallback = (connected: boolean) => void;
 
 class HealthSSEClient {
@@ -14,6 +12,11 @@ class HealthSSEClient {
   private retryCount = 0;
   private readonly BASE_RECONNECT_DELAY = 1000;
   private readonly MAX_RECONNECT_DELAY = 30000;
+  private baseUrl = "http://localhost:3002";
+
+  setBaseUrl(url: string) {
+    this.baseUrl = url;
+  }
 
   private getReconnectDelay(): number {
     const delay = Math.min(
@@ -37,7 +40,7 @@ class HealthSSEClient {
     this.close();
 
     try {
-      const es = new EventSource(`${BASE_URL}/api/health/stream`);
+      const es = new EventSource(`${this.baseUrl}/api/health/stream`);
       this.eventSource = es;
 
       es.onopen = () => {

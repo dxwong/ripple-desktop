@@ -7,7 +7,11 @@
 import type { BackendModel, BackendSession, UsageStats, AccountBalance } from "../types";
 
 /** 后端服务器基础 URL */
-export const BASE_URL = "http://localhost:3002";
+let BASE_URL = "http://localhost:3002";
+
+export function setBaseUrl(url: string) {
+  BASE_URL = url;
+}
 
 /** API 响应包装 */
 interface ApiResponse<T> {
