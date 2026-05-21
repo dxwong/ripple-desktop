@@ -198,6 +198,8 @@ export class SSEClient {
       resetIdleTimer();
 
       while (true) {
+        // 防止 idle timeout abort() 置 null 后 while 循环报错
+        if (!this.currentReader) break;
         const { done, value } = await this.currentReader.read();
         if (done) {
           this.currentReader.releaseLock();

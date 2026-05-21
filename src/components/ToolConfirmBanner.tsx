@@ -5,6 +5,7 @@ import type { ToolRequestData } from "../types";
 interface ToolConfirmBannerProps {
   requests: ToolRequestData[];
   onConfirm: (toolCallId: string, approved: boolean, reason?: string) => void;
+  readOnly?: boolean;
 }
 
 /** 工具图标映射 */
@@ -38,7 +39,7 @@ const TOOL_NAMES: Record<string, string> = {
  * 工具执行确认横幅（非侵入式）
  * 固定在聊天区域上方，不阻断用户操作
  */
-export function ToolConfirmBanner({ requests, onConfirm }: ToolConfirmBannerProps) {
+export function ToolConfirmBanner({ requests, onConfirm, readOnly = false }: ToolConfirmBannerProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (requests.length === 0) return null;
@@ -87,7 +88,13 @@ export function ToolConfirmBanner({ requests, onConfirm }: ToolConfirmBannerProp
                 </button>
                 <button
                   onClick={() => onConfirm(toolCallId, true)}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-accent hover:bg-accent/80 text-white transition-colors"
+                  disabled={readOnly}
+                  className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                    readOnly
+                      ? 'bg-message-ai text-content-tertiary cursor-not-allowed'
+                      : 'bg-accent hover:bg-accent/80 text-white'
+                  }`}
+                  title={readOnly ? '只读模式下禁止写操作' : undefined}
                 >
                   <Check size={12} />
                   允许

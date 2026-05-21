@@ -136,6 +136,13 @@ export function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.backendConnected]);
 
+  // 后端断开连接时重置加载标记，下次重连后重新加载
+  useEffect(() => {
+    if (!chat.backendConnected) {
+      sessionsLoadedRef.current = false;
+    }
+  }, [chat.backendConnected]);
+
   // Tauri 环境下监听后端日志事件
   useEffect(() => {
     if (!isTauri()) return;

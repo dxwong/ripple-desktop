@@ -404,6 +404,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
       flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
 
+      // 如果最后一条消息是 AI 回复，先移除（重新生成或继续对话时清理旧回复）
+      setConversations(prev => prev.map(conv =>
+        conv.id === targetConvId && conv.messages.length > 0 && conv.messages[conv.messages.length - 1].role === 'assistant'
+          ? { ...conv, messages: conv.messages.slice(0, -1) }
+          : conv
+      ));
+
       let snapshotId: string | undefined;
       if (effectiveCwd) {
         try {

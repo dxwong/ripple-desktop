@@ -444,6 +444,7 @@ function ChatView({
               <ToolConfirmBanner
                 requests={pendingToolRequests}
                 onConfirm={onToolConfirm}
+                readOnly={permissionMode === "read-only"}
               />
             </div>
           )}
