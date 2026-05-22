@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
+import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint, copySession } from "../services/api";
 import { useStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
@@ -372,7 +372,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       content: string,
       useBackend = false,
       modelConfig?: ModelConfig,
-      cwd?: string
+      cwd?: string,
+      regenerate?: boolean
     ) => {
       flog.info('STREAMING', `发送消息请求`, {
         contentLength: content.length,
@@ -382,6 +383,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         hasModelConfig: !!modelConfig,
         modelConfigId: modelConfig?.id || '(none)',
         cwd: cwd || '(none)',
+        regenerate,
       });
 
       if (isProcessing) {
@@ -403,6 +405,24 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === targetConvId)?.cwd;
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
       flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
+
+      // 重新生成时：移除最后一个完整轮次（AI 回复 + 触发它的用户消息）
+      // 用户消息将由 handleRegenerate 重新提交，确保不在上下文中重复出现
+      if (regenerate) {
+        setConversations(prev => prev.map(conv => {
+          if (conv.id !== targetConvId) return conv;
+          let msgs = conv.messages;
+          // 移除最后一条 AI 回复
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+            msgs = msgs.slice(0, -1);
+          }
+          // 移除触发该回复的用户消息（将由 handleRegenerate 重新发送）
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'user') {
+            msgs = msgs.slice(0, -1);
+          }
+          return { ...conv, messages: msgs };
+        }));
+      }
 
       let snapshotId: string | undefined;
       if (effectiveCwd) {
@@ -452,6 +472,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
             const backendParams = {
               message: content,
               sessionId: targetConvId,
+              regenerate: regenerate || false,
               modelId: modelConfig?.model || "deepseek-v4-flash",
               model: modelConfig?.model,
               endpoint: modelConfig?.endpoint,
@@ -527,6 +548,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                       return { ...conv, messages: msgs, updatedAt: Date.now() };
                     });
                   });
+                  // 文件修改工具执行完成后，通知 FileTree 刷新
+                  if (effectiveCwd && ['write_file', 'create_dir', 'remove', 'shell'].includes(toolName)) {
+                    window.dispatchEvent(new CustomEvent('file-tree-refresh', { detail: { cwd: effectiveCwd } }));
+                  }
                 },
                 onToolRequest: (data) => {
                   flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });
@@ -813,6 +838,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   // ===== 确认或拒绝工具执行 =====
   const handleToolConfirm = useCallback(
     async (toolCallId: string, approved: boolean, reason?: string) => {
+      // read-only 模式下禁止批准任何工具执行
+      if (approved && permissionMode === "read-only") {
+        flog.warn('STREAMING', 'read-only 模式下拒绝了工具执行', { toolCallId });
+        setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+        return;
+      }
+
       const sessionId = activeConversationIdRef.current;
       flog.info('STREAMING', `工具执行确认: ${approved ? '批准' : '拒绝'}`, {
         toolCallId,
@@ -821,6 +853,23 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         sessionId,
       });
       if (!sessionId) return;
+
+      // 幂等检查：避免同一 toolCallId 被确认/拒绝多次
+      const existingConv = conversationsRef.current.find(c => c.id === sessionId);
+      if (existingConv) {
+        const msgs = existingConv.messages;
+        const lastAssistantMsg = [...msgs].reverse().find(m => m.role === 'assistant');
+        if (lastAssistantMsg) {
+          const existingTc = (lastAssistantMsg as any).toolCalls?.find(
+            (tc: any) => tc.toolCallId === toolCallId
+          );
+          if (existingTc && existingTc.status !== 'pending') {
+            flog.warn('STREAMING', `工具 ${toolCallId} 已被确认/拒绝，跳过重复操作`, { status: existingTc.status });
+            setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+            return;
+          }
+        }
+      }
 
       setConversations((prev): Conversation[] =>
         prev.map((conv): Conversation => {
@@ -850,13 +899,33 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
 
       setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
     },
-    []
+    [permissionMode]
   );
 
   // ===== Auto 确认：队列变化时自动批准 =====
   useEffect(() => {
     if (!autoConfirm || pendingToolRequests.length === 0) return;
     const req = pendingToolRequests[0];
+
+    // 二次验证：确认该 toolCallId 在当前会话中仍是 pending 状态
+    // 防止 100ms 窗口内用户手动拒绝后 auto-confirm 仍批准
+    const currentConv = conversationsRef.current.find(
+      c => c.id === activeConversationIdRef.current
+    );
+    if (currentConv) {
+      const msgs = currentConv.messages;
+      const lastAssistantMsg = [...msgs].reverse().find(m => m.role === 'assistant');
+      if (lastAssistantMsg) {
+        const targetTc = (lastAssistantMsg as any).toolCalls?.find(
+          (tc: any) => tc.toolCallId === req.toolCallId
+        );
+        if (targetTc && targetTc.status !== 'pending') {
+          flog.debug('STREAMING', `auto-confirm 跳过：工具 ${req.toolCallId} 状态已变更为 ${targetTc.status}`);
+          return;
+        }
+      }
+    }
+
     // 延迟一小段时间再确认，让 UI 有时间反应
     const timer = setTimeout(() => {
       handleToolConfirm(req.toolCallId, true);
@@ -996,6 +1065,51 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     saveSession(id, { title }).catch(() => {});
   }, []);
 
+  // ===== 拷贝对话（完整物理复制） =====
+  const copyConversation = useCallback(async (id: string, customTitle?: string) => {
+    const source = conversationsRef.current.find(c => c.id === id);
+    if (!source) {
+      flog.warn('STREAMING', '拷贝对话失败：源对话不存在', { id });
+      return;
+    }
+
+    flog.info('STREAMING', `拷贝对话`, {
+      id,
+      title: source.title,
+      cwd: source.cwd || '(none)',
+      messageCount: source.messages.length,
+    });
+
+    const result = await copySession(id, customTitle);
+    if (result.error || !result.data) {
+      flog.error('STREAMING', '拷贝对话失败', { id, error: result.error });
+      return;
+    }
+
+    // 构造新 Conversation，以服务端响应为准（避免前端 cwd/mode 分类偏差）
+    const newConv: Conversation = {
+      id: result.data.id,
+      title: result.data.title,
+      messages: source.messages,
+      createdAt: result.data.createdAt,
+      updatedAt: result.data.updatedAt,
+      // 服务端返回的 cwd 已做空值过滤，mode 由服务端推断
+      mode: (result.data.cwd ? 'code' : (result.data.mode || 'chat')) as ChatMode,
+      cwd: result.data.cwd || undefined,
+    };
+
+    setConversations((prev) => [newConv, ...prev]);
+    setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
+
+    flog.info('STREAMING', `对话拷贝成功`, {
+      sourceId: id,
+      newId: newConv.id,
+      title: newConv.title,
+      mode: newConv.mode,
+      cwd: newConv.cwd || '(none)',
+    });
+  }, []);
+
   // ===== 清空所有项目对话（有 cwd 的对话） =====
   const clearAllProjectConversations = useCallback(() => {
     const projectConversations = conversationsRef.current.filter(c => c.cwd);
@@ -1044,6 +1158,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     loadingMessagesFor,
     rollbackToSnapshot,
     renameConversation,
+    copyConversation,
     clearAllProjectConversations,
     /** 按对话累积使用统计（token + 费用） */
     conversationUsageMap,

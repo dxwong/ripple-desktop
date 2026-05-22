@@ -136,6 +136,13 @@ export function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.backendConnected]);
 
+  // 后端断开连接时重置加载标记，下次重连后重新加载
+  useEffect(() => {
+    if (!chat.backendConnected) {
+      sessionsLoadedRef.current = false;
+    }
+  }, [chat.backendConnected]);
+
   // Tauri 环境下监听后端日志事件
   useEffect(() => {
     if (!isTauri()) return;
@@ -168,9 +175,9 @@ export function MainApp() {
   const currentMode = chat.activeConversation?.mode || "chat";
 
   // 发送消息
-  const handleSendMessage = useCallback(async (content: string) => {
-    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id });
-    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd);
+  const handleSendMessage = useCallback(async (content: string, regenerate?: boolean) => {
+    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id, regenerate });
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd, regenerate);
   }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd]);
 
   // 切换对话
@@ -246,6 +253,7 @@ export function MainApp() {
           onOpenSettings={() => setShowSettings(true)}
           onNewProjectConversation={handleNewProjectConversation}
           onRenameConversation={chat.renameConversation}
+          onCopyConversation={chat.copyConversation}
           onPickFolder={pickFolder}
         />
 
@@ -295,6 +303,7 @@ export function MainApp() {
               {showCheckpointPanel ? (
                 <CheckpointPanel
                   cwd={currentCwd}
+                  sessionId={chat.activeConversationId}
                   onClose={() => setShowCheckpointPanel(false)}
                 />
               ) : (

@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from "react";
-import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, RotateCcw } from "lucide-react";
+import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, Undo2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Message } from "../types";
@@ -269,7 +269,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               className="group relative p-1.5 rounded-lg hover:bg-amber-500/10 hover:text-amber-500 transition-all text-content-tertiary/40 dark:text-content-tertiary-dark/40"
               title="回滚到此步骤"
             >
-              <RotateCcw size={13} />
+              <Undo2 size={13} />
               {/* Tooltip */}
               <div className="absolute right-0 top-full mt-1.5 px-2.5 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
                 <div className="font-medium text-amber-500">回滚到此步骤</div>

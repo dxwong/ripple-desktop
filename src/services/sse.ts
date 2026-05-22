@@ -105,6 +105,8 @@ export class SSEClient {
       title?: string;
       /** 请求追踪 ID，用于端到端日志关联 */
       requestId?: string;
+      /** 重新生成标志：清空旧上下文后重新回答 */
+      regenerate?: boolean;
     },
     callbacks: SSECallbacks
   ): Promise<void> {
@@ -148,6 +150,7 @@ export class SSEClient {
           cwd: params.cwd,
           title: params.title,
           requestId: params.requestId,
+          regenerate: params.regenerate,
         }),
         signal,
       });
@@ -198,6 +201,8 @@ export class SSEClient {
       resetIdleTimer();
 
       while (true) {
+        // 防止 idle timeout abort() 置 null 后 while 循环报错
+        if (!this.currentReader) break;
         const { done, value } = await this.currentReader.read();
         if (done) {
           this.currentReader.releaseLock();

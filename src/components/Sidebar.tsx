@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronRight,
   Pencil,
+  Copy,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Conversation, ChatMode } from "../types";
@@ -31,6 +32,8 @@ interface SidebarProps {
   onNewProjectConversation: (name: string, directory: string) => void;
   /** 重命名对话 */
   onRenameConversation: (id: string, title: string) => void;
+  /** 拷贝对话（id + 新标题） */
+  onCopyConversation: (id: string, title: string) => void;
   /** 打开文件夹选择器 */
   onPickFolder: () => Promise<string | null>;
 }
@@ -60,6 +63,7 @@ function Sidebar({
   onOpenSettings,
   onNewProjectConversation,
   onRenameConversation,
+  onCopyConversation,
   onPickFolder,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -69,6 +73,8 @@ function Sidebar({
   const [projectDir, setProjectDir] = useState("");
   const [pickingFolder, setPickingFolder] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [copyConfirm, setCopyConfirm] = useState<string | null>(null);
+  const [copyTitle, setCopyTitle] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
@@ -81,6 +87,11 @@ function Sidebar({
   const projectConversations = conversations.filter(c => c.cwd);
   // 普通对话 = 无 cwd 的对话
   const normalConversations = conversations.filter(c => !c.cwd);
+
+  // 拷贝弹窗重名检测
+  const isDuplicate = copyConfirm
+    ? conversations.some(c => c.id !== copyConfirm && c.title === copyTitle.trim())
+    : false;
 
   /** 新建普通对话或定位到已有空对话 */
   const handleNewConversation = () => {
@@ -255,6 +266,15 @@ function Sidebar({
                     </div>
                   </button>
                   <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                    {conv.id === activeConversationId && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setCopyConfirm(conv.id); setCopyTitle(`${conv.title} - 副本`); }}
+                        className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all duration-150"
+                        title="拷贝对话"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
                       className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
@@ -344,6 +364,15 @@ function Sidebar({
                     </div>
                   </button>
                   <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                    {conv.id === activeConversationId && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setCopyConfirm(conv.id); setCopyTitle(`${conv.title} - 副本`); }}
+                        className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all duration-150"
+                        title="拷贝对话"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
                       className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
@@ -488,6 +517,68 @@ function Sidebar({
                            transition-all duration-150 shadow-sm"
               >
                 删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 拷贝对话弹窗 ===== */}
+      {copyConfirm && (
+        <div className="fixed inset-0 bg-black/30 dark:bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-surface-secondary dark:bg-surface-secondary-dark rounded-2xl p-5 w-80 shadow-elevated border border-border dark:border-border-dark">
+            <h3 className="text-sm font-semibold mb-2">拷贝对话</h3>
+            <p className="text-sm text-content-secondary dark:text-content-secondary-dark mb-4">
+              将创建一份完整的副本（含所有消息和快照），与原对话完全独立。
+            </p>
+            <label className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5 block">
+              新对话标题
+            </label>
+            <input
+              type="text"
+              value={copyTitle}
+              onChange={(e) => setCopyTitle(e.target.value)}
+              className="w-full px-3 py-2 text-sm rounded-xl border border-border dark:border-border-dark
+                         bg-surface dark:bg-surface-dark text-content dark:text-content-dark
+                         placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
+                         focus:outline-none focus:border-accent/40 transition-all duration-150 mb-4"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && copyTitle.trim() && !isDuplicate) {
+                  onCopyConversation(copyConfirm, copyTitle.trim());
+                  setCopyConfirm(null);
+                }
+              }}
+            />
+            {/* 重名警告 */}
+            {isDuplicate && (
+              <p className="text-xs text-red-500 -mt-3 mb-3">已存在同名对话，请修改标题</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCopyConfirm(null)}
+                className="flex-1 px-3 py-2 text-sm font-medium rounded-xl
+                           border border-border dark:border-border-dark
+                           hover:bg-black/[0.03] dark:hover:bg-white/[0.03]
+                           transition-all duration-150"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  if (copyTitle.trim() && !isDuplicate) {
+                    onCopyConversation(copyConfirm, copyTitle.trim());
+                  }
+                  setCopyConfirm(null);
+                }}
+                disabled={!copyTitle.trim() || isDuplicate}
+                className="flex-1 px-4 py-2 text-sm font-medium rounded-xl
+                           bg-green-500 text-white
+                           hover:bg-green-600 active:scale-[0.98]
+                           disabled:opacity-50 disabled:cursor-not-allowed
+                           transition-all duration-150 shadow-sm"
+              >
+                创建副本
               </button>
             </div>
           </div>

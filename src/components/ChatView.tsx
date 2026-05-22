@@ -51,7 +51,7 @@ function formatLargeNumber(num: number): string {
 interface ChatViewProps {
   conversationId: string;
   messages: Message[];
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, regenerate?: boolean) => void;
   isProcessing: boolean;
   /** 停止 AI 处理的回调 */
   onStop?: () => void;
@@ -271,13 +271,21 @@ function ChatView({
   const streamingIdx = getStreamingIndex(messages, isProcessing);
   const shouldShowTyping = isProcessing && streamingIdx === -1;
 
+  // 找到最后一条 AI 消息（只有它能重新生成）
+  const lastAssistantIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return i;
+    }
+    return -1;
+  })();
+
   // 重新生成：找到对应 AI 消息的前一条用户消息，重新发送
   const handleRegenerate = useCallback((msgIdx: number) => {
     if (isProcessing) return;
     // 向前查找用户消息
     for (let i = msgIdx - 1; i >= 0; i--) {
       if (messages[i].role === "user") {
-        onSendMessage(messages[i].content);
+        onSendMessage(messages[i].content, true);  // true = 重新生成，会先移除旧 AI 回复
         break;
       }
     }
@@ -415,7 +423,7 @@ function ChatView({
                   isStreaming={index === streamingIdx}
                   darkMode={darkMode}
                   onEditBlockApply={onEditBlockApply}
-                  onRegenerate={msg.role === "assistant" ? () => handleRegenerate(index) : undefined}
+                  onRegenerate={msg.role === "assistant" && index === lastAssistantIdx ? () => handleRegenerate(index) : undefined}
                   onRollback={msg.role === "user" ? () => onRollbackToSnapshot?.(msg.id) : undefined}
                 />
               ))}
@@ -436,6 +444,7 @@ function ChatView({
               <ToolConfirmBanner
                 requests={pendingToolRequests}
                 onConfirm={onToolConfirm}
+                readOnly={permissionMode === "read-only"}
               />
             </div>
           )}

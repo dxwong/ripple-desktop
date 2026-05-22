@@ -193,6 +193,18 @@ export function FileTree({ directory, onFileClick, onClose, isExpanded, onToggle
     loadDir();
   }, [loadDir]);
 
+  // 监听文件树刷新事件（大模型操作文件后自动刷新）
+  useEffect(() => {
+    const handleRefresh = (e: CustomEvent) => {
+      // 如果事件指定了 cwd，只有匹配时才刷新；否则只要有事件就刷新
+      if (!e.detail?.cwd || e.detail.cwd === directory) {
+        loadDir();
+      }
+    };
+    window.addEventListener('file-tree-refresh', handleRefresh as EventListener);
+    return () => window.removeEventListener('file-tree-refresh', handleRefresh as EventListener);
+  }, [directory, loadDir]);
+
   // 如果不显示面板且已折叠，直接返回 null（但保持展开状态以便下次显示）
   if (!showPanel && !isExpanded) {
     return null;
