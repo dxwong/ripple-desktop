@@ -548,6 +548,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                       return { ...conv, messages: msgs, updatedAt: Date.now() };
                     });
                   });
+                  // 文件修改工具执行完成后，通知 FileTree 刷新
+                  if (effectiveCwd && ['write_file', 'create_dir', 'remove', 'shell'].includes(toolName)) {
+                    window.dispatchEvent(new CustomEvent('file-tree-refresh', { detail: { cwd: effectiveCwd } }));
+                  }
                 },
                 onToolRequest: (data) => {
                   flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });

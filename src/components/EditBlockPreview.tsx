@@ -106,6 +106,8 @@ export default function EditBlockPreview({
             const success = await applyBlock(index);
             if (success) {
               setAppliedBlocks(prev => new Set([...prev, index]));
+              // 通知文件树刷新
+              window.dispatchEvent(new CustomEvent('file-tree-refresh', { detail: {} }));
               // 通知内容更新
               if (onContentChange) {
                 onContentChange(getCleanContent());
