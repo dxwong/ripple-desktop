@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage } from "../types";
 import { SSEClient } from "../services/sse";
-import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint } from "../services/api";
+import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint, copySession } from "../services/api";
 import { useStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
@@ -1061,6 +1061,51 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     saveSession(id, { title }).catch(() => {});
   }, []);
 
+  // ===== 拷贝对话（完整物理复制） =====
+  const copyConversation = useCallback(async (id: string, customTitle?: string) => {
+    const source = conversationsRef.current.find(c => c.id === id);
+    if (!source) {
+      flog.warn('STREAMING', '拷贝对话失败：源对话不存在', { id });
+      return;
+    }
+
+    flog.info('STREAMING', `拷贝对话`, {
+      id,
+      title: source.title,
+      cwd: source.cwd || '(none)',
+      messageCount: source.messages.length,
+    });
+
+    const result = await copySession(id, customTitle);
+    if (result.error || !result.data) {
+      flog.error('STREAMING', '拷贝对话失败', { id, error: result.error });
+      return;
+    }
+
+    // 构造新 Conversation，以服务端响应为准（避免前端 cwd/mode 分类偏差）
+    const newConv: Conversation = {
+      id: result.data.id,
+      title: result.data.title,
+      messages: source.messages,
+      createdAt: result.data.createdAt,
+      updatedAt: result.data.updatedAt,
+      // 服务端返回的 cwd 已做空值过滤，mode 由服务端推断
+      mode: (result.data.cwd ? 'code' : (result.data.mode || 'chat')) as ChatMode,
+      cwd: result.data.cwd || undefined,
+    };
+
+    setConversations((prev) => [newConv, ...prev]);
+    setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
+
+    flog.info('STREAMING', `对话拷贝成功`, {
+      sourceId: id,
+      newId: newConv.id,
+      title: newConv.title,
+      mode: newConv.mode,
+      cwd: newConv.cwd || '(none)',
+    });
+  }, []);
+
   // ===== 清空所有项目对话（有 cwd 的对话） =====
   const clearAllProjectConversations = useCallback(() => {
     const projectConversations = conversationsRef.current.filter(c => c.cwd);
@@ -1109,6 +1154,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     loadingMessagesFor,
     rollbackToSnapshot,
     renameConversation,
+    copyConversation,
     clearAllProjectConversations,
     /** 按对话累积使用统计（token + 费用） */
     conversationUsageMap,

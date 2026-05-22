@@ -10,6 +10,7 @@ import {
 
 interface CheckpointPanelProps {
   cwd: string | null;
+  sessionId?: string;
   onClose: () => void;
 }
 
@@ -110,9 +111,10 @@ function DiffModal({ diff, checkpointName, onClose }: {
 }
 
 /** 确认回滚弹窗 */
-function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
+function ConfirmRestoreModal({ checkpoint, cwd, sessionId, onConfirm, onCancel }: {
   checkpoint: CheckpointSummary;
   cwd: string;
+  sessionId?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -125,7 +127,7 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
   const loadDiff = useCallback(async () => {
     setLoadingDiff(true);
     try {
-      const res = await getCheckpointDiff(checkpoint.id, cwd);
+      const res = await getCheckpointDiff(checkpoint.id, cwd, sessionId);
       if (res.data?.diff) {
         setDiff(res.data.diff);
         setShowDiff(true);
@@ -135,11 +137,11 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
     } finally {
       setLoadingDiff(false);
     }
-  }, [checkpoint.id, cwd]);
+  }, [checkpoint.id, cwd, sessionId]);
 
   const handleRestore = async () => {
     setRestoring(true);
-    const res = await restoreCheckpoint(checkpoint.id, cwd);
+    const res = await restoreCheckpoint(checkpoint.id, cwd, undefined, undefined, sessionId);
     setRestoring(false);
     if (res.error) {
       setResult({ success: false, message: res.error });
@@ -222,11 +224,13 @@ function ConfirmRestoreModal({ checkpoint, cwd, onConfirm, onCancel }: {
 function CheckpointCard({
   checkpoint,
   cwd,
+  sessionId,
   onRestore,
   onDelete,
 }: {
   checkpoint: CheckpointSummary;
   cwd: string;
+  sessionId?: string;
   onRestore: (cp: CheckpointSummary, cwd: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -240,13 +244,13 @@ function CheckpointCard({
 
   const loadDiff = useCallback(async () => {
     setLoadingDiff(true);
-    const res = await getCheckpointDiff(checkpoint.id, cwd);
+    const res = await getCheckpointDiff(checkpoint.id, cwd, sessionId);
     setLoadingDiff(false);
     if (res.data?.diff) {
       setDiff(res.data.diff);
       setShowDiff(true);
     }
-  }, [checkpoint.id, cwd]);
+  }, [checkpoint.id, cwd, sessionId]);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -329,6 +333,7 @@ function CheckpointCard({
         <ConfirmRestoreModal
           checkpoint={checkpoint}
           cwd={cwd}
+          sessionId={sessionId}
           onConfirm={() => setShowConfirm(false)}
           onCancel={() => setShowConfirm(false)}
         />
@@ -370,7 +375,7 @@ function CheckpointCard({
 }
 
 /** 快照面板主组件 */
-export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
+export function CheckpointPanel({ cwd, sessionId, onClose }: CheckpointPanelProps) {
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -384,7 +389,7 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await getCheckpoints(cwd);
+      const res = await getCheckpoints(cwd, sessionId);
       if (res.error) {
         setError(res.error);
       } else {
@@ -396,11 +401,11 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
       setLoading(false);
       loadingRef.current = false;
     }
-  }, [cwd]);
+  }, [cwd, sessionId]);
 
   useEffect(() => {
     loadCheckpoints();
-  }, [cwd]);
+  }, [cwd, sessionId]);
 
   // 监听自定义事件：新快照创建时实时刷新列表
   useEffect(() => {
@@ -411,13 +416,13 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
     };
     window.addEventListener('checkpoint-created', handleCheckpointCreated as EventListener);
     return () => window.removeEventListener('checkpoint-created', handleCheckpointCreated as EventListener);
-  }, [cwd, loadCheckpoints]);
+  }, [cwd, sessionId, loadCheckpoints]);
 
   const handleCreate = async () => {
     if (!cwd) return;
     setCreating(true);
     const name = `snapshot-${Date.now()}`;
-    const res = await createCheckpoint(cwd, name, '手动创建');
+    const res = await createCheckpoint(cwd, name, '手动创建', 'manual', sessionId);
     setCreating(false);
     if (!res.error) {
       loadCheckpoints();
@@ -426,7 +431,7 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
 
   const handleDelete = async (id: string) => {
     if (!cwd) return;
-    const res = await deleteCheckpoint(id, cwd);
+    const res = await deleteCheckpoint(id, cwd, sessionId);
     if (!res.error) {
       setCheckpoints(prev => prev.filter(cp => cp.id !== id));
     }
@@ -520,6 +525,7 @@ export function CheckpointPanel({ cwd, onClose }: CheckpointPanelProps) {
               key={cp.id}
               checkpoint={cp}
               cwd={cwd}
+              sessionId={sessionId}
               onRestore={handleRestore}
               onDelete={handleDelete}
             />

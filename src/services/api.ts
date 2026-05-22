@@ -129,6 +129,24 @@ export async function deleteSession(
 }
 
 /**
+ * 拷贝会话（完整物理复制，含 Checkpoint）
+ */
+export async function copySession(
+  id: string,
+  newTitle?: string,
+): Promise<ApiResponse<BackendSession>> {
+  const result = await request<{ success: boolean; session: BackendSession }>(
+    `/api/sessions/${id}/copy`,
+    {
+      method: "POST",
+      body: JSON.stringify(newTitle ? { title: newTitle } : {}),
+    },
+  );
+  if (result.error || !result.data) return { error: result.error };
+  return { data: result.data.session };
+}
+
+/**
  * 重置会话（清除 Agent 上下文）
  */
 export async function resetSession(
@@ -256,13 +274,15 @@ export interface RestoreResult {
 /**
  * 获取快照列表
  * @param cwd 工作目录
+ * @param sessionId 会话 ID（可选，用于会话级 checkpoint 命名空间）
  */
 export async function getCheckpoints(
-  cwd: string
+  cwd: string,
+  sessionId?: string,
 ): Promise<ApiResponse<CheckpointSummary[]>> {
-  const result = await request<{ checkpoints: CheckpointSummary[] }>(
-    `/api/checkpoints?cwd=${encodeURIComponent(cwd)}`
-  );
+  let url = `/api/checkpoints?cwd=${encodeURIComponent(cwd)}`;
+  if (sessionId) url += `&sessionId=${encodeURIComponent(sessionId)}`;
+  const result = await request<{ checkpoints: CheckpointSummary[] }>(url);
   if (result.error) return { error: result.error };
   return { data: result.data!.checkpoints };
 }
@@ -277,11 +297,12 @@ export async function createCheckpoint(
   cwd: string,
   name?: string,
   description?: string,
-  source: string = "manual"
+  source: string = "manual",
+  sessionId?: string,
 ): Promise<ApiResponse<{ success: boolean; checkpoint: CheckpointSummary }>> {
   return request(`/api/checkpoints`, {
     method: "POST",
-    body: JSON.stringify({ cwd, name, description, source }),
+    body: JSON.stringify({ cwd, name, description, source, sessionId }),
   });
 }
 
@@ -292,11 +313,12 @@ export async function createCheckpoint(
  */
 export async function getCheckpoint(
   id: string,
-  cwd: string
+  cwd: string,
+  sessionId?: string,
 ): Promise<ApiResponse<{ checkpoint: CheckpointDetail }>> {
-  return request<{ checkpoint: CheckpointDetail }>(
-    `/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`
-  );
+  let url = `/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`;
+  if (sessionId) url += `&sessionId=${encodeURIComponent(sessionId)}`;
+  return request<{ checkpoint: CheckpointDetail }>(url);
 }
 
 /**
@@ -306,11 +328,12 @@ export async function getCheckpoint(
  */
 export async function getCheckpointDiff(
   id: string,
-  cwd: string
+  cwd: string,
+  sessionId?: string,
 ): Promise<ApiResponse<{ diff: DiffEntry[] }>> {
-  return request<{ diff: DiffEntry[] }>(
-    `/api/checkpoints/${id}/diff?cwd=${encodeURIComponent(cwd)}`
-  );
+  let url = `/api/checkpoints/${id}/diff?cwd=${encodeURIComponent(cwd)}`;
+  if (sessionId) url += `&sessionId=${encodeURIComponent(sessionId)}`;
+  return request<{ diff: DiffEntry[] }>(url);
 }
 
 /**
@@ -324,11 +347,12 @@ export async function restoreCheckpoint(
   id: string,
   cwd: string,
   createBackup = true,
-  force = false
+  force = false,
+  sessionId?: string,
 ): Promise<ApiResponse<RestoreResult>> {
   return request<RestoreResult>(`/api/checkpoints/${id}/restore`, {
     method: "POST",
-    body: JSON.stringify({ cwd, createBackup, force }),
+    body: JSON.stringify({ cwd, createBackup, force, sessionId }),
   });
 }
 
@@ -336,14 +360,16 @@ export async function restoreCheckpoint(
  * 删除快照
  * @param id 快照 ID
  * @param cwd 工作目录
+ * @param sessionId 会话 ID（可选）
  */
 export async function deleteCheckpoint(
   id: string,
-  cwd: string
+  cwd: string,
+  sessionId?: string,
 ): Promise<ApiResponse<{ success: boolean }>> {
-  return request(`/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`, {
-    method: "DELETE",
-  });
+  let url = `/api/checkpoints/${id}?cwd=${encodeURIComponent(cwd)}`;
+  if (sessionId) url += `&sessionId=${encodeURIComponent(sessionId)}`;
+  return request(url, { method: "DELETE" });
 }
 
 // ============================================

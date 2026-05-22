@@ -253,6 +253,7 @@ export function MainApp() {
           onOpenSettings={() => setShowSettings(true)}
           onNewProjectConversation={handleNewProjectConversation}
           onRenameConversation={chat.renameConversation}
+          onCopyConversation={chat.copyConversation}
           onPickFolder={pickFolder}
         />
 
@@ -302,6 +303,7 @@ export function MainApp() {
               {showCheckpointPanel ? (
                 <CheckpointPanel
                   cwd={currentCwd}
+                  sessionId={chat.activeConversationId}
                   onClose={() => setShowCheckpointPanel(false)}
                 />
               ) : (
