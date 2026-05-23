@@ -72,29 +72,17 @@ export function MainApp() {
 
     const init = async () => {
       try {
-        // Tauri 环境下自动启动后端
-        if (isTauri()) {
-          logger.info("Tauri 环境，正在启动后端服务...");
-          const { invoke } = await import("@tauri-apps/api/core");
-          const startBackendPromise = invoke("start_backend").catch(e => {
-            logger.warn(`启动后端服务失败: ${e}`);
-            return null;
-          });
-          await new Promise(r => setTimeout(r, 200));
-          await startBackendPromise;
-        }
-
         // 检查后端连接（带超时重试）
         logger.info("正在检查后端连接...");
-        const MAX_RETRY = 8;
-        const RETRY_DELAY = 500;
+        const MAX_RETRY = 5;
+        const RETRY_DELAY = 300;
         let connected = false;
 
         for (let i = 0; i < MAX_RETRY; i++) {
           await new Promise(r => requestAnimationFrame(r));
           connected = await Promise.race([
             checkBackendConnectionRef.current(),
-            new Promise<false>(r => setTimeout(() => r(false), 3000))
+            new Promise<false>(r => setTimeout(() => r(false), 2000))
           ]);
           if (connected) break;
           if (i < MAX_RETRY - 1) {
@@ -112,7 +100,7 @@ export function MainApp() {
           // 启动完成，切换到 ready 状态
           setStartupState("ready");
         } else {
-          logger.warn("后端服务未连接");
+          logger.warn("后端服务未连接，请检查 pm2 服务是否已启动");
           // 后端未连接，也进入 ready 状态（允许离线使用）
           setStartupState("ready");
         }
