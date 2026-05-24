@@ -7,6 +7,7 @@ import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
+const MESSAGES_PAGE_SIZE = 15;
 
 async function* simulateStreamResponse(userMessage: string, mode: ChatMode): AsyncGenerator<string> {
   const responses: Record<string, Record<ChatMode, string[]>> = {
@@ -98,6 +99,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   const [loadedMessageIds, setLoadedMessageIds] = useState<Set<string>>(new Set());
   // 记录当前正在加载消息的会话 ID（用于 UI 加载态）
   const [loadingMessagesFor, setLoadingMessagesFor] = useState<string | null>(null);
+  // 分页状态：追踪每个会话是否还有更早消息可加载
+  const [hasMoreMessages, setHasMoreMessages] = useState<Record<string, boolean>>({});
   /** 按对话累积的使用统计（token 和费用），key = conversationId */
   const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
   const abortRef = useRef<AbortController | null>(null);
@@ -182,7 +185,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     return () => healthSSEClient.close();
   }, []);
 
-  // ===== 懒加载单个会话的消息详情 =====
+  // ===== 懒加载单个会话的消息详情（分页：仅加载最后 15 条） =====
   const loadConversationMessages = useCallback(async (convId: string) => {
     if (loadedMessageIds.has(convId) || loadingMessagesFor === convId) {
       flog.debug('STREAMING', `跳过已加载/正在加载的会话`, { convId });
@@ -193,7 +196,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     flog.info('STREAMING', `开始加载会话消息`, { convId });
     
     try {
-      const result = await fetchSession(convId);
+      const result = await fetchSession(convId, { limit: MESSAGES_PAGE_SIZE });
       if (result.error || !result.data) {
         flog.error('STREAMING', `加载会话失败`, { convId, error: result.error });
         return;
@@ -205,6 +208,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         cwd: sessionData.cwd || '(none)',
         title: sessionData.title || '(none)',
         messageCount: (sessionData.messages || []).length,
+        hasMore: sessionData.hasMore,
       });
 
       // 有 cwd 的项目对话自动标记为 code 模式
@@ -225,15 +229,64 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         })
       );
       setLoadedMessageIds((prev) => new Set([...prev, convId]));
+      setHasMoreMessages((prev) => ({ ...prev, [convId]: !!sessionData.hasMore }));
       flog.info('STREAMING', `会话消息加载完成`, {
         convId,
         messageCount: (sessionData.messages || []).length,
+        hasMore: sessionData.hasMore,
         cwd: sessionData.cwd || '(none)',
       });
     } finally {
       setLoadingMessagesFor((v) => (v === convId ? null : v));
     }
   }, [loadedMessageIds, loadingMessagesFor]);
+
+  // ===== 加载更早的消息（分页：追加到消息列表前面） =====
+  const loadMoreMessages = useCallback(async (convId: string) => {
+    if (loadingMessagesFor === convId) return;
+    const conv = conversationsRef.current.find(c => c.id === convId);
+    if (!conv || conv.messages.length === 0) return;
+
+    // 取当前最早的消息 ID 作为 before 参数
+    const oldestMsg = conv.messages[0];
+    if (!oldestMsg.id) return;
+
+    setLoadingMessagesFor(convId);
+    flog.info('STREAMING', `加载更早消息`, { convId, before: oldestMsg.id });
+
+    try {
+      const result = await fetchSession(convId, { limit: MESSAGES_PAGE_SIZE, before: oldestMsg.id });
+      if (result.error || !result.data) {
+        flog.warn('STREAMING', `加载更早消息失败`, { convId, error: result.error });
+        return;
+      }
+
+      const olderMessages = (result.data.messages || []) as Message[];
+      if (olderMessages.length === 0) {
+        setHasMoreMessages((prev) => ({ ...prev, [convId]: false }));
+        return;
+      }
+
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== convId) return c;
+          return {
+            ...c,
+            messages: [...olderMessages, ...c.messages],
+            updatedAt: Date.now(),
+          };
+        })
+      );
+      setHasMoreMessages((prev) => ({ ...prev, [convId]: !!result.data.hasMore }));
+      flog.info('STREAMING', `更早消息加载完成`, {
+        convId,
+        loadedCount: olderMessages.length,
+        hasMore: result.data.hasMore,
+      });
+    } finally {
+      setLoadingMessagesFor((v) => (v === convId ? null : v));
+    }
+  }, [loadingMessagesFor]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
   const activeModeRef = useRef(activeConversation?.mode || "chat");
@@ -1153,6 +1206,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
     handleToolConfirm,
     loadSessionsFromBackend,
     loadConversationMessages,
+    loadMoreMessages,
+    hasMoreMessages,
     loadedMessageIds,
     loadingMessagesFor,
     rollbackToSnapshot,

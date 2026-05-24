@@ -81,6 +81,10 @@ interface ChatViewProps {
   onRollbackToSnapshot?: (messageId: string) => void;
   /** 按对话累积使用统计（key = conversationId） */
   conversationUsageMap?: Record<string, ConversationUsage>;
+  /** 是否还有更早的消息可加载 */
+  hasMore?: boolean;
+  /** 加载更早消息 */
+  onLoadMore?: () => void;
 }
 
 function TypingIndicator() {
@@ -195,6 +199,8 @@ function ChatView({
   onEditBlockApply,
   onRollbackToSnapshot,
   conversationUsageMap = {},
+  hasMore,
+  onLoadMore,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isEmpty = messages.length === 0;
@@ -416,6 +422,19 @@ function ChatView({
             </div>
           ) : (
             <div className="space-y-5">
+              {/* 加载更早消息按钮 */}
+              {hasMore && onLoadMore && (
+                <div className="flex justify-center">
+                  <button
+                    onClick={onLoadMore}
+                    className="text-xs text-content-tertiary dark:text-content-tertiary-dark
+                             hover:text-accent dark:hover:text-accent-dark transition-colors
+                             px-4 py-1.5 rounded-full border border-border dark:border-border-dark"
+                  >
+                    加载更早消息
+                  </button>
+                </div>
+              )}
               {messages.map((msg, index) => (
                 <ChatMessage
                   key={msg.id}

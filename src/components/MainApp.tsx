@@ -267,6 +267,8 @@ export function MainApp() {
             onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
             onRollbackToSnapshot={handleRollbackToSnapshot}
             conversationUsageMap={chat.conversationUsageMap}
+            hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
+            onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
           />
 
           {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
