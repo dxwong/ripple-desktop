@@ -7,7 +7,7 @@ import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
-const MESSAGES_PAGE_SIZE = 15;
+const MESSAGES_PAGE_SIZE = 5;
 
 async function* simulateStreamResponse(userMessage: string, mode: ChatMode): AsyncGenerator<string> {
   const responses: Record<string, Record<ChatMode, string[]>> = {

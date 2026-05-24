@@ -297,9 +297,17 @@ function ChatView({
     }
   }, [isProcessing, messages, onSendMessage]);
 
+  const prevConvIdRef = useRef(conversationId);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isProcessing]);
+    if (conversationId && conversationId !== prevConvIdRef.current) {
+      prevConvIdRef.current = conversationId;
+      // 切换对话时滚动到底部显示最新消息（加载更多不触发此 effect）
+      const timer = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [conversationId]);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
