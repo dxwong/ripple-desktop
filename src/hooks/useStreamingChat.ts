@@ -102,7 +102,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
-  const { saveItem, loadItem } = useStore();
+  const { loadItem } = useStore();
   const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
 
   // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
@@ -110,22 +110,38 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   activeConversationIdRef.current = activeConversationId;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
-  // 用于 addMessage 中捕获 saveItem 的最新引用（避免闭包过期）
-  const saveItemRef = useRef(saveItem);
-  saveItemRef.current = saveItem;
 
   // 监听全局权限模式变化，自动同步 autoConfirm 状态
   useEffect(() => {
     setAutoConfirm(permissionMode === "auto");
   }, [permissionMode]);
 
-  // ===== 从本地存储加载会话（仅首次执行） =====
+  // ===== 初始化：优先从后端加载会话列表（仅首次执行） =====
   useEffect(() => {
     if (loadedInitRef.current) return;
     loadedInitRef.current = true;
     (async () => {
-      flog.info('STREAMING', '初始化：从本地存储加载会话');
-      // 加载会话列表
+      // 先尝试从后端加载（仅列表元数据，不含消息体，避免启动卡顿）
+      const result = await fetchSessions();
+      if (result.data && Array.isArray(result.data) && result.data.length > 0) {
+        const backendSessions: Conversation[] = result.data.map((session: any) => ({
+          id: session.id,
+          title: session.title || '未命名对话',
+          messages: [] as Message[],
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          mode: (session.cwd ? 'code' : 'chat') as ChatMode,
+          cwd: session.cwd || '',
+        }));
+        backendSessions.sort((a, b) => b.updatedAt - a.updatedAt);
+        setConversations(backendSessions);
+        // loadedMessageIds 保持为空，点击会话时才懒加载消息
+        flog.info('STREAMING', `初始化：从后端加载会话列表成功`, { count: backendSessions.length });
+        return;
+      }
+
+      // 后端不可用，降级到本地存储（仅用于恢复已有会话）
+      flog.warn('STREAMING', '后端不可用，降级到本地存储加载会话');
       const saved = await loadItem<Conversation[]>("conversations", []);
       if (saved && saved.length > 0) {
         saved.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -142,37 +158,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       } else {
         flog.info('STREAMING', '本地无已保存会话');
       }
-      // 清理旧的软删除标记（已改为物理删除）
-      const oldDeletedIds = await loadItem<string[]>("deletedConversationIds", []);
-      if (oldDeletedIds && oldDeletedIds.length > 0) {
-        localStorage.removeItem("ripple-deletedConversationIds");
-        flog.info('STREAMING', `已清理旧的软删除标记（${oldDeletedIds.length}条）`);
-      }
     })();
   }, []);
 
-  // ===== 持久化：保存会话到本地存储（物理删除） =====
-  // 每次 conversations 变化时触发（带防抖）
-  useEffect(() => {
-    if (!loadedInitRef.current) return;
-    const timer = setTimeout(async () => {
-      try {
-        await saveItem("conversations", conversations);
-      } catch (err) {
-        flog.warn('STREAMING', '保存会话到本地存储失败', { error: String(err) });
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [conversations, saveItem]);
-
-  // ===== 窗口关闭前强制保存 =====
-  useEffect(() => {
-    const handleBeforeUnload = async () => {
-      await saveItem("conversations", conversationsRef.current);
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [saveItem]);
+  // ===== 会话不缓存到 localStorage（以 Agent 服务器为唯一事实来源） =====
 
   // ===== 通过 SSE 实时检测后端连接状态（替代轮询） =====
   // 用 ref 记录上次连接状态，避免连接稳定后频繁重复日志
@@ -351,11 +340,8 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
           };
         })
       );
-      // 同步标题到后端（使用 ref 确保拿到最新值），防止快速关闭导致标题丢失
+      // 同步标题到后端 .json 元数据文件
       if (newTitle !== undefined) {
-        // 立即保存到本地存储（不等待 debounce）
-        saveItemRef.current("conversations", conversationsRef.current);
-        // 同步到后端 .json 元数据文件
         saveSession(convId, { title: newTitle }).catch((err) => {
           console.warn(`[addMessage] 同步标题到后端失败 ${convId}:`, err);
         });
@@ -991,6 +977,19 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         return arr;
       });
   }, []);
+
+  // ===== 定期刷新会话列表（每30秒从后端同步新增会话，与手机端行为一致） =====
+  useEffect(() => {
+    if (!backendConnected) return;
+    flog.info('STREAMING', '启动会话列表定期刷新（30秒间隔）');
+    const interval = setInterval(() => {
+      loadSessionsFromBackend();
+    }, 30000);
+    return () => {
+      clearInterval(interval);
+      flog.debug('STREAMING', '停止会话列表定期刷新');
+    };
+  }, [backendConnected, loadSessionsFromBackend]);
 
   // ===== 回滚到指定消息的快照 =====
   const rollbackToSnapshot = useCallback(
