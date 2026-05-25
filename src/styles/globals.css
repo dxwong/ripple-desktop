@@ -195,6 +195,19 @@
     @apply block p-4 overflow-x-auto text-[14px] leading-relaxed font-mono;
   }
 
+  /* marked 生成的轻量代码块（流式中），避免样式冲突 */
+  .markdown-body .code-block-light pre {
+    margin: 0 !important;
+    border-radius: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    overflow: visible !important;
+  }
+
+  .markdown-body .code-block-light pre code {
+    padding: 0 !important;
+  }
+
   .markdown-body :not(pre) > code {
     @apply px-1.5 py-0.5 rounded-md
            bg-message-code dark:bg-message-code-dark

@@ -277,11 +277,11 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
           };
         })
       );
-      setHasMoreMessages((prev) => ({ ...prev, [convId]: !!result.data.hasMore }));
+      setHasMoreMessages((prev) => ({ ...prev, [convId]: !!result?.data?.hasMore }));
       flog.info('STREAMING', `更早消息加载完成`, {
         convId,
         loadedCount: olderMessages.length,
-        hasMore: result.data.hasMore,
+        hasMore: result?.data?.hasMore,
       });
     } finally {
       setLoadingMessagesFor((v) => (v === convId ? null : v));

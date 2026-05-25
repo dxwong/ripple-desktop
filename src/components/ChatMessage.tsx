@@ -1,7 +1,7 @@
-import { memo, useState, useEffect, useCallback } from "react";
+import { memo, useState, useEffect, useCallback, useRef } from "react";
+import { createRoot } from "react-dom/client";
 import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, Undo2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { marked } from "marked";
 import { Message } from "../types";
 import CodeEditor from "./CodeEditor";
 import { ToolCallCard } from "./ToolCallCard";
@@ -12,23 +12,17 @@ const renderLog = (id: string, role: string, contentLen: number, thinkingLen: nu
   console.log(`[ChatMessage] render id=${id} role=${role} content_len=${contentLen} thinking_len=${thinkingLen}`);
 };
 
-interface ChatMessageProps {
-  message: Message;
-  isStreaming?: boolean;
-  darkMode?: boolean;
-  /** EditBlock 应用成功回调 */
-  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
-  /** 重新生成回调 */
-  onRegenerate?: () => void;
-  /** 回滚到该消息（撤销后续 AI 操作） */
-  onRollback?: (messageId: string) => void;
+const markedRenderer = new marked.Renderer()
+markedRenderer.code = function({ text, lang }: { text: string; lang?: string }) {
+  const language = lang || ""
+  const encodedCode = encodeURIComponent(text)
+  return `<div class="code-block-mount" data-code="${encodedCode}" data-lang="${language}"><div class="code-block-light my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full"><div class="flex items-center justify-between px-4 py-1.5 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]"><span class="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">${language || "code"}</span><button class="code-copy-btn text-xs text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary dark:hover:text-content-secondary-dark transition-colors" data-code="${encodedCode}">复制</button></div><pre class="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono whitespace-pre-wrap"><code class="language-${language}">${escapeHtml(text)}</code></pre></div></div>`
 }
 
-/** 从 className 中提取语言 */
-function extractLanguage(className?: string): string | undefined {
-  if (!className) return undefined;
-  const match = className.match(/language-(\w+)/);
-  return match ? match[1] : undefined;
+marked.use({ renderer: markedRenderer, gfm: true, breaks: true })
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
 /** 格式化时间戳为 YYYY/MM/DD HH:mm */
@@ -43,54 +37,25 @@ function formatTimestamp(ts: number): string {
   return `${Y}/${M}/${D} ${h}:${m}`;
 }
 
-/** 轻量代码块（流式中使用，无 Monaco） */
-function LightweightCodeBlock({ code, language }: { code: string; language?: string }) {
-  return (
-    <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
-      {language && (
-        <div className="flex items-center px-4 py-1 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]">
-          <span className="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">
-            {language}
-          </span>
-        </div>
-      )}
-      <pre className="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono whitespace-pre-wrap">
-        {code}
-      </pre>
-    </div>
-  );
-}
-
-/**
- * 从 ReactMarkdown pre 组件的 children 中提取代码内容
- * 
- * ReactMarkdown 的 pre 组件接收：
- *   children: <code>React 元素（内含代码文本 + className 语言标记）
- *   node: unist AST 节点
- */
-function extractCodeInfo(children: React.ReactNode): { code: string; language?: string } {
-  try {
-    const codeElement = (children as any);
-    // <code> 元素的 children 就是代码文本
-    const code = typeof codeElement?.props?.children === "string"
-      ? codeElement.props.children
-      : "";
-    // <code> 元素的 className 包含语言标记，如 "language-typescript"
-    const className = codeElement?.props?.className || "";
-    const language = extractLanguage(className);
-    return { code, language };
-  } catch {
-    return { code: "" };
-  }
+interface ChatMessageProps {
+  message: Message;
+  isStreaming?: boolean;
+  darkMode?: boolean;
+  /** EditBlock 应用成功回调 */
+  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
+  /** 重新生成回调 */
+  onRegenerate?: () => void;
+  /** 回滚到该消息（撤销后续 AI 操作） */
+  onRollback?: (messageId: string) => void;
 }
 
 /**
  * 消息气泡组件
- * 
- * 流式渲染策略：
- * - 流式和完成后都用 ReactMarkdown 渲染（样式一致，不闪烁）
- * - 流式中代码块用轻量 <pre>，完成后用 Monaco Editor
- * - 所有代码内容从 ReactMarkdown 的 pre children 正确提取
+ *
+ * 渲染策略：
+ * - 使用 marked 解析 markdown，通过 dangerouslySetInnerHTML 渲染
+ * - 流式中代码块用轻量 HTML pre，完成后用 createRoot 挂载 Monaco Editor
+ * - 复制按钮通过事件委托处理
  */
 const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply, onRegenerate, onRollback }: ChatMessageProps) {
   const isUser = message.role === "user";
@@ -101,6 +66,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   const [displayContent, setDisplayContent] = useState(message.content);
   /** 复制状态 */
   const [copied, setCopied] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // 同步外部内容变化
   useEffect(() => {
@@ -124,6 +90,43 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
       console.error("Failed to copy:", err);
     }
   }, [message.content]);
+
+  // 生成 markdown HTML
+  const htmlContent = displayContent ? marked.parse(displayContent) as string : "";
+
+  // 点击事件委托：处理代码块复制按钮
+  const handleContentClick = useCallback((e: React.MouseEvent) => {
+    const copyBtn = (e.target as HTMLElement).closest(".code-copy-btn") as HTMLElement | null
+    if (copyBtn) {
+      const code = decodeURIComponent(copyBtn.getAttribute("data-code") || "")
+      navigator.clipboard.writeText(code)
+      copyBtn.textContent = "已复制"
+      setTimeout(() => { if (copyBtn) copyBtn.textContent = "复制" }, 2000)
+    }
+  }, [])
+
+  // 流式完成后，将轻量代码块替换为 Monaco Editor
+  useEffect(() => {
+    if (isStreaming || !contentRef.current) return
+    const timer = setTimeout(() => {
+      const mounts = contentRef.current?.querySelectorAll<HTMLElement>(".code-block-mount")
+      mounts?.forEach((mount) => {
+        const code = decodeURIComponent(mount.getAttribute("data-code") || "")
+        const lang = mount.getAttribute("data-lang") || ""
+        mount.innerHTML = ""
+        const root = createRoot(mount)
+        root.render(
+          <CodeEditor
+            code={code.replace(/\n$/, "")}
+            language={lang}
+            darkMode={darkMode}
+            height={Math.min(Math.max(code.split("\n").length * 22, 100), 400)}
+          />
+        )
+      })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [isStreaming, displayContent, darkMode])
 
   renderLog(message.id, message.role, message.content.length, (message.thinking || "").length);
 
@@ -201,53 +204,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               {displayContent.replace(/__RIPPLE_ERROR__/g, '').replace(/__RIPPLE_ERROR_END__/g, '').trim()}
             </div>
           ) : (
-          <div className="markdown-body selectable-text">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                // ===== 代码块：流式用轻量 pre，完成用 Monaco =====
-                pre: ({ children }) => {
-                  const { code, language } = extractCodeInfo(children);
-                  if (!code) {
-                    // 没有代码内容时回退到普通 pre
-                    return (
-                      <div className="my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full">
-                        <pre className="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono">
-                          {children}
-                        </pre>
-                      </div>
-                    );
-                  }
-
-                  if (isStreaming) {
-                    return <LightweightCodeBlock code={code.replace(/\n$/, "")} language={language} />;
-                  }
-
-                  return (
-                    <CodeEditor
-                      code={code.replace(/\n$/, "")}
-                      language={language}
-                      darkMode={darkMode}
-                      height={Math.min(Math.max(code.split("\n").length * 22, 100), 400)}
-                    />
-                  );
-                },
-                // ===== 行内代码：两种模式一致 =====
-                code: ({ className, children }) => {
-                  if (!className) {
-                    return (
-                      <code className="px-1.5 py-0.5 rounded-md bg-message-code dark:bg-message-code-dark text-accent text-[14px] font-mono">
-                        {children}
-                      </code>
-                    );
-                  }
-                  return null; // 块级代码由 pre 组件处理
-                },
-              }}
-            >
-              {displayContent}
-            </ReactMarkdown>
-          </div>
+          <div className="markdown-body selectable-text" ref={contentRef} onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: htmlContent }} />
           )}
 
           {/* 流式闪烁光标 */}
@@ -291,9 +248,9 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
           </div>
         )}
 
-        {/* 操作按钮（非流式时在内容右下角显示） */}
+        {/* 操作按钮（非流式时在内容下方右侧显示） */}
         {!isUser && !isStreaming && (
-          <div className="flex justify-end gap-1 mt-1.5 mr-1">
+          <div className="flex flex-col items-end gap-1 mt-2">
             {/* 重新生成按钮 */}
             {onRegenerate && (
               <button
