@@ -227,23 +227,22 @@ function ChatView({
     return () => clearTimeout(timer);
   }, [conversationId]);
 
-  // ===== 点击发送时重置滚动状态（独立于 scrollKey，确保首次发送能滚动） =====
-  const prevProcessingRef = useRef(false);
-  useLayoutEffect(() => {
-    if (isProcessing && !prevProcessingRef.current) {
-      userScrolledUpRef.current = false;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-    }
-    prevProcessingRef.current = isProcessing;
-  }, [isProcessing]);
-
-  // ===== SSE 内容变化时滚动到底部（用户上滑时停止） =====
+  // ===== 发送或 SSE 输出时滚动到底部（用户上滑时停止） =====
   const lastMsg = messages[messages.length - 1];
   const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}-${lastMsg?.thinking?.length || 0}`;
+  const prevProcessingRef = useRef(false);
   useLayoutEffect(() => {
+    // isProcessing false→true（刚发送）时重置用户上滑标记
+    if (isProcessing && !prevProcessingRef.current) {
+      userScrolledUpRef.current = false;
+    }
+    prevProcessingRef.current = isProcessing;
+
     if (userScrolledUpRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [scrollKey]);
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  }, [scrollKey, isProcessing]);
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
   const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };

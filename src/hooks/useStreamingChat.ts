@@ -485,6 +485,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       }
 
       let snapshotId: string | undefined;
+      // 先把消息加上，让用户立刻看到（snapshotId 后面再补）
+      addMessage("user", content);
+      addMessage("assistant", "");
+
       if (effectiveCwd) {
         try {
           const label = `AI处理前 - ${content.slice(0, 20).replace(/\n/g, ' ')}`;
@@ -497,6 +501,21 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
           if ((cpRes as any).data?.checkpoint?.id) {
             snapshotId = (cpRes as any).data.checkpoint.id;
             flog.info('STREAMING', '创建快照成功', { snapshotId, cwd: effectiveCwd });
+            // 补上 snapshotId（更新用户消息）
+            setConversations((prev) =>
+              prev.map((conv) => {
+                if (conv.id !== targetConvId) return conv;
+                const msgs = [...conv.messages];
+                // 从后往前找最后一条用户消息补 snapshotId
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  if (msgs[i].role === 'user') {
+                    msgs[i] = { ...msgs[i], snapshotId };
+                    break;
+                  }
+                }
+                return { ...conv, messages: msgs };
+              })
+            );
             // 通知 CheckpointPanel 刷新快照列表（实时更新）
             window.dispatchEvent(new CustomEvent('checkpoint-created', { detail: { cwd: effectiveCwd } }));
           } else {
@@ -513,8 +532,6 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         }
       }
 
-      addMessage("user", content, { snapshotId });
-
       try {
         if (useBackend) {
           flog.info('STREAMING', '使用后端模式发送');
@@ -522,7 +539,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
           sseClientRef.current = sseClient;
 
           // 预先添加一个空的 assistant 消息，以便后续能在上面显示错误或内容
-          addMessage("assistant", "");
+          // （前面已添加，不再重复）
 
           await new Promise<void>((resolve, reject) => {
             let hasContent = false;
