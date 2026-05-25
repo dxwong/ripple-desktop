@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from "react";
 import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
@@ -227,22 +227,23 @@ function ChatView({
     return () => clearTimeout(timer);
   }, [conversationId]);
 
-  // ===== 点击发送或 SSE 输出时滚动到底部（用户上滑时停止，模仿手机端逻辑） =====
-  // 构造 scrollKey：仅在 新增消息 或 最后一条消息内容增长 时变化
-  const lastMsg = messages[messages.length - 1];
-  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}-${lastMsg?.thinking?.length || 0}`;
-
+  // ===== 点击发送时重置滚动状态（独立于 scrollKey，确保首次发送能滚动） =====
   const prevProcessingRef = useRef(false);
-  useEffect(() => {
-    // 点击发送（isProcessing false→true）时重置用户上滑标记
+  useLayoutEffect(() => {
     if (isProcessing && !prevProcessingRef.current) {
       userScrolledUpRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
     }
     prevProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
+  // ===== SSE 内容变化时滚动到底部（用户上滑时停止） =====
+  const lastMsg = messages[messages.length - 1];
+  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}-${lastMsg?.thinking?.length || 0}`;
+  useLayoutEffect(() => {
     if (userScrolledUpRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [scrollKey, isProcessing]);
+  }, [scrollKey]);
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
   const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
