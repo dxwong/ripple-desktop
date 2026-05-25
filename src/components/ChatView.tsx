@@ -203,7 +203,46 @@ function ChatView({
   onLoadMore,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
   const isEmpty = messages.length === 0;
+
+  // ===== 跟踪用户是否手动上滑（停止自动滚动） =====
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledUpRef.current = distance > 80;
+  }, []);
+
+  // ===== 切换对话时滚动到底部 =====
+  const prevConvRef = useRef(conversationId);
+  useEffect(() => {
+    if (conversationId === prevConvRef.current) return;
+    prevConvRef.current = conversationId;
+    userScrolledUpRef.current = false;
+    const timer = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [conversationId]);
+
+  // ===== 点击发送或 SSE 输出时滚动到底部（用户上滑时停止，模仿手机端逻辑） =====
+  // 构造 scrollKey：仅在 新增消息 或 最后一条消息内容增长 时变化
+  const lastMsg = messages[messages.length - 1];
+  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}`;
+
+  const prevProcessingRef = useRef(false);
+  useEffect(() => {
+    // 点击发送（isProcessing false→true）时重置用户上滑标记
+    if (isProcessing && !prevProcessingRef.current) {
+      userScrolledUpRef.current = false;
+    }
+    prevProcessingRef.current = isProcessing;
+
+    if (userScrolledUpRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, [scrollKey, isProcessing]);
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
   const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
@@ -368,7 +407,7 @@ function ChatView({
       )}
 
       {/* ===== 消息区域 ===== */}
-      <div className="flex-1 overflow-y-auto scroll-anchor">
+      <div className="flex-1 overflow-y-auto scroll-anchor" ref={messagesContainerRef} onScroll={handleScroll}>
         <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up min-w-0">
           {isEmpty ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center animate-fade-in">

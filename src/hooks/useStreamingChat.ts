@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint, copySession } from "../services/api";
-import { useStore } from "./useStore";
+import { useStore, syncStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
 
@@ -138,6 +138,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         }));
         backendSessions.sort((a, b) => b.updatedAt - a.updatedAt);
         setConversations(backendSessions);
+        // 恢复上次活跃的会话（页面重载后自动定位到之前正在查看的对话）
+        const savedId = syncStore.getItem<string>("active-conversation-id", "");
+        if (savedId && backendSessions.some(c => c.id === savedId)) {
+          setActiveConversationId(savedId);
+          // 自动加载该会话的消息
+          loadConversationMessages(savedId);
+        }
         // loadedMessageIds 保持为空，点击会话时才懒加载消息
         flog.info('STREAMING', `初始化：从后端加载会话列表成功`, { count: backendSessions.length });
         return;
@@ -149,6 +156,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
       if (saved && saved.length > 0) {
         saved.sort((a, b) => b.updatedAt - a.updatedAt);
         setConversations(saved);
+        // 恢复上次活跃的会话
+        const savedId = syncStore.getItem<string>("active-conversation-id", "");
+        if (savedId && saved.some(c => c.id === savedId)) {
+          setActiveConversationId(savedId);
+          // 自动加载该会话的消息
+          loadConversationMessages(savedId);
+        }
         const ids = new Set<string>();
         for (const c of saved) {
           if (c.messages && c.messages.length > 0) ids.add(c.id);
@@ -165,6 +179,13 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
   }, []);
 
   // ===== 会话不缓存到 localStorage（以 Agent 服务器为唯一事实来源） =====
+
+  // ===== 持久化当前对话 ID，页面重载后自动恢复 =====
+  useEffect(() => {
+    if (activeConversationId) {
+      syncStore.setItem("active-conversation-id", activeConversationId);
+    }
+  }, [activeConversationId]);
 
   // ===== 通过 SSE 实时检测后端连接状态（替代轮询） =====
   // 用 ref 记录上次连接状态，避免连接稳定后频繁重复日志
@@ -834,12 +855,10 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
         );
       }
 
-      abortRef.current?.abort();
-      sseClientRef.current?.abort();
-      sseClientRef.current = null;
-      abortRef.current = null;
-      setIsProcessing(false);
+      // 不中断 SSE（推通道）：appendToConversation 按 convId 更新指定会话，写通道继续运行
     }
+    // 切换对话后恢复输入框状态（原会话的 SSE 仍在后台运行）
+    setIsProcessing(false);
     setPendingToolRequests([]);
     setActiveConversationId(id);
     if (!loadedMessageIds.has(id)) {
