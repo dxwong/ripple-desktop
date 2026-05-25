@@ -67,6 +67,23 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   /** 复制状态 */
   const [copied, setCopied] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const thinkingEndRef = useRef<HTMLDivElement>(null);
+  const thinkingContainerRef = useRef<HTMLDivElement>(null);
+  const thinkingScrolledUpRef = useRef(false);
+
+  // 思考过程自动滚动（用户上滑时停止）
+  const handleThinkingScroll = useCallback(() => {
+    const el = thinkingContainerRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    thinkingScrolledUpRef.current = distance > 10;
+  }, []);
+
+  useEffect(() => {
+    if (thinkingExpanded && thinkingEndRef.current && !thinkingScrolledUpRef.current) {
+      thinkingEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+    }
+  }, [thinkingExpanded, message.thinking]);
 
   // 同步外部内容变化
   useEffect(() => {
@@ -172,8 +189,9 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               )}
             </button>
             {thinkingExpanded && (
-              <div className="mt-1.5 rounded-xl px-3 py-2 bg-message-code/50 dark:bg-message-code-dark/50 border border-border/50 dark:border-border-dark/50 text-xs text-content-tertiary dark:text-content-tertiary-dark whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+              <div ref={thinkingContainerRef} onScroll={handleThinkingScroll} className="mt-1.5 rounded-xl px-3 py-2 bg-message-code/50 dark:bg-message-code-dark/50 border border-border/50 dark:border-border-dark/50 text-xs text-content-tertiary dark:text-content-tertiary-dark whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
                 {message.thinking}
+                <div ref={thinkingEndRef} />
               </div>
             )}
           </div>

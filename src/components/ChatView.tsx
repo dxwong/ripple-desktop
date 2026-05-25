@@ -230,7 +230,7 @@ function ChatView({
   // ===== 点击发送或 SSE 输出时滚动到底部（用户上滑时停止，模仿手机端逻辑） =====
   // 构造 scrollKey：仅在 新增消息 或 最后一条消息内容增长 时变化
   const lastMsg = messages[messages.length - 1];
-  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}`;
+  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}-${lastMsg?.thinking?.length || 0}`;
 
   const prevProcessingRef = useRef(false);
   useEffect(() => {
