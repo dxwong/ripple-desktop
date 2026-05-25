@@ -71,7 +71,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   const thinkingContainerRef = useRef<HTMLDivElement>(null);
   const thinkingScrolledUpRef = useRef(false);
 
-  // 思考过程自动滚动（用户上滑时停止）
+  // 思考过程自动滚动
   const handleThinkingScroll = useCallback(() => {
     const el = thinkingContainerRef.current;
     if (!el) return;
@@ -80,7 +80,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   }, []);
 
   useEffect(() => {
-    if (thinkingExpanded && thinkingEndRef.current && !thinkingScrolledUpRef.current) {
+    if (thinkingExpanded && thinkingEndRef.current) {
       thinkingEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
     }
   }, [thinkingExpanded, message.thinking]);
