@@ -4,6 +4,10 @@ use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+mod mobile_bridge;
+use mobile_bridge::MobileBridgeState;
+use mobile_bridge::{start_mobile_bridge, stop_mobile_bridge, broadcast_mobile_event};
+
 // ==================== 配置持久化（原子写入，防竞态） ====================
 
 /// 配置锁（同一进程内并发安全）
@@ -273,9 +277,11 @@ pub fn run() {
         .manage(BackendProcess {
             child: Mutex::new(None),
         })
+        .manage(MobileBridgeState::new())
         .invoke_handler(tauri::generate_handler![
             save_config, load_config,
             start_backend, stop_backend,
+            start_mobile_bridge, stop_mobile_bridge, broadcast_mobile_event,
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");

@@ -18,6 +18,15 @@ import { logger } from "./LogPanel";
 import { isTauri } from "../hooks/useTauri";
 import { healthSSEClient } from "../services/healthSSEClient";
 import { setLogApiUrl } from "../services/frontendLogger";
+import {
+  startBridge,
+  stopBridge,
+  broadcastToMobile,
+  setupMobileChatListener,
+  teardownMobileChatListener,
+  type MobileChatRequest,
+  type MobileBridgeEventType,
+} from "../services/mobileBridge";
 
 export function MainApp() {
   // 启动状态管理
@@ -48,7 +57,13 @@ export function MainApp() {
     deleteModelConfig,
     setActiveModel,
   } = useSettings();
-  const chat = useStreamingChat(settings.permissionMode, settings.agentGatewayUrl);
+  const chat = useStreamingChat(
+    settings.permissionMode,
+    settings.agentGatewayUrl,
+    (eventType: string, sessionId: string, data?: Record<string, unknown>) => {
+      broadcastToMobile(eventType as MobileBridgeEventType, sessionId, data);
+    },
+  );
 
   // 当 gateway URL 变化时，更新所有服务
   useEffect(() => {
@@ -114,6 +129,46 @@ export function MainApp() {
     queueMicrotask(init);
   }, []);
 
+  // P2: 桌面端切换对话时广播给手机端
+  const prevActiveConvIdRef = useRef(chat.activeConversationId);
+  useEffect(() => {
+    const prevId = prevActiveConvIdRef.current;
+    const newId = chat.activeConversationId;
+    prevActiveConvIdRef.current = newId;
+    if (prevId && newId && prevId !== newId) {
+      const conv = chat.conversations.find(c => c.id === newId);
+      broadcastToMobile("session-changed", newId, {
+        title: conv?.title || "",
+        cwd: conv?.cwd || "",
+      });
+      logger.info(`广播会话切换: ${prevId} → ${newId}`);
+    }
+  }, [chat.activeConversationId, chat.conversations]);
+
+  // P2: 手机端切换对话时桌面端同步
+  const conversationsRef2 = useRef(chat.conversations);
+  conversationsRef2.current = chat.conversations;
+  const switchConvRef = useRef(chat.switchConversation);
+  switchConvRef.current = chat.switchConversation;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<{ sessionId: string; title: string }>("mobile-sync-session", (event) => {
+        const { sessionId, title } = event.payload;
+        logger.info(`手机端请求切换对话: ${sessionId} (${title})`);
+        const conv = conversationsRef2.current.find(c => c.id === sessionId);
+        if (conv) {
+          switchConvRef.current(sessionId);
+        } else {
+          logger.warn(`对话 ${sessionId} 不存在，无法切换`);
+        }
+      }).then(fn => { unlisten = fn; });
+    });
+    return () => { unlisten?.(); };
+  }, []);
+
   // 后端连接就绪后加载历史会话（仅执行一次）
   const sessionsLoadedRef = useRef(false);
   useEffect(() => {
@@ -155,6 +210,61 @@ export function MainApp() {
 
     return () => {
       unlisten?.();
+    };
+  }, []);
+
+  // Mobile Bridge: 启动服务 + 监听手机端消息
+  const handleMobileChatRequestRef = useRef<(req: MobileChatRequest) => void>(() => {});
+  handleMobileChatRequestRef.current = (req: MobileChatRequest) => {
+    const conv = conversationsRef.current.find(c => c.id === req.sessionId);
+    const cwd = req.cwd || conv?.cwd;
+    logger.info(`收到手机端消息: ${req.message.slice(0, 30)}...`);
+
+    if (!conv) {
+      chat.newConversation("chat", req.title || req.message.slice(0, 30), cwd);
+    } else if (chat.activeConversationId !== req.sessionId) {
+      chat.switchConversation(req.sessionId);
+    }
+
+    setTimeout(() => {
+      chat.sendMessage(
+        req.message,
+        true,
+        {
+          id: req.modelId,
+          name: req.model || req.modelId,
+          model: req.model || req.modelId,
+          endpoint: req.endpoint,
+          apiKey: req.apiKey,
+        },
+        cwd,
+        req.regenerate,
+      );
+    }, 300);
+  };
+
+  const conversationsRef = useRef(chat.conversations);
+  conversationsRef.current = chat.conversations;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const port = settings.mobileBridgePort || 9876;
+    logger.info(`正在启动 Mobile Bridge (端口 ${port})...`);
+    startBridge(port).then((state) => {
+      logger.success(`Mobile Bridge 已启动 (端口 ${state.port})`);
+    }).catch((err) => {
+      // 端口可能已被占用（StrictMode 重挂载或前次未清理），尝试启动
+      if (String(err).includes("bind") || String(err).includes("占用")) {
+        logger.info(`Mobile Bridge 可能已在运行 (端口 ${port})`);
+      } else {
+        logger.warn(`Mobile Bridge 启动失败: ${err}`);
+      }
+    });
+    setupMobileChatListener((req) => {
+      handleMobileChatRequestRef.current(req);
+    });
+    return () => {
+      teardownMobileChatListener();
     };
   }, []);
 

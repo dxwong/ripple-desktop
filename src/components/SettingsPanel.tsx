@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   X, Key, Globe, Cpu, Eye, EyeOff, Check, RefreshCw,
-  Server, Palette, Trash2, Plus, Edit3, Save, Loader2,
+  Server, Palette, Trash2, Plus, Edit3, Save, Loader2, Smartphone,
 } from "lucide-react";
 import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider, PermissionMode } from "../types";
 import { PERMISSION_MODES } from "../types";
@@ -458,6 +458,40 @@ function SettingsPanel({
                     />
                     <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1.5">
                       设置 ripple-agent 后端服务器地址，默认 http://localhost:3002
+                    </p>
+                  </section>
+
+                  <hr className="border-border dark:border-border-dark" />
+
+                  {/* Mobile Bridge 端口 */}
+                  <section>
+                    <label className="flex items-center gap-1.5 text-sm font-medium mb-2 text-content-secondary dark:text-content-secondary-dark">
+                      <Smartphone size={15} />
+                      Mobile Bridge 端口
+                    </label>
+                    <input
+                      type="number"
+                      value={settings.mobileBridgePort || 9876}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (!isNaN(v) && v >= 1 && v <= 65535) {
+                          onUpdate({ mobileBridgePort: v });
+                        }
+                      }}
+                      min={1}
+                      max={65535}
+                      placeholder="9876"
+                      className="w-full px-3.5 py-2 text-sm rounded-xl
+                                 bg-black/[0.03] dark:bg-white/[0.05]
+                                 border border-border dark:border-border-dark
+                                 text-content dark:text-content-dark
+                                 placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
+                                 focus:outline-none focus:border-accent/40 focus:bg-transparent
+                                 transition-all duration-150"
+                    />
+                    <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1.5">
+                      桌面端内嵌 HTTP 服务端口，手机端通过此端口连接桌面端进行交互。
+                      修改后需重启应用生效。手机端访问地址示例：<code className="bg-black/[0.04] dark:bg-white/[0.06] px-1 py-0.5 rounded text-[11px]">http://192.168.1.x:{settings.mobileBridgePort || 9876}</code>
                     </p>
                   </section>
 

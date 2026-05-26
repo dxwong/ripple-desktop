@@ -87,7 +87,11 @@ async function* simulateStreamResponse(userMessage: string, mode: ChatMode): Asy
   }
 }
 
-export function useStreamingChat(permissionMode: PermissionMode = "confirm", agentGatewayUrl: string = "http://localhost:3002") {
+export function useStreamingChat(
+  permissionMode: PermissionMode = "confirm",
+  agentGatewayUrl: string = "http://localhost:3002",
+  onStreamEvent?: (eventType: string, sessionId: string, data?: Record<string, unknown>) => void,
+) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -576,12 +580,15 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 onText: (text) => {
                   hasContent = true;
                   appendToConversation(targetConvId, text);
+                  onStreamEvent?.("text", targetConvId, { text });
                 },
                 onThinking: (text) => {
                   appendThinkingToConversation(targetConvId, text);
+                  onStreamEvent?.("thinking", targetConvId, { text });
                 },
                 onToolStart: (toolCallId, toolName) => {
                   flog.debug('STREAMING', `工具开始执行`, { toolCallId, toolName });
+                  onStreamEvent?.("tool-start", targetConvId, { toolCallId, toolName });
                   if (activeConversationIdRef.current !== targetConvId) return;
                   // 将工具调用状态推进到执行中（后续 onToolEnd 变为 success/error）
                   setConversations((prev) => {
@@ -603,6 +610,7 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
+                  onStreamEvent?.("tool-end", targetConvId, { toolCallId, toolName, result: result.output || "", error: result.error });
                   if (activeConversationIdRef.current !== targetConvId) return;
                   setConversations((prev) => {
                     const convId = targetConvId;
@@ -632,6 +640,11 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 },
                 onToolRequest: (data) => {
                   flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });
+                  onStreamEvent?.("tool-request", targetConvId, {
+                    toolCallId: data.toolCallId,
+                    toolName: data.toolName,
+                    args: data.args,
+                  });
                   setPendingToolRequests((prev) => [...prev, data]);
                   const pendingToolCall: ToolCallResult = {
                     toolCallId: data.toolCallId,
@@ -667,15 +680,22 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 // Agent 生命周期事件（日志级别，用于追踪）
                 onAgentStart: () => {
                   flog.debug('STREAMING', 'Agent 开始处理');
+                  onStreamEvent?.("agent-start", targetConvId);
                 },
                 onTurnStart: () => {
                   flog.debug('STREAMING', '新轮次开始');
+                  onStreamEvent?.("turn-start", targetConvId);
                 },
                 onTurnEnd: (data) => {
-                  flog.debug('STREAMING', `轮次结束`, { 
-                    hasToolResults: data.hasToolResults, 
-                    hasError: data.hasError, 
-                    errorMessage: data.errorMessage 
+                  flog.debug('STREAMING', `轮次结束`, {
+                    hasToolResults: data.hasToolResults,
+                    hasError: data.hasError,
+                    errorMessage: data.errorMessage
+                  });
+                  onStreamEvent?.("turn-end", targetConvId, {
+                    hasToolResults: data.hasToolResults,
+                    hasError: data.hasError,
+                    errorMessage: data.errorMessage,
                   });
                   
                   // 如果有错误，显示到对话中
@@ -695,18 +715,22 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 },
                 onMessageStart: (role) => {
                   flog.debug('STREAMING', `消息开始`, { role });
+                  onStreamEvent?.("message-start", targetConvId, { role });
                 },
                 onMessageEnd: (role) => {
                   flog.debug('STREAMING', `消息结束`, { role });
+                  onStreamEvent?.("message-end", targetConvId, { role });
                 },
                 onToolUpdate: (toolCallId, toolName) => {
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
+                  onStreamEvent?.("tool-update", targetConvId, { toolCallId, toolName });
                 },
                 onUsage: (usage) => {
                   flog.debug('STREAMING', `收到 usage 事件`, {
                     targetConvId,
                     usage,
                   });
+                  onStreamEvent?.("usage", targetConvId, usage);
                   // 按对话累积 token、费用和缓存
                   setConversationUsageMap((prev) => {
                     const existing = prev[targetConvId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
@@ -731,10 +755,12 @@ export function useStreamingChat(permissionMode: PermissionMode = "confirm", age
                 },
                 onDone: () => {
                   flog.info('STREAMING', 'SSE 流正常结束');
+                  onStreamEvent?.("done", targetConvId);
                   resolve();
                 },
                 onError: (error, errorDetails) => {
                   flog.error('STREAMING', `SSE 流错误`, { error, errorDetails });
+                  onStreamEvent?.("error", targetConvId, { error, details: errorDetails });
                   
                   // 构建完整的错误信息
                   let fullErrorMessage = error;

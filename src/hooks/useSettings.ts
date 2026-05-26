@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   darkMode: false,
   permissionMode: "confirm",
   agentGatewayUrl: "http://localhost:3002",
+  mobileBridgePort: 9876,
 };
 
 /** 设置存储键名 */
