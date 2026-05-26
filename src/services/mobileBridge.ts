@@ -35,7 +35,9 @@ export type MobileBridgeEventType =
   | "done"
   | "error"
   | "user-message"
-  | "session-changed";
+  | "session-changed"
+  | "conversations-changed"
+  | "file-tree-changed";
 
 export interface MobileBridgeEvent {
   type: MobileBridgeEventType;

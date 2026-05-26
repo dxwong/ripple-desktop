@@ -12,11 +12,16 @@ use tauri::{AppHandle, Emitter};
 const DEFAULT_PORT: u16 = 9876;
 const AGENT_URL: &str = "http://127.0.0.1:3002";
 const READ_TIMEOUT_SECS: u64 = 30;
+// 空闲超时（心跳计数）：手机端发消息后等待回复，超过此阈值认为连接已死
+// 每个心跳间隔 1 秒，故 RESPONSE_IDLE_MAX = 60 即 60 秒无事件则断开
+const RESPONSE_IDLE_MAX: u32 = 60;    // handle_chat_stream: 60秒无转发事件则断开
+const SUBSCRIBE_IDLE_MAX: u32 = 120;  // handle_bridge_subscribe: 120秒无任何事件则断开
 
 // ── SSE 客户端连接 ──────────────────────────────────────────
 
 struct SseClient {
     sender: Sender<String>,
+    #[allow(dead_code)]
     id: u64, // 唯一标识，用于日志追踪
 }
 
@@ -237,6 +242,9 @@ fn handle_connection(
     sse_clients: Arc<Mutex<Vec<SseClient>>>,
     app_handle: AppHandle,
 ) {
+    // 缩短的 idle timeout 会快速检测手机端断开（60秒内判定），
+    // 替代 TCP keepalive（Windows 兼容性问题）
+    
     let request = match parse_http_request(&mut stream) {
         Some(req) => req,
         None => {
@@ -289,6 +297,24 @@ fn handle_connection(
         // ── 代理：删除会话 ──
         ("DELETE", path) if path.starts_with("/api/sessions/") => {
             match proxy_to_agent("DELETE", path, &request.query, &request.body, None) {
+                Ok((status, body, _)) => {
+                    write_http_response(&mut stream, status, "application/json", &body);
+                }
+                Err(e) => {
+                    write_http_response(&mut stream, 500, "application/json", &format!(r#"{{"error":"{}"}}"#, e));
+                }
+            }
+        }
+
+        // ── 代理：创建/更新会话（手机端新建对话时调用 saveSession）──
+        ("POST", path) if path.starts_with("/api/sessions/") => {
+            match proxy_to_agent(
+                "POST",
+                path,
+                &request.query,
+                &request.body,
+                Some("application/json"),
+            ) {
                 Ok((status, body, _)) => {
                     write_http_response(&mut stream, status, "application/json", &body);
                 }
@@ -363,6 +389,74 @@ fn handle_connection(
                 "application/json",
                 r#"{"status":"ok"}"#,
             );
+        }
+
+        // ── 手机端新建普通对话 ──
+        ("POST", "/api/bridge/new-conversation") => {
+            let body: Value = match serde_json::from_str(&request.body) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_http_response(&mut stream, 400, "application/json", &format!(r#"{{"error":"{}"}}"#, e));
+                    return;
+                }
+            };
+            let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("chat");
+            let cwd = body.get("cwd").and_then(|v| v.as_str());
+            let _ = app_handle.emit(
+                "mobile-new-conversation",
+                serde_json::json!({
+                    "title": title,
+                    "mode": mode,
+                    "cwd": cwd,
+                }),
+            );
+            println!("[MobileBridge] 手机端请求新建对话: title={} mode={} cwd={:?}", title, mode, cwd);
+            write_http_response(&mut stream, 200, "application/json", r#"{"status":"ok"}"#);
+        }
+
+        // ── 手机端新建项目对话 ──
+        ("POST", "/api/bridge/new-project-conversation") => {
+            let body: Value = match serde_json::from_str(&request.body) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_http_response(&mut stream, 400, "application/json", &format!(r#"{{"error":"{}"}}"#, e));
+                    return;
+                }
+            };
+            let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("新项目");
+            let directory = body.get("directory").and_then(|v| v.as_str()).unwrap_or("");
+            let _ = app_handle.emit(
+                "mobile-new-project-conversation",
+                serde_json::json!({
+                    "name": name,
+                    "directory": directory,
+                }),
+            );
+            println!("[MobileBridge] 手机端请求新建项目对话: name={} directory={}", name, directory);
+            write_http_response(&mut stream, 200, "application/json", r#"{"status":"ok"}"#);
+        }
+
+        // ── 手机端重命名对话 ──
+        ("POST", "/api/bridge/rename-conversation") => {
+            let body: Value = match serde_json::from_str(&request.body) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_http_response(&mut stream, 400, "application/json", &format!(r#"{{"error":"{}"}}"#, e));
+                    return;
+                }
+            };
+            let session_id = body.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+            let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let _ = app_handle.emit(
+                "mobile-rename-conversation",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "title": title,
+                }),
+            );
+            println!("[MobileBridge] 手机端请求重命名对话: sessionId={} title={}", session_id, title);
+            write_http_response(&mut stream, 200, "application/json", r#"{"status":"ok"}"#);
         }
 
         // ── 聊天 SSE 流（手机端发消息入口）──
@@ -513,8 +607,8 @@ fn handle_chat_stream(
         }
 
         error_count += 1;
-        if error_count > 300 {
-            // 5分钟无真实事件，断开（心跳不计）
+        if error_count > RESPONSE_IDLE_MAX {
+            // 60秒无真实事件，断开
             break;
         }
     }
@@ -607,8 +701,8 @@ fn handle_bridge_subscribe(
         }
 
         error_count += 1;
-        if error_count > 600 {
-            // 10分钟无真实事件，断开（心跳不计）
+        if error_count > SUBSCRIBE_IDLE_MAX {
+            // 120秒无真实事件，断开（心跳不计）
             break;
         }
     }

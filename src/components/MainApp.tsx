@@ -79,6 +79,12 @@ export function MainApp() {
     (message: string) => {
       debugLog(`[StreamChat] ${message}`);
     },
+    // 对话列表变更时通知手机端刷新
+    () => {
+      const convId = chat.activeConversationId;
+      broadcastToMobile("conversations-changed", convId || "", { refresh: true });
+      debugLog(`广播对话列表变更通知: convId=${convId}`);
+    },
   );
 
   // 当 gateway URL 变化时，更新所有服务
@@ -183,6 +189,40 @@ export function MainApp() {
       }).then(fn => { unlisten = fn; });
     });
     return () => { unlisten?.(); };
+  }, []);
+
+  // 手机端新建/重命名对话
+  const newConvRef = useRef(chat.newConversation);
+  newConvRef.current = chat.newConversation;
+  const renameConvRef = useRef(chat.renameConversation);
+  renameConvRef.current = chat.renameConversation;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const unlisteners: (() => void)[] = [];
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      // 新建普通对话
+      listen<{ title?: string; mode?: string; cwd?: string }>("mobile-new-conversation", (event) => {
+        const { title, mode, cwd } = event.payload;
+        logger.info(`手机端请求新建对话: title=${title} mode=${mode}`);
+        newConvRef.current(mode as any || "chat", title || undefined, cwd || undefined);
+      }).then(fn => unlisteners.push(fn));
+
+      // 新建项目对话
+      listen<{ name: string; directory: string }>("mobile-new-project-conversation", (event) => {
+        const { name, directory } = event.payload;
+        logger.info(`手机端请求新建项目对话: name=${name} directory=${directory}`);
+        newConvRef.current("chat", name, directory);
+      }).then(fn => unlisteners.push(fn));
+
+      // 重命名对话
+      listen<{ sessionId: string; title: string }>("mobile-rename-conversation", (event) => {
+        const { sessionId, title } = event.payload;
+        logger.info(`手机端请求重命名对话: sessionId=${sessionId} title=${title}`);
+        renameConvRef.current(sessionId, title);
+      }).then(fn => unlisteners.push(fn));
+    });
+    return () => { unlisteners.forEach(fn => fn()); };
   }, []);
 
   // 后端连接就绪后加载历史会话（仅执行一次）

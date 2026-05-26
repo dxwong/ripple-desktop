@@ -92,6 +92,7 @@ export function useStreamingChat(
   agentGatewayUrl: string = "http://localhost:3002",
   onStreamEvent?: (eventType: string, sessionId: string, data?: Record<string, unknown>) => void,
   onLog?: (message: string) => void,  // 可选：回调日志到调用方（用于磁盘日志）
+  onConversationsChanged?: () => void, // 可选：对话列表变更时通知对方刷新
 ) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
@@ -681,9 +682,10 @@ export function useStreamingChat(
                       return { ...conv, messages: msgs, updatedAt: Date.now() };
                     });
                   });
-                  // 文件修改工具执行完成后，通知 FileTree 刷新
+                  // 文件修改工具执行完成后，通知 FileTree 刷新，并广播到手机端
                   if (effectiveCwd && ['write_file', 'create_dir', 'remove', 'shell'].includes(toolName)) {
                     window.dispatchEvent(new CustomEvent('file-tree-refresh', { detail: { cwd: effectiveCwd } }));
+                    onStreamEvent?.("file-tree-changed", effectiveCwd, { cwd: effectiveCwd });
                   }
                 },
                 onToolRequest: (data) => {
@@ -916,8 +918,9 @@ export function useStreamingChat(
     setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
     setActiveConversationId(newConv.id);
     saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
+    onConversationsChanged?.();
     return newConv;
-  }, []);
+  }, [onConversationsChanged]);
 
   // ===== 使用外部 ID 确保对话存在（手机端同步用） =====
   const ensureConversation = useCallback((
@@ -949,8 +952,9 @@ export function useStreamingChat(
     setLoadedMessageIds((prev) => new Set([...prev, id]));
     setActiveConversationId(id);
     saveSession(id, { title: newConv.title, cwd }).catch(() => {});
+    onConversationsChanged?.();
     return newConv;
-  }, []);
+  }, [onConversationsChanged]);
 
   // ===== 切换对话 =====
   const switchConversation = useCallback((id: string) => {
@@ -1020,8 +1024,9 @@ export function useStreamingChat(
       deleteSession(id).catch((err) => {
         flog.warn('STREAMING', `后端删除失败`, { id, error: err instanceof Error ? err.message : String(err) });
       });
+      onConversationsChanged?.();
     },
-    [activeConversationId, conversations]
+    [activeConversationId, conversations, onConversationsChanged]
   );
 
   // ===== 确认或拒绝工具执行 =====
@@ -1178,21 +1183,9 @@ export function useStreamingChat(
           mergedCount: arr.length,
         });
         return arr;
-      });
-  }, []);
-
-  // ===== 定期刷新会话列表（每30秒从后端同步新增会话，与手机端行为一致） =====
-  useEffect(() => {
-    if (!backendConnected) return;
-    flog.info('STREAMING', '启动会话列表定期刷新（30秒间隔）');
-    const interval = setInterval(() => {
-      loadSessionsFromBackend();
-    }, 30000);
-    return () => {
-      clearInterval(interval);
-      flog.debug('STREAMING', '停止会话列表定期刷新');
-    };
-  }, [backendConnected, loadSessionsFromBackend]);
+    });
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
 
   // ===== 回滚到指定消息的快照 =====
   const rollbackToSnapshot = useCallback(
@@ -1265,7 +1258,8 @@ export function useStreamingChat(
       prev.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c))
     );
     saveSession(id, { title }).catch(() => {});
-  }, []);
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
 
   // ===== 拷贝对话（完整物理复制） =====
   const copyConversation = useCallback(async (id: string, customTitle?: string) => {
@@ -1310,7 +1304,8 @@ export function useStreamingChat(
       mode: newConv.mode,
       cwd: newConv.cwd || '(none)',
     });
-  }, []);
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
 
   // ===== 清空所有项目对话（有 cwd 的对话） =====
   const clearAllProjectConversations = useCallback(() => {
@@ -1335,7 +1330,8 @@ export function useStreamingChat(
       });
     }
     flog.info('STREAMING', `清空项目对话`, { count: ids.length, ids });
-  }, [activeConversationId]);
+    onConversationsChanged?.();
+  }, [activeConversationId, onConversationsChanged]);
 
   return {
     conversations,
