@@ -161,7 +161,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
       </div>
 
       {/* 消息主体 */}
-      <div className={`flex-1 min-w-0 overflow-x-hidden ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
+      <div className={`flex-1 min-w-0 ${isUser ? "max-w-[78%]" : "max-w-full"}`}>
         {/* AI 消息头部 */}
         {!isUser && (
           <div className="flex items-center gap-2 mb-1.5 px-1">
@@ -268,7 +268,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
 
         {/* 操作按钮（非流式时在内容下方右侧显示） */}
         {!isUser && !isStreaming && (
-          <div className="flex flex-col items-end gap-1 mt-2">
+          <div className="flex flex-row items-center gap-1 mt-2">
             {/* 重新生成按钮 */}
             {onRegenerate && (
               <button

@@ -491,7 +491,8 @@ export function useStreamingChat(
       let snapshotId: string | undefined;
       // 先把消息加上，让用户立刻看到（snapshotId 后面再补）
       addMessage("user", content);
-      addMessage("assistant", "");
+      // 空的 assistant 消息不再预先创建，由 appendToConversation 在收到内容时自动创建
+      // 这样可以避免发送时同时显示空气泡和 TypingIndicator 的双气泡问题
 
       if (effectiveCwd) {
         try {
