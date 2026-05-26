@@ -198,6 +198,8 @@ export function MainApp() {
   ensureConvRef.current = chat.ensureConversation;
   const renameConvRef = useRef(chat.renameConversation);
   renameConvRef.current = chat.renameConversation;
+  const deleteConvRef = useRef(chat.deleteConversation);
+  deleteConvRef.current = chat.deleteConversation;
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -228,6 +230,13 @@ export function MainApp() {
         const { sessionId, title } = event.payload;
         logger.info(`手机端请求重命名对话: sessionId=${sessionId} title=${title}`);
         renameConvRef.current(sessionId, title);
+      }).then(fn => unlisteners.push(fn));
+
+      // 删除对话（手机端通过 Bridge DELETE 代理删除后，Rust 通知桌面端）
+      listen<{ sessionId: string }>("mobile-delete-conversation", (event) => {
+        const { sessionId } = event.payload;
+        logger.info(`手机端请求删除对话: sessionId=${sessionId}`);
+        deleteConvRef.current(sessionId);
       }).then(fn => unlisteners.push(fn));
     });
     return () => { unlisteners.forEach(fn => fn()); };

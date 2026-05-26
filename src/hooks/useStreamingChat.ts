@@ -1253,11 +1253,12 @@ export function useStreamingChat(
   );
 
   // ===== 重命名对话 =====
-  const renameConversation = useCallback((id: string, title: string) => {
+  const renameConversation = useCallback(async (id: string, title: string) => {
     setConversations((prev) =>
       prev.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c))
     );
-    saveSession(id, { title }).catch(() => {});
+    // 先等 saveSession 完成再广播，确保手机端拉取时后端已更新
+    await saveSession(id, { title }).catch(() => {});
     onConversationsChanged?.();
     onStreamEvent?.("session-renamed", id, { title });
   }, [onConversationsChanged, onStreamEvent]);

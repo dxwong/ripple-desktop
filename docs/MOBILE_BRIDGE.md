@@ -348,3 +348,70 @@ handleMobileChatRequestRef.current = (req: MobileChatRequest) => {
   if (!conv) {
     chat.ensureConversation(req.sessionId, req.title || req.message.slice(0, 30), cwd);
   } else if (chat.activeConversationId !== req.sessionId) {
+    chat.switchConversation(req.sessionId);
+  }
+
+  setTimeout(() => {
+    handleSendMessageRef.current(req.message, req.regenerate, { fromMobile: true });
+  }, 300);
+};
+```
+
+---
+
+## 7. 事件驱动刷新机制
+
+手机端对话列表不再使用定时轮询，改为桌面端事件驱动刷新。
+
+### 7.1 广播事件类型
+
+| 事件类型 | 触发时机 | 发送方 |
+|---------|----------|--------|
+| `conversations-changed` | 桌面端新建/删除/重命名对话时 | `useStreamingChat.ts` → `onConversationsChanged` → `MainApp.tsx` |
+| `session-renamed` | 桌面端重命名对话时（双通道保障） | `useStreamingChat.ts` → `onStreamEvent` → `MainApp.tsx` |
+| `file-tree-changed` | AI 工具执行 write_file/create_dir/remove/shell 后 | `useStreamingChat.ts` → `onStreamEvent` → `MainApp.tsx` |
+
+### 7.2 事件流向
+
+```
+桌面端 新建/删除/重命名对话
+  → onConversationsChanged?.()
+    → broadcastToMobile("conversations-changed", convId)
+      → Bridge SSE → 手机端 handleBridgeEvent
+        → loadSessionList() ✅
+
+桌面端 重命名对话（额外通道）
+  → onStreamEvent?.("session-renamed", id, { title })
+    → broadcastToMobile("session-renamed", id, { title })
+      → Bridge SSE → 手机端 handleBridgeEvent
+        → loadSessionList() ✅
+
+桌面端 AI 执行文件操作
+  → onStreamEvent?.("file-tree-changed", cwd, { cwd })
+    → broadcastToMobile("file-tree-changed", cwd, { cwd })
+      → Bridge SSE → 手机端 handleBridgeEvent
+        → loadSessionList() ✅
+```
+
+### 7.3 新建对话双向同步
+
+手机端点"新对话"时调用 Bridge API，桌面端使用 `ensureConversation` 保持 ID 一致：
+
+```
+手机端 handleNewChat()
+  → 生成本地 ID mobile-xxx
+  → setCurrentChatId(mobile-xxx)
+  → POST /api/bridge/new-conversation { sessionId, title, mode }
+    → Rust 透传 sessionId → Tauri 事件 mobile-new-conversation
+      → MainApp.tsx: ensureConversation(sessionId, title, cwd)
+        → 桌面端同步创建相同 ID 的对话
+        → onConversationsChanged?.() → 广播到手机端刷新 ✅
+```
+
+### 7.4 保留的刷新时机
+
+- 初始加载（挂载时执行一次）
+- 每次 SSE `done` 事件后（500ms）
+- App 从后台恢复时（visibilitychange）
+- 用户主动点击刷新按钮
+- 发消息/删除/保存/重命名后的即时刷新（setTimeout 0.5-1s）

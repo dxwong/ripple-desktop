@@ -294,11 +294,26 @@ fn handle_connection(
             }
         }
 
-        // ── 代理：删除会话 ──
+        // ── 代理：删除会话（同时通知桌面端前端刷新） ──
         ("DELETE", path) if path.starts_with("/api/sessions/") => {
             match proxy_to_agent("DELETE", path, &request.query, &request.body, None) {
                 Ok((status, body, _)) => {
                     write_http_response(&mut stream, status, "application/json", &body);
+                    // 删除成功后通知桌面端前端刷新对话列表
+                    if status == 200 {
+                        let session_id = path.strip_prefix("/api/sessions/").unwrap_or("").to_string();
+                        // 去掉末尾的查询参数（如果有）和空白
+                        let session_id = session_id.split('?').next().unwrap_or("").trim().to_string();
+                        if !session_id.is_empty() {
+                            println!("[MobileBridge] 手机端删除对话成功，通知桌面端: sessionId={}", session_id);
+                            let _ = app_handle.emit(
+                                "mobile-delete-conversation",
+                                serde_json::json!({
+                                    "sessionId": session_id
+                                }),
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     write_http_response(&mut stream, 500, "application/json", &format!(r#"{{"error":"{}"}}"#, e));
