@@ -400,18 +400,20 @@ fn handle_connection(
                     return;
                 }
             };
+            let session_id = body.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
             let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("chat");
             let cwd = body.get("cwd").and_then(|v| v.as_str());
             let _ = app_handle.emit(
                 "mobile-new-conversation",
                 serde_json::json!({
+                    "sessionId": session_id,
                     "title": title,
                     "mode": mode,
                     "cwd": cwd,
                 }),
             );
-            println!("[MobileBridge] 手机端请求新建对话: title={} mode={} cwd={:?}", title, mode, cwd);
+            println!("[MobileBridge] 手机端请求新建对话: sessionId={} title={} mode={} cwd={:?}", session_id, title, mode, cwd);
             write_http_response(&mut stream, 200, "application/json", r#"{"status":"ok"}"#);
         }
 

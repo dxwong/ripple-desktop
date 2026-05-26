@@ -194,6 +194,8 @@ export function MainApp() {
   // 手机端新建/重命名对话
   const newConvRef = useRef(chat.newConversation);
   newConvRef.current = chat.newConversation;
+  const ensureConvRef = useRef(chat.ensureConversation);
+  ensureConvRef.current = chat.ensureConversation;
   const renameConvRef = useRef(chat.renameConversation);
   renameConvRef.current = chat.renameConversation;
 
@@ -202,10 +204,16 @@ export function MainApp() {
     const unlisteners: (() => void)[] = [];
     import("@tauri-apps/api/event").then(({ listen }) => {
       // 新建普通对话
-      listen<{ title?: string; mode?: string; cwd?: string }>("mobile-new-conversation", (event) => {
-        const { title, mode, cwd } = event.payload;
-        logger.info(`手机端请求新建对话: title=${title} mode=${mode}`);
-        newConvRef.current(mode as any || "chat", title || undefined, cwd || undefined);
+      listen<{ sessionId?: string; title?: string; mode?: string; cwd?: string }>("mobile-new-conversation", (event) => {
+        const { sessionId, title, mode, cwd } = event.payload;
+        logger.info(`手机端请求新建对话: sessionId=${sessionId} title=${title} mode=${mode}`);
+        if (sessionId) {
+          // 有 sessionId 时使用 ensureConversation，保持与手机端 ID 一致
+          ensureConvRef.current(sessionId, title || undefined, cwd || undefined);
+        } else {
+          // 向后兼容：无 sessionId 时走原来的新建逻辑
+          newConvRef.current(mode as any || "chat", title || undefined, cwd || undefined);
+        }
       }).then(fn => unlisteners.push(fn));
 
       // 新建项目对话

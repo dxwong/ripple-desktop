@@ -1259,7 +1259,8 @@ export function useStreamingChat(
     );
     saveSession(id, { title }).catch(() => {});
     onConversationsChanged?.();
-  }, [onConversationsChanged]);
+    onStreamEvent?.("session-renamed", id, { title });
+  }, [onConversationsChanged, onStreamEvent]);
 
   // ===== 拷贝对话（完整物理复制） =====
   const copyConversation = useCallback(async (id: string, customTitle?: string) => {
