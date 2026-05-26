@@ -28,6 +28,17 @@ import {
   type MobileBridgeEventType,
 } from "../services/mobileBridge";
 
+// 调试日志：写入磁盘文件 + 控制台，用于排查 Bridge 链路问题
+const debugLog = async (msg: string) => {
+  console.log(`[DEBUG] ${msg}`);
+  try {
+    if (isTauri()) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("write_debug_log", { message: `[MainApp] ${msg}` });
+    }
+  } catch { /* 调试日志失败不影响主流程 */ }
+};
+
 export function MainApp() {
   // 启动状态管理
   const [startupState, setStartupState] = useState<"loading" | "error" | "ready">("loading");
@@ -36,6 +47,8 @@ export function MainApp() {
   
   const [showSettings, setShowSettings] = useState(false);
   const [backendModels, setBackendModels] = useState<{ id: string; name: string }[]>([]);
+  // 手机端连接状态
+  const [mobileConnected, setMobileConnected] = useState(false);
   // 文件树状态 - 默认折叠，从持久化存储读取上次状态
   const [fileTreeExpanded, setFileTreeExpanded] = useState(() => 
     syncStore.getItem("file-tree-expanded", false)
@@ -62,6 +75,9 @@ export function MainApp() {
     settings.agentGatewayUrl,
     (eventType: string, sessionId: string, data?: Record<string, unknown>) => {
       broadcastToMobile(eventType as MobileBridgeEventType, sessionId, data);
+    },
+    (message: string) => {
+      debugLog(`[StreamChat] ${message}`);
     },
   );
 
@@ -213,38 +229,44 @@ export function MainApp() {
     };
   }, []);
 
-  // Mobile Bridge: 启动服务 + 监听手机端消息
+  const conversationsRef = useRef(chat.conversations);
+  conversationsRef.current = chat.conversations;
+
+  // 手机端消息去重：防止 StrictMode 或重复 listener 导致同一条消息被处理两次
+  // key = sessionId + message 的简单哈希，1秒窗口内重复则跳过
+  const lastMobileRequestRef = useRef<{ key: string; time: number }>({ key: "", time: 0 });
+
+  // Mobile Bridge: 接收手机端消息（统一通过 handleSendMessage 出口）
   const handleMobileChatRequestRef = useRef<(req: MobileChatRequest) => void>(() => {});
   handleMobileChatRequestRef.current = (req: MobileChatRequest) => {
-    const conv = conversationsRef.current.find(c => c.id === req.sessionId);
-    const cwd = req.cwd || conv?.cwd;
-    logger.info(`收到手机端消息: ${req.message.slice(0, 30)}...`);
+    // 去重检查：同一 sessionId + message 在 1 秒内重复收到则跳过
+    const dedupKey = `${req.sessionId}:${req.message}`;
+    const now = Date.now();
+    if (dedupKey === lastMobileRequestRef.current.key && now - lastMobileRequestRef.current.time < 1000) {
+      logger.warn(`跳过重复的手机端消息: ${req.message.slice(0, 30)}`);
+      debugLog(`跳过重复的手机端消息: key=${dedupKey}`);
+      return;
+    }
+    lastMobileRequestRef.current = { key: dedupKey, time: now };
 
+    const conv = conversationsRef.current.find(c => c.id === req.sessionId);
+    // 手机端只传内容，不传配置。cwd 只用桌面端已有的（避免手机端覆盖桌面端工作目录）
+    const cwd = conv?.cwd;
+    logger.info(`收到手机端消息: ${req.message.slice(0, 30)}...`);
+    debugLog(`收到手机端消息: sessionId=${req.sessionId} message="${req.message.slice(0, 50)}" cwd=${cwd || '(none)'} title=${req.title || '(none)'}`);
+
+    // 确保对话存在并激活（使用手机端的 sessionId）
     if (!conv) {
-      chat.newConversation("chat", req.title || req.message.slice(0, 30), cwd);
+      chat.ensureConversation(req.sessionId, req.title || req.message.slice(0, 30), cwd);
     } else if (chat.activeConversationId !== req.sessionId) {
       chat.switchConversation(req.sessionId);
     }
 
+    // 延时等待 React 状态更新，然后通过统一出口发送
     setTimeout(() => {
-      chat.sendMessage(
-        req.message,
-        true,
-        {
-          id: req.modelId,
-          name: req.model || req.modelId,
-          model: req.model || req.modelId,
-          endpoint: req.endpoint,
-          apiKey: req.apiKey,
-        },
-        cwd,
-        req.regenerate,
-      );
+      handleSendMessageRef.current(req.message, req.regenerate, { fromMobile: true });
     }, 300);
   };
-
-  const conversationsRef = useRef(chat.conversations);
-  conversationsRef.current = chat.conversations;
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -263,8 +285,37 @@ export function MainApp() {
     setupMobileChatListener((req) => {
       handleMobileChatRequestRef.current(req);
     });
+
+    // 监听手机端连接状态变化
+    const setupStatusListener = async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<{ connected: boolean; count: number }>(
+        "mobile-connection-change",
+        (event) => {
+          const { connected, count } = event.payload;
+          logger.info(`手机端连接状态变更: ${connected ? '已连接' : '已断开'} (在线数: ${count})`);
+          if (connected) {
+            setMobileConnected(true);
+            if (count === 1) {
+              logger.success("手机端已连接");
+            }
+          } else {
+            setMobileConnected(false);
+            logger.info("手机端已断开");
+          }
+        }
+      );
+      return unlisten;
+    };
+
+    let statusUnlisten: (() => void) | null = null;
+    setupStatusListener().then((unlisten) => {
+      statusUnlisten = unlisten;
+    });
+
     return () => {
       teardownMobileChatListener();
+      statusUnlisten?.();
     };
   }, []);
 
@@ -272,11 +323,22 @@ export function MainApp() {
   const currentCwd = chat.activeConversation?.cwd;
   const currentMode = chat.activeConversation?.mode || "chat";
 
-  // 发送消息
-  const handleSendMessage = useCallback(async (content: string, regenerate?: boolean) => {
-    console.log('MainApp: 发送消息', { content, backendConnected: chat.backendConnected, activeConfigId: activeConfig?.id, regenerate });
-    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd, regenerate);
-  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd]);
+  // 发送消息（桌面端和手机端的统一出口）
+  const handleSendMessage = useCallback(async (content: string, regenerate?: boolean, options?: { fromMobile?: boolean }) => {
+    const convId = chat.activeConversationId;
+    if (!options?.fromMobile) {
+      broadcastToMobile("user-message", convId, { text: content });
+    }
+    // 手机端消息必须传递 targetConvId，确保 SSE 流输出追加到正确的会话
+    // 避免依赖 activeConversationIdRef 在 setTimeout(300ms) 后的闭包值
+    const targetConvId = options?.fromMobile ? convId : undefined;
+    debugLog(`handleSendMessage: content="${content.slice(0, 30)}" convId=${convId} fromMobile=${!!options?.fromMobile} targetConvId=${targetConvId} activeConfig=${activeConfig?.id || '(none)'} backendConnected=${chat.backendConnected}`);
+    logger.info(`发送消息: "${content.slice(0, 30)}" convId=${convId} fromMobile=${!!options?.fromMobile} targetConvId=${targetConvId}`);
+    await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd, regenerate, targetConvId);
+  }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd, chat.activeConversationId]);
+
+  const handleSendMessageRef = useRef(handleSendMessage);
+  handleSendMessageRef.current = handleSendMessage;
 
   // 切换对话
   const handleSwitchConversation = useCallback((id: string) => {
@@ -371,6 +433,7 @@ export function MainApp() {
             cwd={currentCwd}
             backendConnected={chat.backendConnected}
             backendModels={backendModels}
+            mobileConnected={mobileConnected}
             pendingToolRequests={chat.pendingToolRequests}
             onToolConfirm={chat.handleToolConfirm}
             permissionMode={settings.permissionMode}

@@ -91,6 +91,7 @@ export function useStreamingChat(
   permissionMode: PermissionMode = "confirm",
   agentGatewayUrl: string = "http://localhost:3002",
   onStreamEvent?: (eventType: string, sessionId: string, data?: Record<string, unknown>) => void,
+  onLog?: (message: string) => void,  // 可选：回调日志到调用方（用于磁盘日志）
 ) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
@@ -109,6 +110,10 @@ export function useStreamingChat(
   const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
+  // 同步 processing 锁：防止 React 异步状态更新导致的竞态条件
+  // isProcessing 是 state，setIsProcessing 后需要 re-render 才生效
+  // isProcessingRef 是同步的，赋值后立即生效，用于并发防护
+  const isProcessingRef = useRef(false);
   const { loadItem } = useStore();
   const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
 
@@ -335,7 +340,12 @@ export function useStreamingChat(
 
   // ===== 追加到指定对话 =====
   const appendToConversation = useCallback((convId: string, chunk: string) => {
-    if (!convId || !chunk) return;
+    if (!convId || !chunk) {
+      flog.warn('STREAMING', 'appendToConversation 被调用但参数无效', { convId, chunk: chunk?.slice(0, 20) });
+      return;
+    }
+    flog.debug('STREAMING', `appendToConversation 调用`, { convId, chunkLength: chunk.length, chunkPreview: chunk.slice(0, 30) });
+    
     setConversations((prev) => {
       const next = prev.map((conv) => {
         if (conv.id !== convId) return conv;
@@ -354,6 +364,19 @@ export function useStreamingChat(
         }
         return { ...conv, messages: msgs, updatedAt: Date.now() };
       });
+      
+      // 验证更新是否成功
+      const updatedConv = next.find(c => c.id === convId);
+      if (updatedConv) {
+        flog.debug('STREAMING', `appendToConversation 成功`, { 
+          convId, 
+          totalMessages: updatedConv.messages.length,
+          lastMessageContent: updatedConv.messages[updatedConv.messages.length - 1]?.content.slice(0, 50)
+        });
+      } else {
+        flog.warn('STREAMING', `appendToConversation 失败：会话不存在`, { convId, totalConvs: next.length });
+      }
+      
       return next;
     });
   }, []);
@@ -385,8 +408,9 @@ export function useStreamingChat(
 
   // ===== 添加用户/助手消息 =====
   const addMessage = useCallback(
-    (role: "user" | "assistant", content: string, extraFields?: { snapshotId?: string }) => {
-      const convId = activeConversationIdRef.current;
+    (role: "user" | "assistant", content: string, extraFields?: { snapshotId?: string }, targetConvId?: string) => {
+      // 使用传入的目标会话ID，或回退到当前活跃会话
+      const convId = targetConvId || activeConversationIdRef.current;
       if (!convId) {
         flog.warn('STREAMING', 'addMessage 失败：无活跃会话');
         return null;
@@ -397,6 +421,7 @@ export function useStreamingChat(
         contentLength: content.length,
         contentPreview: content.slice(0, 50),
         extraFields,
+        source: targetConvId ? 'mobile' : 'desktop',
       });
       const msg: Message = { id: genId(), role, content, thinking: "", timestamp: Date.now(), ...extraFields };
       let newTitle: string | undefined;
@@ -437,7 +462,8 @@ export function useStreamingChat(
       useBackend = false,
       modelConfig?: ModelConfig,
       cwd?: string,
-      regenerate?: boolean
+      regenerate?: boolean,
+      targetConvId?: string  // 新增：可选的目标会话ID，用于手机端消息路由
     ) => {
       flog.info('STREAMING', `发送消息请求`, {
         contentLength: content.length,
@@ -448,33 +474,40 @@ export function useStreamingChat(
         modelConfigId: modelConfig?.id || '(none)',
         cwd: cwd || '(none)',
         regenerate,
+        targetConvId: targetConvId || '(none)',
       });
+      onLog?.(`sendMessage: content="${content.slice(0, 30)}" useBackend=${useBackend} backendConnected=${backendConnected} hasConfig=${!!modelConfig} configId=${modelConfig?.id || '(none)'} cwd=${cwd || '(none)'} targetConvId=${targetConvId || '(none)'}`);
 
-      if (isProcessing) {
+      // 同步锁：防止 isProcessing 异步状态更新导致的竞态条件
+      // isProcessingRef 赋值后立即生效，比 state 更可靠
+      if (isProcessingRef.current || isProcessing) {
         flog.warn('STREAMING', '发送跳过：正在处理中');
         return;
       }
+      isProcessingRef.current = true;
       setIsProcessing(true);
 
       const abort = new AbortController();
       abortRef.current = abort;
 
-      const targetConvId = activeConversationIdRef.current;
-      if (!targetConvId) {
+      // 使用传入的目标会话ID，或回退到当前活跃会话
+      const convId = targetConvId || activeConversationIdRef.current;
+      if (!convId) {
         flog.error('STREAMING', '发送失败：没有活跃对话');
         setIsProcessing(false);
         return;
       }
+      flog.info('STREAMING', `使用会话ID`, { convId, source: targetConvId ? 'mobile' : 'desktop' });
 
-      const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === targetConvId)?.cwd;
+      const effectiveCwd = cwd || conversationsRef.current.find((c) => c.id === convId)?.cwd;
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
-      flog.info('STREAMING', `发送消息确认`, { targetConvId, effectiveCwd: effectiveCwd || '(none)', requestId });
+      flog.info('STREAMING', `发送消息确认`, { convId, effectiveCwd: effectiveCwd || '(none)', requestId });
 
       // 重新生成时：移除最后一个完整轮次（AI 回复 + 触发它的用户消息）
       // 用户消息将由 handleRegenerate 重新提交，确保不在上下文中重复出现
       if (regenerate) {
         setConversations(prev => prev.map(conv => {
-          if (conv.id !== targetConvId) return conv;
+          if (conv.id !== convId) return conv;
           let msgs = conv.messages;
           // 移除最后一条 AI 回复
           if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
@@ -490,7 +523,7 @@ export function useStreamingChat(
 
       let snapshotId: string | undefined;
       // 先把消息加上，让用户立刻看到（snapshotId 后面再补）
-      addMessage("user", content);
+      addMessage("user", content, undefined, convId);
       // 空的 assistant 消息不再预先创建，由 appendToConversation 在收到内容时自动创建
       // 这样可以避免发送时同时显示空气泡和 TypingIndicator 的双气泡问题
 
@@ -509,7 +542,7 @@ export function useStreamingChat(
             // 补上 snapshotId（更新用户消息）
             setConversations((prev) =>
               prev.map((conv) => {
-                if (conv.id !== targetConvId) return conv;
+                if (conv.id !== convId) return conv;
                 const msgs = [...conv.messages];
                 // 从后往前找最后一条用户消息补 snapshotId
                 for (let i = msgs.length - 1; i >= 0; i--) {
@@ -548,12 +581,26 @@ export function useStreamingChat(
 
           await new Promise<void>((resolve, reject) => {
             let hasContent = false;
+            let resolved = false;  // 防止多次 resolve
+            const safeResolve = () => { if (!resolved) { resolved = true; resolve(); } };
 
-            const currentConv = conversationsRef.current.find((c) => c.id === targetConvId);
+            // 超时保护：防止 SSEClient 内部 AbortError 静默处理导致 Promise 永远不 resolve
+            const promiseTimeout = setTimeout(() => {
+              if (!resolved) {
+                resolved = true;
+                flog.warn('STREAMING', `发送消息超时（60秒），强制恢复`, { convId });
+                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise 60秒未resolve，强制恢复`);
+                // 如果 SSE 还在连接中，尝试停止
+                sseClientRef.current?.abort();
+                resolve();
+              }
+            }, 60_000);
+
+            const currentConv = conversationsRef.current.find((c) => c.id === convId);
             
             const backendParams = {
               message: content,
-              sessionId: targetConvId,
+              sessionId: convId,
               regenerate: regenerate || false,
               modelId: modelConfig?.model || "deepseek-v4-flash",
               model: modelConfig?.model,
@@ -572,28 +619,29 @@ export function useStreamingChat(
               model: backendParams.model || '(none)',
               endpoint: backendParams.endpoint || '(none)',
               hasApiKey: !!backendParams.apiKey,
+              apiKeyLength: backendParams.apiKey?.length || 0,
               messagePreview: content.slice(0, 50),
             });
+            onLog?.(`backendParams: sessionId=${backendParams.sessionId} model=${backendParams.model || '(none)'} endpoint=${backendParams.endpoint || '(none)'} apiKeyLen=${backendParams.apiKey?.length || 0} cwd=${backendParams.cwd || '(none)'}`);
             
             sseClient.connect(
               backendParams,
               {
                 onText: (text) => {
                   hasContent = true;
-                  appendToConversation(targetConvId, text);
-                  onStreamEvent?.("text", targetConvId, { text });
+                  appendToConversation(convId, text);
+                  onStreamEvent?.("text", convId, { text });
                 },
                 onThinking: (text) => {
-                  appendThinkingToConversation(targetConvId, text);
-                  onStreamEvent?.("thinking", targetConvId, { text });
+                  appendThinkingToConversation(convId, text);
+                  onStreamEvent?.("thinking", convId, { text });
                 },
                 onToolStart: (toolCallId, toolName) => {
                   flog.debug('STREAMING', `工具开始执行`, { toolCallId, toolName });
-                  onStreamEvent?.("tool-start", targetConvId, { toolCallId, toolName });
-                  if (activeConversationIdRef.current !== targetConvId) return;
+                  onStreamEvent?.("tool-start", convId, { toolCallId, toolName });
+                  if (activeConversationIdRef.current !== convId) return;
                   // 将工具调用状态推进到执行中（后续 onToolEnd 变为 success/error）
                   setConversations((prev) => {
-                    const convId = targetConvId;
                     return prev.map((conv) => {
                       if (conv.id !== convId) return conv;
                       const msgs = [...conv.messages];
@@ -611,10 +659,9 @@ export function useStreamingChat(
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
-                  onStreamEvent?.("tool-end", targetConvId, { toolCallId, toolName, result: result.output || "", error: result.error });
-                  if (activeConversationIdRef.current !== targetConvId) return;
+                  onStreamEvent?.("tool-end", convId, { toolCallId, toolName, result: result.output || "", error: result.error });
+                  if (activeConversationIdRef.current !== convId) return;
                   setConversations((prev) => {
-                    const convId = targetConvId;
                     return prev.map((conv) => {
                       if (conv.id !== convId) return conv;
                       const msgs = [...conv.messages];
@@ -641,7 +688,7 @@ export function useStreamingChat(
                 },
                 onToolRequest: (data) => {
                   flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });
-                  onStreamEvent?.("tool-request", targetConvId, {
+                  onStreamEvent?.("tool-request", convId, {
                     toolCallId: data.toolCallId,
                     toolName: data.toolName,
                     args: data.args,
@@ -655,7 +702,7 @@ export function useStreamingChat(
                   };
                   setConversations((prev) =>
                     prev.map((conv): Conversation => {
-                      if (conv.id !== targetConvId) return conv;
+                      if (conv.id !== convId) return conv;
                       const msgs: Message[] = [...conv.messages];
                       const last = msgs[msgs.length - 1];
                       if (!last || last.role !== "assistant") {
@@ -681,11 +728,11 @@ export function useStreamingChat(
                 // Agent 生命周期事件（日志级别，用于追踪）
                 onAgentStart: () => {
                   flog.debug('STREAMING', 'Agent 开始处理');
-                  onStreamEvent?.("agent-start", targetConvId);
+                  onStreamEvent?.("agent-start", convId);
                 },
                 onTurnStart: () => {
                   flog.debug('STREAMING', '新轮次开始');
-                  onStreamEvent?.("turn-start", targetConvId);
+                  onStreamEvent?.("turn-start", convId);
                 },
                 onTurnEnd: (data) => {
                   flog.debug('STREAMING', `轮次结束`, {
@@ -693,7 +740,7 @@ export function useStreamingChat(
                     hasError: data.hasError,
                     errorMessage: data.errorMessage
                   });
-                  onStreamEvent?.("turn-end", targetConvId, {
+                  onStreamEvent?.("turn-end", convId, {
                     hasToolResults: data.hasToolResults,
                     hasError: data.hasError,
                     errorMessage: data.errorMessage,
@@ -711,30 +758,30 @@ export function useStreamingChat(
                     flog.error('STREAMING', `收到错误消息，显示到对话中`, { errorMessage: errorContent });
                     const sanitized = errorContent.replace(/<[^>]+>/g, '');
                     const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ ${sanitized}\n__RIPPLE_ERROR_END__\n\n`;
-                    appendToConversation(targetConvId, errorMsg);
+                    appendToConversation(convId, errorMsg);
                   }
                 },
                 onMessageStart: (role) => {
                   flog.debug('STREAMING', `消息开始`, { role });
-                  onStreamEvent?.("message-start", targetConvId, { role });
+                  onStreamEvent?.("message-start", convId, { role });
                 },
                 onMessageEnd: (role) => {
                   flog.debug('STREAMING', `消息结束`, { role });
-                  onStreamEvent?.("message-end", targetConvId, { role });
+                  onStreamEvent?.("message-end", convId, { role });
                 },
                 onToolUpdate: (toolCallId, toolName) => {
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
-                  onStreamEvent?.("tool-update", targetConvId, { toolCallId, toolName });
+                  onStreamEvent?.("tool-update", convId, { toolCallId, toolName });
                 },
                 onUsage: (usage) => {
                   flog.debug('STREAMING', `收到 usage 事件`, {
-                    targetConvId,
+                    convId,
                     usage,
                   });
-                  onStreamEvent?.("usage", targetConvId, usage);
+                  onStreamEvent?.("usage", convId, usage);
                   // 按对话累积 token、费用和缓存
                   setConversationUsageMap((prev) => {
-                    const existing = prev[targetConvId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
+                    const existing = prev[convId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
                     const newUsage = {
                       input: existing.input + (usage.input ?? 0),
                       output: existing.output + (usage.output ?? 0),
@@ -750,18 +797,22 @@ export function useStreamingChat(
                     });
                     return {
                       ...prev,
-                      [targetConvId]: newUsage,
+                      [convId]: newUsage,
                     };
                   });
                 },
                 onDone: () => {
+                  clearTimeout(promiseTimeout);
                   flog.info('STREAMING', 'SSE 流正常结束');
-                  onStreamEvent?.("done", targetConvId);
-                  resolve();
+                  onStreamEvent?.("done", convId);
+                  safeResolve();
                 },
                 onError: (error, errorDetails) => {
+                  clearTimeout(promiseTimeout);
+                  console.error(`[StreamError] error="${error}" convId=${convId}`, errorDetails);
                   flog.error('STREAMING', `SSE 流错误`, { error, errorDetails });
-                  onStreamEvent?.("error", targetConvId, { error, details: errorDetails });
+                  onStreamEvent?.("error", convId, { error, details: errorDetails });
+                  onLog?.(`onError: error="${error}" convId=${convId} hasDetails=${!!errorDetails}`);
                   
                   // 构建完整的错误信息
                   let fullErrorMessage = error;
@@ -783,8 +834,8 @@ export function useStreamingChat(
                   
                   const sanitized = fullErrorMessage.replace(/<[^>]+>/g, '');
                   const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ ${sanitized}\n__RIPPLE_ERROR_END__\n\n`;
-                  appendToConversation(targetConvId, errorMsg);
-                  resolve();
+                  appendToConversation(convId, errorMsg);
+                  safeResolve();
                 },
               }
             );
@@ -799,20 +850,22 @@ export function useStreamingChat(
         for await (const chunk of simulateStreamResponse(content, currentMode)) {
           if (abort.signal.aborted) break;
           assistantContent += chunk;
-          appendToConversation(targetConvId, chunk);
+          appendToConversation(convId, chunk);
         }
         if (!abort.signal.aborted && !assistantContent) {
-          appendToConversation(targetConvId, "（模拟回复为空）");
+          appendToConversation(convId, "（模拟回复为空）");
         }
       } catch (err: any) {
+        console.error(`[StreamError] 外层异常: "${err.message}"`);
         flog.error('STREAMING', `发送消息异常`, { error: err.message });
       } finally {
+        isProcessingRef.current = false;
         setIsProcessing(false);
         abortRef.current = null;
         sseClientRef.current = null;
       }
     },
-    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage]
+    [isProcessing, appendToConversation, appendThinkingToConversation, addMessage, agentGatewayUrl, onStreamEvent, onLog]
   );
 
   // ===== 停止生成 =====
@@ -839,6 +892,7 @@ export function useStreamingChat(
     }
     
     setIsProcessing(false);
+    isProcessingRef.current = false;
   }, [backendConnected, agentGatewayUrl]);
 
   // ===== 新建对话 =====
@@ -862,6 +916,39 @@ export function useStreamingChat(
     setLoadedMessageIds((prev) => new Set([...prev, newConv.id]));
     setActiveConversationId(newConv.id);
     saveSession(newConv.id, { title: newConv.title, cwd }).catch(() => { /* 静默 */ });
+    return newConv;
+  }, []);
+
+  // ===== 使用外部 ID 确保对话存在（手机端同步用） =====
+  const ensureConversation = useCallback((
+    id: string,
+    title?: string,
+    cwd?: string,
+  ) => {
+    const existing = conversationsRef.current.find(c => c.id === id);
+    if (existing) {
+      flog.info('STREAMING', `切换到已有外部对话`, { id, title: existing.title });
+      setActiveConversationId(id);
+      return existing;
+    }
+    const newConv: Conversation = {
+      id,
+      title: title || "手机端对话",
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      mode: "chat",
+      cwd,
+    };
+    flog.info('STREAMING', `创建外部对话`, {
+      id: newConv.id,
+      title: newConv.title,
+      cwd: cwd || '(none)',
+    });
+    setConversations((prev) => [newConv, ...prev]);
+    setLoadedMessageIds((prev) => new Set([...prev, id]));
+    setActiveConversationId(id);
+    saveSession(id, { title: newConv.title, cwd }).catch(() => {});
     return newConv;
   }, []);
 
@@ -1263,6 +1350,7 @@ export function useStreamingChat(
     stopStreaming,
     addMessage,
     newConversation,
+    ensureConversation,
     switchConversation,
     deleteConversation,
     checkBackendConnection,

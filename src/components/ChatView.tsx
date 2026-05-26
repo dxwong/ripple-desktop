@@ -1,5 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from "react";
-import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X } from "lucide-react";
+import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X, Wifi } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
@@ -67,6 +67,8 @@ interface ChatViewProps {
   backendConnected?: boolean;
   /** 后端可用模型列表 */
   backendModels?: { id: string; name: string }[];
+  /** 手机端连接状态 */
+  mobileConnected?: boolean;
   /** 待确认的工具请求 */
   pendingToolRequests?: ToolRequestData[];
   /** 确认/拒绝工具执行 */
@@ -192,6 +194,7 @@ function ChatView({
   cwd,
   backendConnected = false,
   backendModels,
+  mobileConnected = false,
   pendingToolRequests = [],
   onToolConfirm,
   permissionMode = "confirm",
@@ -211,10 +214,10 @@ function ChatView({
   const handleScroll = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    // 正在输出思考内容时，忽略用户上滑操作
+    // 思考期间（content 为空）忽略用户上滑操作
     const lastMsg = messages[messages.length - 1];
-    const isOutputtingThinking = isProcessing && lastMsg?.thinking && !lastMsg?.content;
-    if (isOutputtingThinking) return;
+    const isThinkingPhase = isProcessing && !lastMsg?.content;
+    if (isThinkingPhase) return;
     
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     userScrolledUpRef.current = distance > 80;
@@ -242,10 +245,10 @@ function ChatView({
     prevProcessingRef.current = isProcessing;
 
     const lastMsg = messages[messages.length - 1];
-    const isOutputtingThinking = isProcessing && lastMsg?.thinking && !lastMsg?.content;
+    const isThinkingPhase = isProcessing && !lastMsg?.content;
     
     // 思考期间强制滚动，不受 userScrolledUpRef 影响
-    if (!isOutputtingThinking && userScrolledUpRef.current) return;
+    if (!isThinkingPhase && userScrolledUpRef.current) return;
     
     const scrollToBottom = () => {
       if (messagesContainerRef.current) {
@@ -389,6 +392,15 @@ function ChatView({
               <div className="flex items-center gap-1 text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">
                 <FolderOpen size={12} />
                 <span className="truncate">{cwd}</span>
+              </div>
+            </>
+          )}
+          {mobileConnected && (
+            <>
+              <span className="text-content-tertiary dark:text-content-tertiary-dark text-xs">·</span>
+              <div className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
+                <Wifi size={12} />
+                <span>手机已连接</span>
               </div>
             </>
           )}

@@ -17,6 +17,13 @@ const READ_TIMEOUT_SECS: u64 = 30;
 
 struct SseClient {
     sender: Sender<String>,
+    id: u64, // 唯一标识，用于日志追踪
+}
+
+static NEXT_SSE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_sse_id() -> u64 {
+    NEXT_SSE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 pub struct MobileBridgeState {
@@ -358,8 +365,14 @@ fn handle_connection(
             );
         }
 
-        // ── 聊天 SSE 流 ──
-        ("POST", "/api/chat/stream") => {
+        // ── 聊天 SSE 流（手机端发消息入口）──
+        // 必须同时支持 /api/chat 和 /api/chat/stream 两种路径：
+        //   - /api/chat          ← 共享 SSEClient 的硬编码路径（手机端和桌面端都用这个）
+        //   - /api/chat/stream   ← Bridge 专属路径（架构文档中的规范路径）
+        // ⚠️ Agent Server 也有 POST /api/chat 路由（端口 3002）
+        //    如果 Bridge 不处理此路径，手机端 SSEClient 请求会穿透到 Agent Server
+        //    导致手机直连 Agent、绕过桌面端、桌面端无反应
+        ("POST", "/api/chat") | ("POST", "/api/chat/stream") => {
             handle_chat_stream(&mut stream, &request, &sse_clients, &app_handle);
         }
 
@@ -396,6 +409,18 @@ fn handle_chat_stream(
         }
     };
 
+    // 调试日志：记录手机端请求的关键字段
+    {
+        let debug_info = serde_json::json!({
+            "event": "mobile_chat_request",
+            "sessionId": chat_request.get("sessionId"),
+            "message_length": chat_request.get("message").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0),
+            "has_cwd": chat_request.get("cwd").is_some(),
+            "has_title": chat_request.get("title").is_some(),
+        });
+        println!("[MobileBridge] 收到手机端请求: {}", serde_json::to_string(&debug_info).unwrap_or_default());
+    }
+
     let session_id = chat_request
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -407,13 +432,15 @@ fn handle_chat_stream(
 
     // 注册 SSE 客户端
     let (tx, rx) = mpsc::channel::<String>();
+    let client_id = next_sse_id();
     {
         let mut clients = sse_clients.lock().unwrap();
         clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
-        clients.push(SseClient { sender: tx });
+        clients.push(SseClient { sender: tx, id: client_id });
     }
     println!(
-        "[MobileBridge] SSE 客户端已连接 (session={}), 当前连接数: {}",
+        "[MobileBridge] SSE 客户端已连接 (client_id={}, session={}), 当前连接数: {}",
+        client_id,
         session_id,
         sse_clients.lock().unwrap().len()
     );
@@ -428,20 +455,29 @@ fn handle_chat_stream(
         .to_string(),
     );
 
+    // 通知前端：手机端已连接
+    let client_count = sse_clients.lock().unwrap().len();
+    let _ = app_handle.emit(
+        "mobile-connection-change",
+        serde_json::json!({
+            "connected": true,
+            "count": client_count
+        }),
+    );
+
     // 通过 Tauri 事件通知前端：手机端发来了消息
+    // 只传递必要字段：message、sessionId、cwd、title（手机端只需抛数据，不传递模型配置）
+    let chat_request_payload = serde_json::json!({
+        "message": chat_request.get("message").and_then(|v| v.as_str()).unwrap_or(""),
+        "sessionId": session_id,
+        "cwd": chat_request.get("cwd").and_then(|v| v.as_str()),
+        "title": chat_request.get("title").and_then(|v| v.as_str()),
+        "regenerate": chat_request.get("regenerate").and_then(|v| v.as_bool()).unwrap_or(false),
+    });
+    println!("[MobileBridge] 发射 mobile-chat-request 事件: {}", serde_json::to_string(&chat_request_payload).unwrap_or_default());
     let _ = app_handle.emit(
         "mobile-chat-request",
-        serde_json::json!({
-            "message": chat_request.get("message").and_then(|v| v.as_str()).unwrap_or(""),
-            "sessionId": session_id,
-            "modelId": chat_request.get("modelId").and_then(|v| v.as_str()).unwrap_or("deepseek-v4-flash"),
-            "model": chat_request.get("model").and_then(|v| v.as_str()),
-            "endpoint": chat_request.get("endpoint").and_then(|v| v.as_str()),
-            "apiKey": chat_request.get("apiKey").and_then(|v| v.as_str()),
-            "cwd": chat_request.get("cwd").and_then(|v| v.as_str()),
-            "title": chat_request.get("title").and_then(|v| v.as_str()),
-            "regenerate": chat_request.get("regenerate").and_then(|v| v.as_bool()).unwrap_or(false),
-        }),
+        chat_request_payload,
     );
 
     // 持续读取来自前端的广播事件，推送给手机端
@@ -487,10 +523,21 @@ fn handle_chat_stream(
         let mut clients = sse_clients.lock().unwrap();
         clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
     }
+    let remaining = sse_clients.lock().unwrap().len();
     println!(
-        "[MobileBridge] SSE 客户端已断开 (session={}), 当前连接数: {}",
+        "[MobileBridge] SSE 客户端已断开 (client_id={}, session={}), 当前连接数: {}",
+        client_id,
         session_id,
-        sse_clients.lock().unwrap().len()
+        remaining
+    );
+
+    // 通知前端：手机端已断开（报告当前剩余连接数）
+    let _ = app_handle.emit(
+        "mobile-connection-change",
+        serde_json::json!({
+            "connected": remaining > 0,
+            "count": remaining
+        }),
     );
 }
 
@@ -499,18 +546,20 @@ fn handle_chat_stream(
 fn handle_bridge_subscribe(
     stream: &mut TcpStream,
     sse_clients: &Arc<Mutex<Vec<SseClient>>>,
-    _app_handle: &AppHandle,
+    app_handle: &AppHandle,
 ) {
     write_sse_response(stream);
 
     let (tx, rx) = mpsc::channel::<String>();
+    let client_id = next_sse_id();
     {
         let mut clients = sse_clients.lock().unwrap();
         clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
-        clients.push(SseClient { sender: tx });
+        clients.push(SseClient { sender: tx, id: client_id });
     }
     println!(
-        "[MobileBridge] 被动监听 SSE 已连接，当前连接数: {}",
+        "[MobileBridge] 被动监听 SSE 已连接 (client_id={}), 当前连接数: {}",
+        client_id,
         sse_clients.lock().unwrap().len()
     );
 
@@ -519,6 +568,16 @@ fn handle_bridge_subscribe(
         &serde_json::json!({
             "type": "subscribed"
         }).to_string(),
+    );
+
+    // 通知前端：手机端已通过持久订阅连接
+    let client_count = sse_clients.lock().unwrap().len();
+    let _ = app_handle.emit(
+        "mobile-connection-change",
+        serde_json::json!({
+            "connected": true,
+            "count": client_count
+        }),
     );
 
     let mut error_count = 0u32;
@@ -558,9 +617,20 @@ fn handle_bridge_subscribe(
         let mut clients = sse_clients.lock().unwrap();
         clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
     }
+    let remaining = sse_clients.lock().unwrap().len();
     println!(
-        "[MobileBridge] 被动监听 SSE 已断开，当前连接数: {}",
-        sse_clients.lock().unwrap().len()
+        "[MobileBridge] 被动监听 SSE 已断开 (client_id={}), 当前连接数: {}",
+        client_id,
+        remaining
+    );
+
+    // 通知前端：手机端已断开（报告当前剩余连接数）
+    let _ = app_handle.emit(
+        "mobile-connection-change",
+        serde_json::json!({
+            "connected": remaining > 0,
+            "count": remaining
+        }),
     );
 }
 
@@ -576,6 +646,9 @@ fn broadcast_event(sse_clients: &Arc<Mutex<Vec<SseClient>>>, event_json: &str) -
         if client.sender.send(event_json.to_string()).is_ok() {
             sent += 1;
         }
+    }
+    if sent > 0 {
+        println!("[MobileBridge] 广播事件到 {} 个客户端, 存活: {}", sent, clients.len());
     }
     sent
 }

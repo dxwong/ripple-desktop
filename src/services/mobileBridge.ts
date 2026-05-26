@@ -7,14 +7,15 @@ export interface MobileBridgeState {
 }
 
 export interface MobileChatRequest {
+  /** 消息内容 */
   message: string;
+  /** 会话 ID */
   sessionId: string;
-  modelId: string;
-  model?: string;
-  endpoint?: string;
-  apiKey?: string;
+  /** 工作目录（项目对话用） */
   cwd?: string;
+  /** 会话标题 */
   title?: string;
+  /** 重新生成标志 */
   regenerate?: boolean;
 }
 
@@ -32,7 +33,9 @@ export type MobileBridgeEventType =
   | "message-end"
   | "usage"
   | "done"
-  | "error";
+  | "error"
+  | "user-message"
+  | "session-changed";
 
 export interface MobileBridgeEvent {
   type: MobileBridgeEventType;
@@ -114,10 +117,23 @@ export async function broadcastToMobile(
   }
 }
 
+// 防止 StrictMode 下 async gap 导致重复注册的同步标志
+// 使用计数器而非布尔值：每次 setup +1，每次 teardown -1
+// 只有计数从 0→1 时才真正注册，从 1→0 时才真正注销
+let setupNestCount = 0;
+
 export async function setupMobileChatListener(
   onChatRequest: (req: MobileChatRequest) => void
 ): Promise<void> {
   if (!isTauri()) return;
+
+  // 嵌套计数 +1
+  setupNestCount++;
+  if (setupNestCount > 1) {
+    // StrictMode 双挂载场景：已有活跃监听或在设置中，跳过重复注册
+    flog.info("MOBILE_BRIDGE", "跳过重复注册（setupNestCount > 1）");
+    return;
+  }
 
   chatRequestHandler = onChatRequest;
 
@@ -129,7 +145,9 @@ export async function setupMobileChatListener(
         sessionId: event.payload.sessionId,
         messagePreview: event.payload.message.slice(0, 50),
         cwd: event.payload.cwd || "(none)",
+        title: event.payload.title || "(none)",
       });
+      flog.debug("MOBILE_BRIDGE", "完整请求payload", { payload: event.payload });
       onChatRequest(event.payload);
     }
   );
@@ -152,6 +170,12 @@ export async function setupMobileChatListener(
 }
 
 export function teardownMobileChatListener(): void {
+  setupNestCount = Math.max(0, setupNestCount - 1);
+  if (setupNestCount > 0) {
+    // StrictMode 双挂载场景：还有嵌套层，暂不真正注销
+    flog.info("MOBILE_BRIDGE", "跳过注销（setupNestCount > 0）");
+    return;
+  }
   if (unlistenChatRequest) {
     unlistenChatRequest();
     unlistenChatRequest = null;

@@ -265,6 +265,41 @@ fn find_backend_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Err("未找到后端项目目录，请在设置中配置 backend_dir".to_string())
 }
 
+// ==================== 调试日志（写磁盘，用于排查手机端→Bridge→桌面端链路）====================
+
+/// 追加一行调试日志到磁盘文件
+/// 文件位置: app_data_dir/debug-bridge.log
+#[tauri::command]
+fn write_debug_log(app: AppHandle, message: String) -> Result<(), String> {
+    let app_dir = app.path().app_data_dir().map_err(|e| format!("{e}"))?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| format!("{e}"))?;
+    let log_path = app_dir.join("debug-bridge.log");
+    
+    // 生成时间戳（不用 chrono，避免加依赖）
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // 转为本地时间的简单表示
+    let secs = now as i64;
+    let secs_in_day = secs % 86400;
+    let hours = secs_in_day / 3600;
+    let mins = (secs_in_day % 3600) / 60;
+    let secs_only = secs_in_day % 60;
+    
+    let line = format!("[{:02}:{:02}:{:02}] {}\n", hours, mins, secs_only, message);
+    
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("无法打开日志文件: {e}"))?;
+    file.write_all(line.as_bytes()).map_err(|e| format!("写入日志失败: {e}"))?;
+    
+    Ok(())
+}
+
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -282,6 +317,7 @@ pub fn run() {
             save_config, load_config,
             start_backend, stop_backend,
             start_mobile_bridge, stop_mobile_bridge, broadcast_mobile_event,
+            write_debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");
