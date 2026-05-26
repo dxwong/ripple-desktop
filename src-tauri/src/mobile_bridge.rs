@@ -476,15 +476,13 @@ fn handle_chat_stream(
             }
         }
 
-        // 连接断开检测
         error_count += 1;
         if error_count > 300 {
-            // 5分钟无事件，断开
+            // 5分钟无真实事件，断开（心跳不计）
             break;
         }
     }
 
-    // 注销 SSE 客户端
     {
         let mut clients = sse_clients.lock().unwrap();
         clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
@@ -551,7 +549,7 @@ fn handle_bridge_subscribe(
 
         error_count += 1;
         if error_count > 600 {
-            // 10分钟无事件，断开
+            // 10分钟无真实事件，断开（心跳不计）
             break;
         }
     }
