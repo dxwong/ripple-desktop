@@ -207,13 +207,18 @@ function ChatView({
   const userScrolledUpRef = useRef(false);
   const isEmpty = messages.length === 0;
 
-  // ===== 跟踪用户是否手动上滑（停止自动滚动） =====
+  // ===== 跟踪用户是否手动上滑（停止自动滚动）—— 思考期间忽略 =====
   const handleScroll = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
+    // 正在输出思考内容时，忽略用户上滑操作
+    const lastMsg = messages[messages.length - 1];
+    const isOutputtingThinking = isProcessing && lastMsg?.thinking && !lastMsg?.content;
+    if (isOutputtingThinking) return;
+    
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     userScrolledUpRef.current = distance > 80;
-  }, []);
+  }, [messages, isProcessing]);
 
   // ===== 切换对话时滚动到底部 =====
   const prevConvRef = useRef(conversationId);
@@ -227,9 +232,7 @@ function ChatView({
     return () => clearTimeout(timer);
   }, [conversationId]);
 
-  // ===== 发送或 SSE 输出时滚动到底部（用户上滑时停止） =====
-  const lastMsg = messages[messages.length - 1];
-  const scrollKey = `${messages.length}-${lastMsg?.content?.length || 0}-${lastMsg?.thinking?.length || 0}`;
+  // ===== 发送或 SSE 输出时滚动到底部（思考期间强制滚动，正文支持上滑暂停） =====
   const prevProcessingRef = useRef(false);
   useLayoutEffect(() => {
     // isProcessing false→true（刚发送）时重置用户上滑标记
@@ -238,11 +241,26 @@ function ChatView({
     }
     prevProcessingRef.current = isProcessing;
 
-    if (userScrolledUpRef.current) return;
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    const lastMsg = messages[messages.length - 1];
+    const isOutputtingThinking = isProcessing && lastMsg?.thinking && !lastMsg?.content;
+    
+    // 思考期间强制滚动，不受 userScrolledUpRef 影响
+    if (!isOutputtingThinking && userScrolledUpRef.current) return;
+    
+    const scrollToBottom = () => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    };
+
+    // 处理中时使用 requestAnimationFrame 确保滚动及时
+    if (isProcessing) {
+      const rafId = requestAnimationFrame(scrollToBottom);
+      return () => cancelAnimationFrame(rafId);
+    } else {
+      scrollToBottom();
     }
-  }, [scrollKey, isProcessing]);
+  }, [messages, isProcessing]);
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
   const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
