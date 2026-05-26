@@ -115,6 +115,8 @@ export function useStreamingChat(
   // isProcessing 是 state，setIsProcessing 后需要 re-render 才生效
   // isProcessingRef 是同步的，赋值后立即生效，用于并发防护
   const isProcessingRef = useRef(false);
+  // 正在创建中的对话 ID 集合（防止事件竞态导致 ensureConversation 重复创建）
+  const ensuringIdsRef = useRef<Set<string>>(new Set());
   const { loadItem } = useStore();
   const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
 
@@ -928,12 +930,30 @@ export function useStreamingChat(
     title?: string,
     cwd?: string,
   ) => {
+    // 防重复创建：同一 ID 在短时间内被重复调用时，跳过
+    // 解决手机端新建项目对话后立即发消息导致的时序竞态
+    if (ensuringIdsRef.current.has(id)) {
+      flog.warn('STREAMING', `跳过重复 ensureConversation: id=${id}（正在创建中）`);
+      const existing = conversationsRef.current.find(c => c.id === id);
+      if (existing) {
+        setActiveConversationId(id);
+        return existing;
+      }
+      return undefined;
+    }
+
     const existing = conversationsRef.current.find(c => c.id === id);
     if (existing) {
       flog.info('STREAMING', `切换到已有外部对话`, { id, title: existing.title });
       setActiveConversationId(id);
       return existing;
     }
+    // 标记正在创建，防止并发事件重复创建
+    ensuringIdsRef.current.add(id);
+    // 2 秒后自动清除标记（确保 React 重渲染完成）
+    setTimeout(() => {
+      ensuringIdsRef.current.delete(id);
+    }, 2000);
     const newConv: Conversation = {
       id,
       title: title || "手机端对话",
@@ -1259,9 +1279,10 @@ export function useStreamingChat(
     );
     // 先等 saveSession 完成再广播，确保手机端拉取时后端已更新
     await saveSession(id, { title }).catch(() => {});
-    onConversationsChanged?.();
+    // 注意：不广播 onConversationsChanged，因为 session-renamed 已足够通知手机端更新标题
+    // 避免手机端 loadSessionList() 全量重拉导致该对话排序跑到最前面
     onStreamEvent?.("session-renamed", id, { title });
-  }, [onConversationsChanged, onStreamEvent]);
+  }, [onStreamEvent]);
 
   // ===== 拷贝对话（完整物理复制） =====
   const copyConversation = useCallback(async (id: string, customTitle?: string) => {

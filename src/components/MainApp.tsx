@@ -201,10 +201,24 @@ export function MainApp() {
   const deleteConvRef = useRef(chat.deleteConversation);
   deleteConvRef.current = chat.deleteConversation;
 
+  // 防重复注册守卫：解决 StrictMode 双挂载导致 listener 泄漏/重复的问题
+  const listenersReadyRef = useRef(false);
+  const unlistenFnsRef = useRef<(() => void)[]>([]);
+
   useEffect(() => {
     if (!isTauri()) return;
-    const unlisteners: (() => void)[] = [];
+    // 利用 ref 同步标记防止 StrictMode 下 import() 异步时序导致双注册
+    if (listenersReadyRef.current) return;
+    listenersReadyRef.current = true;
+
+    const localUnlisteners: (() => void)[] = [];
     import("@tauri-apps/api/event").then(({ listen }) => {
+      // 二次检查：防止 StrictMode 卸载后重新挂载时老 promise 仍然注册
+      if (!listenersReadyRef.current) {
+        localUnlisteners.forEach(fn => fn());
+        return;
+      }
+
       // 新建普通对话
       listen<{ sessionId?: string; title?: string; mode?: string; cwd?: string }>("mobile-new-conversation", (event) => {
         const { sessionId, title, mode, cwd } = event.payload;
@@ -216,30 +230,43 @@ export function MainApp() {
           // 向后兼容：无 sessionId 时走原来的新建逻辑
           newConvRef.current(mode as any || "chat", title || undefined, cwd || undefined);
         }
-      }).then(fn => unlisteners.push(fn));
+      }).then(fn => localUnlisteners.push(fn));
 
-      // 新建项目对话
-      listen<{ name: string; directory: string }>("mobile-new-project-conversation", (event) => {
-        const { name, directory } = event.payload;
-        logger.info(`手机端请求新建项目对话: name=${name} directory=${directory}`);
-        newConvRef.current("chat", name, directory);
-      }).then(fn => unlisteners.push(fn));
+      // 新建项目对话（手机端带上 sessionId 时，保持两端 ID 一致）
+      listen<{ sessionId?: string; name: string; directory: string }>("mobile-new-project-conversation", (event) => {
+        const { sessionId, name, directory } = event.payload;
+        logger.info(`手机端请求新建项目对话: name=${name} directory=${directory} sessionId=${sessionId || '(无)'}`);
+        if (sessionId) {
+          // 有 sessionId 时使用 ensureConversation，保持与手机端 ID 一致
+          ensureConvRef.current(sessionId, name, directory);
+        } else {
+          // 向后兼容
+          newConvRef.current("chat", name, directory);
+        }
+      }).then(fn => localUnlisteners.push(fn));
 
       // 重命名对话
       listen<{ sessionId: string; title: string }>("mobile-rename-conversation", (event) => {
         const { sessionId, title } = event.payload;
         logger.info(`手机端请求重命名对话: sessionId=${sessionId} title=${title}`);
         renameConvRef.current(sessionId, title);
-      }).then(fn => unlisteners.push(fn));
+      }).then(fn => localUnlisteners.push(fn));
 
       // 删除对话（手机端通过 Bridge DELETE 代理删除后，Rust 通知桌面端）
       listen<{ sessionId: string }>("mobile-delete-conversation", (event) => {
         const { sessionId } = event.payload;
         logger.info(`手机端请求删除对话: sessionId=${sessionId}`);
         deleteConvRef.current(sessionId);
-      }).then(fn => unlisteners.push(fn));
+      }).then(fn => localUnlisteners.push(fn));
+
+      unlistenFnsRef.current = localUnlisteners;
     });
-    return () => { unlisteners.forEach(fn => fn()); };
+
+    return () => {
+      listenersReadyRef.current = false;
+      unlistenFnsRef.current.forEach(fn => fn());
+      unlistenFnsRef.current = [];
+    };
   }, []);
 
   // 后端连接就绪后加载历史会话（仅执行一次）
@@ -292,6 +319,10 @@ export function MainApp() {
   // 手机端消息去重：防止 StrictMode 或重复 listener 导致同一条消息被处理两次
   // key = sessionId + message 的简单哈希，1秒窗口内重复则跳过
   const lastMobileRequestRef = useRef<{ key: string; time: number }>({ key: "", time: 0 });
+  // Bridge 初始化 StrictMode 守卫（与 startedRef 相同模式：cleanup 不重置）
+  const bridgeStartedRef = useRef(false);
+  // 手机端连接状态监听器的清理函数（用 ref 持有，避免 async timing 问题）
+  const statusUnlistenRef = useRef<(() => void) | null>(null);
 
   // Mobile Bridge: 接收手机端消息（统一通过 handleSendMessage 出口）
   const handleMobileChatRequestRef = useRef<(req: MobileChatRequest) => void>(() => {});
@@ -327,6 +358,10 @@ export function MainApp() {
 
   useEffect(() => {
     if (!isTauri()) return;
+    // StrictMode 守卫：防止 effect 跑两次导致 async listener 注册时序问题
+    if (bridgeStartedRef.current) return;
+    bridgeStartedRef.current = true;
+
     const port = settings.mobileBridgePort || 9876;
     logger.info(`正在启动 Mobile Bridge (端口 ${port})...`);
     startBridge(port).then((state) => {
@@ -343,7 +378,7 @@ export function MainApp() {
       handleMobileChatRequestRef.current(req);
     });
 
-    // 监听手机端连接状态变化
+    // 监听手机端连接状态变化（用 ref 持有清理函数，避免 StrictMode async 时序误删）
     const setupStatusListener = async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const unlisten = await listen<{ connected: boolean; count: number }>(
@@ -362,17 +397,19 @@ export function MainApp() {
           }
         }
       );
-      return unlisten;
+      statusUnlistenRef.current = unlisten;
     };
-
-    let statusUnlisten: (() => void) | null = null;
-    setupStatusListener().then((unlisten) => {
-      statusUnlisten = unlisten;
-    });
+    setupStatusListener();
 
     return () => {
       teardownMobileChatListener();
-      statusUnlisten?.();
+      // 清理手机端连接状态监听器
+      // 注意：bridgeStartedRef 不重置 → StrictMode 第二次 mount 时跳过
+      // 避免 async setupListener 在 cleanup 后才完成的时序问题
+      if (statusUnlistenRef.current) {
+        statusUnlistenRef.current();
+        statusUnlistenRef.current = null;
+      }
     };
   }, []);
 

@@ -441,16 +441,18 @@ fn handle_connection(
                     return;
                 }
             };
+            let session_id = body.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
             let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("新项目");
             let directory = body.get("directory").and_then(|v| v.as_str()).unwrap_or("");
             let _ = app_handle.emit(
                 "mobile-new-project-conversation",
                 serde_json::json!({
+                    "sessionId": session_id,
                     "name": name,
                     "directory": directory,
                 }),
             );
-            println!("[MobileBridge] 手机端请求新建项目对话: name={} directory={}", name, directory);
+            println!("[MobileBridge] 手机端请求新建项目对话: sessionId={} name={} directory={}", session_id, name, directory);
             write_http_response(&mut stream, 200, "application/json", r#"{"status":"ok"}"#);
         }
 
@@ -630,11 +632,17 @@ fn handle_chat_stream(
         }
     }
 
-    {
+    // 计算剩余存活连接数（排除当前正在断开的客户端自身）
+    let remaining = {
         let mut clients = sse_clients.lock().unwrap();
-        clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
-    }
-    let remaining = sse_clients.lock().unwrap().len();
+        // 清理其他已断开的客户端（它们的 rx 已 drop，send 会失败）
+        clients.retain(|c| c.id == client_id || c.sender.send("__ping__".to_string()).is_ok());
+        // 统计除自己外的存活客户端数
+        let other_count = clients.iter().filter(|c| c.id != client_id).count();
+        // 从列表中移除自己（当前线程的 rx 仍在作用域内，ping 检查会误判为存活）
+        clients.retain(|c| c.id != client_id);
+        other_count
+    };
     println!(
         "[MobileBridge] SSE 客户端已断开 (client_id={}, session={}), 当前连接数: {}",
         client_id,
@@ -724,11 +732,17 @@ fn handle_bridge_subscribe(
         }
     }
 
-    {
+    // 计算剩余存活连接数（排除当前正在断开的客户端自身）
+    let remaining = {
         let mut clients = sse_clients.lock().unwrap();
-        clients.retain(|c| !c.sender.send("__ping__".to_string()).is_err());
-    }
-    let remaining = sse_clients.lock().unwrap().len();
+        // 清理其他已断开的客户端（它们的 rx 已 drop，send 会失败）
+        clients.retain(|c| c.id == client_id || c.sender.send("__ping__".to_string()).is_ok());
+        // 统计除自己外的存活客户端数
+        let other_count = clients.iter().filter(|c| c.id != client_id).count();
+        // 从列表中移除自己（当前线程的 rx 仍在作用域内，ping 检查会误判为存活）
+        clients.retain(|c| c.id != client_id);
+        other_count
+    };
     println!(
         "[MobileBridge] 被动监听 SSE 已断开 (client_id={}), 当前连接数: {}",
         client_id,
