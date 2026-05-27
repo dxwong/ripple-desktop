@@ -90,12 +90,12 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
     setDisplayContent(message.content);
   }, [message.content]);
 
-  // 流式思考时自动展开
-  useEffect(() => {
-    if (isStreaming && hasThinking && !thinkingExpanded) {
-      setThinkingExpanded(true);
-    }
-  }, [isStreaming, hasThinking, message.thinking]);
+  // 不再在流式输出时自动展开思考过程，保持默认折叠
+	// useEffect(() => {
+	// 	if (isStreaming && hasThinking && !thinkingExpanded) {
+	// 		setThinkingExpanded(true);
+	// 	}
+	// }, [isStreaming, hasThinking, message.thinking]);
 
   // 复制消息内容
   const handleCopy = useCallback(async () => {

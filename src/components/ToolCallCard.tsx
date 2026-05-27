@@ -89,10 +89,10 @@ function truncatePath(path: string, maxLen = 60): string {
 }
 
 /** 预览内容（过长省略） */
-function truncateOutput(output: string, maxLen = 300): string {
-  if (!output) return '';
-  if (output.length <= maxLen) return output;
-  return output.slice(0, maxLen) + '\n... (已截断)';
+function truncateOutput(output: string, maxLen = 150): string {
+	if (!output) return '';
+	if (output.length <= maxLen) return output;
+	return output.slice(0, maxLen) + '\n... (已截断，点击展开查看完整内容)';
 }
 
 interface ToolCallCardProps {
@@ -102,7 +102,8 @@ interface ToolCallCardProps {
 }
 
 export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCardProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+	// 始终默认折叠，除非明确指定展开
+	const [expanded, setExpanded] = useState(false);
 
   const Icon = TOOL_ICONS[toolCall.toolName] || FileText;
   const toolLabel = TOOL_NAMES[toolCall.toolName] || toolCall.toolName;
