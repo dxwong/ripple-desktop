@@ -11,9 +11,9 @@ const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36
 const MESSAGES_PAGE_SIZE = 5;
 const BATCH_UPDATE_INTERVAL = 50;
 
-const DEFAULT_TIMEOUT_MS = 60_000;
-const CODE_TASK_TIMEOUT_MS = 180_000;
-const TEST_TASK_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
+const CODE_TASK_TIMEOUT_MS = 600_000;
+const TEST_TASK_TIMEOUT_MS = 300_000;
 
 function detectTaskTimeout(content: string): number {
   const lowerContent = content.toLowerCase();
@@ -641,8 +641,13 @@ export function useStreamingChat(
             const promiseTimeout = setTimeout(() => {
               if (!resolved) {
                 resolved = true;
-                flog.warn('STREAMING', `发送消息超时（${taskTimeout / 1000}秒），强制恢复`, { convId, timeout: taskTimeout });
-                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise ${taskTimeout / 1000}秒未resolve，强制恢复`);
+                flog.warn('STREAMING', `发送消息超时（${taskTimeout / 1000}秒），任务可能还在后台执行中`, { convId, timeout: taskTimeout });
+                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise ${taskTimeout / 1000}秒未resolve，正在检查状态...`);
+                
+                // 添加用户友好的提示信息
+                const timeoutMsg = `\n\n__RIPPLE_INFO__\n⏱️ 任务执行时间较长，已等待 ${taskTimeout / 1000}秒。\n\n提示：\n- Agent可能正在执行复杂操作（如多步骤工具调用、文件处理等）\n- 请耐心等待，任务可能仍在后台进行\n- 如果长时间无响应，可以稍后重试\n__RIPPLE_INFO_END__\n\n`;
+                appendToConversation(convId, timeoutMsg);
+                
                 // 如果 SSE 还在连接中，尝试停止
                 sseClientRef.current?.abort();
                 resolve();
