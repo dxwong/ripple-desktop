@@ -5,7 +5,7 @@ import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSessio
 import { useStore, syncStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
-import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd } from "../services/shellEventBus";
+import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd, terminalHistory } from "../services/shellEventBus";
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
 const MESSAGES_PAGE_SIZE = 5;
@@ -664,15 +664,15 @@ export function useStreamingChat(
                 onToolEnd: (toolCallId, toolName, result) => {
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
                   onStreamEvent?.("tool-end", convId, { toolCallId, toolName, result: result.output || "", error: result.error });
-                  // shell 命令结束 → 发射到终端事件总线（在所有会话中都捕获）
-                  if (toolName === "shell") {
-                    emitShellCommandEnd({
-                      toolCallId,
-                      stdout: result.output || "",
-                      stderr: result.error || "",
-                      error: result.error,
-                    });
-                  }
+                  // 所有工具结束 → 发射到终端事件总线（在所有会话中都捕获）并更新历史记录
+                  emitShellCommandEnd({
+                    toolCallId,
+                    toolName,
+                    stdout: result.output || "",
+                    stderr: result.error || "",
+                    error: result.error,
+                  });
+                  terminalHistory.endEntry(toolCallId, result.output || "", result.error || "", result.error);
                   if (activeConversationIdRef.current !== convId) return;
                   setConversations((prev) => {
                     return prev.map((conv) => {
@@ -707,15 +707,26 @@ export function useStreamingChat(
                     toolName: data.toolName,
                     args: data.args,
                   });
-                  // shell 命令 → 发射到终端事件总线
-                  if (data.toolName === "shell") {
-                    emitShellCommandStart({
-                      toolCallId: data.toolCallId,
-                      command: (data.args.command as string) || "",
-                      cwd: effectiveCwd,
-                      timestamp: Date.now(),
-                    });
-                  }
+                  // 所有工具 → 发射到终端事件总线并记录历史
+                  const argsString = JSON.stringify(data.args);
+                  const command = data.toolName === "shell" 
+                    ? (data.args.command as string) || "" 
+                    : `${data.toolName} ${argsString}`;
+                  emitShellCommandStart({
+                    toolCallId: data.toolCallId,
+                    toolName: data.toolName,
+                    command,
+                    cwd: effectiveCwd,
+                    timestamp: Date.now(),
+                  });
+                  // 同时记录到终端历史（确保切换选项卡不丢失）
+                  terminalHistory.addEntry({
+                    toolCallId: data.toolCallId,
+                    toolName: data.toolName,
+                    command,
+                    cwd: effectiveCwd,
+                    startTime: Date.now(),
+                  });
                   setPendingToolRequests((prev) => [...prev, data]);
                   const pendingToolCall: ToolCallResult = {
                     toolCallId: data.toolCallId,
@@ -795,9 +806,10 @@ export function useStreamingChat(
                 onToolUpdate: (toolCallId, toolName, output) => {
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName, hasOutput: !!output });
                   onStreamEvent?.("tool-update", convId, { toolCallId, toolName, output });
-                  // shell 命令增量输出 → 终端事件总线
-                  if (toolName === "shell" && output) {
+                  // 工具增量输出 → 终端事件总线和历史记录
+                  if (output) {
                     emitShellCommandOutput({ toolCallId, output });
+                    terminalHistory.updateOutput(toolCallId, output);
                   }
                 },
                 onUsage: (usage) => {

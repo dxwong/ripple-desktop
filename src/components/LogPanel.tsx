@@ -160,70 +160,64 @@ function LogPanel() {
   return (
     <div className="border-t border-border dark:border-border-dark">
       {/* ===== 折叠状态栏 ===== */}
-      <button
-        onClick={handleToggle}
-        className="w-full flex items-center gap-2 px-3 py-1.5
-                   hover:bg-black/[0.02] dark:hover:bg-white/[0.02]
-                   transition-colors text-xs"
-      >
-        <Terminal size={13} className="text-content-tertiary dark:text-content-tertiary-dark shrink-0" />
-        <span className="font-medium text-content-secondary dark:text-content-secondary-dark">
-          日志
-        </span>
-        {/* 终端未读小红点 */}
-        {terminalUnread > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 text-[10px] font-medium">
-            终端 {terminalUnread}
-          </span>
-        )}
-        {/* 日志未读数 */}
-        {unread > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full bg-accent/20 text-accent text-[10px] font-medium">
-            {unread}
-          </span>
-        )}
-        {/* 最后一条日志预览（折叠态） */}
-        {logs.length > 0 && !expanded && activeTab === "log" && (
-          <span className="flex-1 text-left truncate text-content-tertiary dark:text-content-tertiary-dark">
-            {logs[logs.length - 1].message}
-          </span>
-        )}
-        <div className="flex-1" />
-        {expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-      </button>
+      {!expanded && (
+        <button
+          onClick={handleToggle}
+          className="w-full flex items-center justify-between px-3 py-1.5
+                     hover:bg-black/[0.02] dark:hover:bg-white/[0.02]
+                     transition-colors text-xs"
+        >
+          <div className="flex items-center gap-2">
+            <Terminal size={13} className="text-content-tertiary dark:text-content-tertiary-dark shrink-0" />
+            <span className="font-medium text-content-tertiary dark:text-content-tertiary-dark">
+              日志与终端
+            </span>
+          </div>
+          <ChevronUp size={13} className="text-content-tertiary dark:text-content-tertiary-dark" />
+        </button>
+      )}
 
       {/* ===== 展开面板 ===== */}
       {expanded && (
         <div>
           {/* ---- 选项卡 ---- */}
-          <div className="flex items-center border-b border-border dark:border-border-dark px-2">
+          <div className="flex items-center justify-between border-b border-border dark:border-border-dark px-2">
+            <div className="flex items-center">
+              <button
+                onClick={() => switchTab("log")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
+                  activeTab === "log"
+                    ? "border-accent text-accent"
+                    : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
+                }`}
+              >
+                <FileText size={12} />
+                <span>日志</span>
+                {unread > 0 && (
+                  <span className="px-1 rounded-full bg-accent/20 text-accent text-[9px]">{unread}</span>
+                )}
+              </button>
+              <button
+                onClick={() => switchTab("terminal")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
+                  activeTab === "terminal"
+                    ? "border-emerald-500 text-emerald-500"
+                    : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
+                }`}
+              >
+                <Terminal size={12} />
+                <span>终端</span>
+                {terminalUnread > 0 && (
+                  <span className="px-1 rounded-full bg-emerald-500/20 text-emerald-500 text-[9px]">{terminalUnread}</span>
+                )}
+              </button>
+            </div>
             <button
-              onClick={() => switchTab("log")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
-                activeTab === "log"
-                  ? "border-accent text-accent"
-                  : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
-              }`}
+              onClick={handleToggle}
+              className="p-1.5 text-content-tertiary hover:text-content-secondary hover:bg-black/[0.02] dark:hover:bg-white/[0.02] rounded-md transition-colors"
+              title="折叠面板"
             >
-              <FileText size={12} />
-              <span>日志</span>
-              {unread > 0 && (
-                <span className="px-1 rounded-full bg-accent/20 text-accent text-[9px]">{unread}</span>
-              )}
-            </button>
-            <button
-              onClick={() => switchTab("terminal")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
-                activeTab === "terminal"
-                  ? "border-emerald-500 text-emerald-500"
-                  : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
-              }`}
-            >
-              <Terminal size={12} />
-              <span>终端</span>
-              {terminalUnread > 0 && (
-                <span className="px-1 rounded-full bg-emerald-500/20 text-emerald-500 text-[9px]">{terminalUnread}</span>
-              )}
+              <ChevronDown size={14} />
             </button>
           </div>
 
