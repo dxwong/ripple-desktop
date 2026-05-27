@@ -9,6 +9,37 @@ import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd, ter
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
 const MESSAGES_PAGE_SIZE = 5;
+const BATCH_UPDATE_INTERVAL = 50;
+
+const DEFAULT_TIMEOUT_MS = 60_000;
+const CODE_TASK_TIMEOUT_MS = 180_000;
+const TEST_TASK_TIMEOUT_MS = 120_000;
+
+function detectTaskTimeout(content: string): number {
+  const lowerContent = content.toLowerCase();
+
+  if (
+    lowerContent.includes("修改") || lowerContent.includes("编辑") ||
+    lowerContent.includes("edit") || lowerContent.includes("write") ||
+    lowerContent.includes("create file") || lowerContent.includes("新建文件") ||
+    lowerContent.includes("重写") || lowerContent.includes("重构") ||
+    lowerContent.includes("refactor") || lowerContent.includes("implement") ||
+    lowerContent.includes("实现") || lowerContent.includes("添加功能")
+  ) {
+    return CODE_TASK_TIMEOUT_MS;
+  }
+
+  if (
+    lowerContent.includes("测试") || lowerContent.includes("test") ||
+    lowerContent.includes("lint") || lowerContent.includes("检查") ||
+    lowerContent.includes("verify") || lowerContent.includes("验证") ||
+    lowerContent.includes("run") || lowerContent.includes("执行")
+  ) {
+    return TEST_TASK_TIMEOUT_MS;
+  }
+
+  return DEFAULT_TIMEOUT_MS;
+}
 
 async function* simulateStreamResponse(userMessage: string, mode: ChatMode): AsyncGenerator<string> {
   const responses: Record<string, Record<ChatMode, string[]>> = {
@@ -126,6 +157,69 @@ export function useStreamingChat(
   activeConversationIdRef.current = activeConversationId;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
+
+  // ===== 批量更新机制（用于节流 SSE 状态更新） =====
+  const pendingTextUpdatesRef = useRef<Map<string, string>>(new Map());
+  const pendingThinkingUpdatesRef = useRef<Map<string, string>>(new Map());
+  const batchUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingBatchRef = useRef(false);
+
+  const flushPendingUpdates = useCallback(() => {
+    if (pendingBatchRef.current) return;
+    pendingBatchRef.current = true;
+
+    const textUpdates = new Map(pendingTextUpdatesRef.current);
+    const thinkingUpdates = new Map(pendingThinkingUpdatesRef.current);
+    pendingTextUpdatesRef.current.clear();
+    pendingThinkingUpdatesRef.current.clear();
+
+    if (textUpdates.size === 0 && thinkingUpdates.size === 0) {
+      pendingBatchRef.current = false;
+      return;
+    }
+
+    setConversations((prev) => {
+      const next = prev.map((conv) => {
+        const textChunk = textUpdates.get(conv.id);
+        const thinkingChunk = thinkingUpdates.get(conv.id);
+
+        if (!textChunk && !thinkingChunk) return conv;
+
+        const msgs = [...conv.messages];
+        const last = msgs[msgs.length - 1];
+
+        if (last && last.role === "assistant") {
+          if (textChunk) {
+            msgs[msgs.length - 1] = { ...last, content: last.content + textChunk };
+          }
+          if (thinkingChunk) {
+            msgs[msgs.length - 1] = { ...last, thinking: (last.thinking || "") + thinkingChunk };
+          }
+        } else if (textChunk || thinkingChunk) {
+          msgs.push({
+            id: genId(),
+            role: "assistant",
+            content: textChunk || "",
+            thinking: thinkingChunk || "",
+            timestamp: Date.now(),
+          });
+        }
+
+        return { ...conv, messages: msgs, updatedAt: Date.now() };
+      });
+      return next;
+    });
+
+    pendingBatchRef.current = false;
+  }, []);
+
+  const scheduleBatchUpdate = useCallback(() => {
+    if (batchUpdateTimerRef.current) return;
+    batchUpdateTimerRef.current = setTimeout(() => {
+      batchUpdateTimerRef.current = null;
+      flushPendingUpdates();
+    }, BATCH_UPDATE_INTERVAL);
+  }, [flushPendingUpdates]);
 
   // 监听全局权限模式变化，自动同步 autoConfirm 状态
   useEffect(() => {
@@ -349,66 +443,19 @@ export function useStreamingChat(
       return;
     }
     flog.debug('STREAMING', `appendToConversation 调用`, { convId, chunkLength: chunk.length, chunkPreview: chunk.slice(0, 30) });
-    
-    setConversations((prev) => {
-      const next = prev.map((conv) => {
-        if (conv.id !== convId) return conv;
-        const msgs = [...conv.messages];
-        const last = msgs[msgs.length - 1];
-        if (last && last.role === "assistant") {
-          msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
-        } else {
-          msgs.push({
-            id: genId(),
-            role: "assistant",
-            content: chunk,
-            thinking: "",
-            timestamp: Date.now(),
-          });
-        }
-        return { ...conv, messages: msgs, updatedAt: Date.now() };
-      });
-      
-      // 验证更新是否成功
-      const updatedConv = next.find(c => c.id === convId);
-      if (updatedConv) {
-        flog.debug('STREAMING', `appendToConversation 成功`, { 
-          convId, 
-          totalMessages: updatedConv.messages.length,
-          lastMessageContent: updatedConv.messages[updatedConv.messages.length - 1]?.content.slice(0, 50)
-        });
-      } else {
-        flog.warn('STREAMING', `appendToConversation 失败：会话不存在`, { convId, totalConvs: next.length });
-      }
-      
-      return next;
-    });
-  }, []);
+
+    const existing = pendingTextUpdatesRef.current.get(convId) || "";
+    pendingTextUpdatesRef.current.set(convId, existing + chunk);
+    scheduleBatchUpdate();
+  }, [scheduleBatchUpdate]);
 
   // ===== 追加思考内容 =====
   const appendThinkingToConversation = useCallback((convId: string, chunk: string) => {
     if (!convId || !chunk) return;
-    setConversations((prev) => {
-      const next = prev.map((conv) => {
-        if (conv.id !== convId) return conv;
-        const msgs = [...conv.messages];
-        const last = msgs[msgs.length - 1];
-        if (last && last.role === "assistant") {
-          msgs[msgs.length - 1] = { ...last, thinking: (last.thinking || "") + chunk };
-        } else {
-          msgs.push({
-            id: genId(),
-            role: "assistant",
-            content: "",
-            thinking: chunk,
-            timestamp: Date.now(),
-          });
-        }
-        return { ...conv, messages: msgs, updatedAt: Date.now() };
-      });
-      return next;
-    });
-  }, []);
+    const existing = pendingThinkingUpdatesRef.current.get(convId) || "";
+    pendingThinkingUpdatesRef.current.set(convId, existing + chunk);
+    scheduleBatchUpdate();
+  }, [scheduleBatchUpdate]);
 
   // ===== 添加用户/助手消息 =====
   const addMessage = useCallback(
@@ -588,17 +635,19 @@ export function useStreamingChat(
             let resolved = false;  // 防止多次 resolve
             const safeResolve = () => { if (!resolved) { resolved = true; resolve(); } };
 
+            const taskTimeout = detectTaskTimeout(content);
+
             // 超时保护：防止 SSEClient 内部 AbortError 静默处理导致 Promise 永远不 resolve
             const promiseTimeout = setTimeout(() => {
               if (!resolved) {
                 resolved = true;
-                flog.warn('STREAMING', `发送消息超时（60秒），强制恢复`, { convId });
-                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise 60秒未resolve，强制恢复`);
+                flog.warn('STREAMING', `发送消息超时（${taskTimeout / 1000}秒），强制恢复`, { convId, timeout: taskTimeout });
+                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise ${taskTimeout / 1000}秒未resolve，强制恢复`);
                 // 如果 SSE 还在连接中，尝试停止
                 sseClientRef.current?.abort();
                 resolve();
               }
-            }, 60_000);
+            }, taskTimeout);
 
             const currentConv = conversationsRef.current.find((c) => c.id === convId);
             
