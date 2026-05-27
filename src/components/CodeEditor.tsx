@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import Editor, { OnMount, BeforeMount } from "@monaco-editor/react";
-import { Check, Copy, Maximize2, Minimize2 } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 
 interface CodeEditorProps {
   code: string;
@@ -106,8 +106,28 @@ function CodeEditor({
   darkMode = true,
 }: CodeEditorProps) {
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // 阻止 Monaco 捕获滚轮事件，让外层消息容器滚动
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const parentScrollable = container.closest('.scroll-anchor');
+      if (parentScrollable) {
+        parentScrollable.scrollTop += e.deltaY;
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { capture: true, passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel, { capture: true });
+    };
+  }, []);
 
   /** 复制代码 */
   const handleCopy = async () => {
@@ -139,11 +159,12 @@ function CodeEditor({
     monaco.editor.defineTheme("ripple-dark", CUSTOM_THEMES.dark);
   };
 
-  const displayHeight = expanded ? Math.min(code.split("\n").length * 22 + 40, 600) : height;
+  const displayHeight = Math.max(code.split("\n").length * 22 + 20, 100);
   const langLabel = getLanguage(language);
 
   return (
     <div
+      ref={containerRef}
       className={`my-3 rounded-xl overflow-hidden border border-border dark:border-border-dark
                    bg-message-code dark:bg-message-code-dark transition-all duration-200 max-w-full`}
     >
@@ -175,16 +196,6 @@ function CodeEditor({
               </>
             )}
           </button>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark
-                       hover:text-content-secondary dark:hover:text-content-secondary-dark
-                       hover:bg-black/[0.05] dark:hover:bg-white/[0.05]
-                       transition-all duration-150"
-            title={expanded ? "收起" : "展开"}
-          >
-            {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-          </button>
         </div>
       </div>
 
@@ -207,7 +218,9 @@ function CodeEditor({
           renderWhitespace: "selection",
           bracketPairColorization: { enabled: true },
           scrollbar: {
-            verticalScrollbarSize: 6,
+            vertical: 'hidden',
+            horizontal: 'auto',
+            verticalScrollbarSize: 0,
             horizontalScrollbarSize: 6,
           },
           overviewRulerLanes: 0,
