@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { Terminal, ChevronUp, ChevronDown, Trash2, Copy } from "lucide-react";
+import { Terminal, ChevronUp, ChevronDown, Trash2, Copy, FileText } from "lucide-react";
+import TerminalPanel from "./TerminalPanel";
 
 export interface LogEntry {
   id: number;
@@ -52,7 +53,7 @@ class Logger {
 
 export const logger = new Logger();
 
-/** 底部日志面板 — 参考 Claude Desktop */
+/** 底部面板 — 日志 + 终端（选项卡切换） */
 function LogPanel() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -60,7 +61,13 @@ function LogPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef(0);
   const [unread, setUnread] = useState(0);
+  /** 当前选项卡：'log' 或 'terminal' */
+  const [activeTab, setActiveTab] = useState<"log" | "terminal">("log");
+  /** 终端有新完成命令时未读数 */
+  const [terminalUnread, setTerminalUnread] = useState(0);
+  const terminalUnreadRef = useRef(0);
 
+  // 订阅日志事件
   useEffect(() => {
     const unsubscribe = logger.subscribe((entry) => {
       setLogs((prev) => {
@@ -68,19 +75,32 @@ function LogPanel() {
         if (next.length > 500) next.splice(0, next.length - 500);
         return next;
       });
-      if (!expanded) {
+      if (!expanded || activeTab !== "log") {
         unreadRef.current++;
         setUnread(unreadRef.current);
       }
     });
     return unsubscribe;
-  }, [expanded]);
+  }, [expanded, activeTab]);
 
+  // 监听终端命令完成事件（新增未读提示）
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
+    const handler = () => {
+      if (!expanded || activeTab !== "terminal") {
+        terminalUnreadRef.current++;
+        setTerminalUnread(terminalUnreadRef.current);
+      }
+    };
+    window.addEventListener("shell-cmd-end", handler);
+    return () => window.removeEventListener("shell-cmd-end", handler);
+  }, [expanded, activeTab]);
+
+  // 自动滚动（日志）
+  useEffect(() => {
+    if (autoScroll && scrollRef.current && activeTab === "log") {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs, autoScroll, expanded]);
+  }, [logs, autoScroll, activeTab]);
 
   const handleToggle = () => {
     if (expanded) {
@@ -88,7 +108,21 @@ function LogPanel() {
     } else {
       unreadRef.current = 0;
       setUnread(0);
+      terminalUnreadRef.current = 0;
+      setTerminalUnread(0);
       setExpanded(true);
+    }
+  };
+
+  // 切换选项卡时清空未读
+  const switchTab = (tab: "log" | "terminal") => {
+    setActiveTab(tab);
+    if (tab === "log") {
+      unreadRef.current = 0;
+      setUnread(0);
+    } else {
+      terminalUnreadRef.current = 0;
+      setTerminalUnread(0);
     }
   };
 
@@ -121,9 +155,11 @@ function LogPanel() {
     success: "✓",
   };
 
+  const totalUnread = unread + terminalUnread;
+
   return (
     <div className="border-t border-border dark:border-border-dark">
-      {/* 折叠状态栏 */}
+      {/* ===== 折叠状态栏 ===== */}
       <button
         onClick={handleToggle}
         className="w-full flex items-center gap-2 px-3 py-1.5
@@ -134,13 +170,20 @@ function LogPanel() {
         <span className="font-medium text-content-secondary dark:text-content-secondary-dark">
           日志
         </span>
+        {/* 终端未读小红点 */}
+        {terminalUnread > 0 && (
+          <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 text-[10px] font-medium">
+            终端 {terminalUnread}
+          </span>
+        )}
+        {/* 日志未读数 */}
         {unread > 0 && (
           <span className="px-1.5 py-0.5 rounded-full bg-accent/20 text-accent text-[10px] font-medium">
             {unread}
           </span>
         )}
-        {/* 最后一条日志预览 */}
-        {logs.length > 0 && !expanded && (
+        {/* 最后一条日志预览（折叠态） */}
+        {logs.length > 0 && !expanded && activeTab === "log" && (
           <span className="flex-1 text-left truncate text-content-tertiary dark:text-content-tertiary-dark">
             {logs[logs.length - 1].message}
           </span>
@@ -149,50 +192,95 @@ function LogPanel() {
         {expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
       </button>
 
-      {/* 展开日志列表 */}
+      {/* ===== 展开面板 ===== */}
       {expanded && (
-        <div className="relative">
-          {/* 工具栏 */}
-          <div className="absolute top-0 right-0 z-10 flex items-center gap-1 p-1">
+        <div>
+          {/* ---- 选项卡 ---- */}
+          <div className="flex items-center border-b border-border dark:border-border-dark px-2">
             <button
-              onClick={handleCopyAll}
-              className="p-1 rounded-md text-content-tertiary hover:text-accent hover:bg-accent/10 transition-all"
-              title="复制全部日志"
+              onClick={() => switchTab("log")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
+                activeTab === "log"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
+              }`}
             >
-              <Copy size={12} />
+              <FileText size={12} />
+              <span>日志</span>
+              {unread > 0 && (
+                <span className="px-1 rounded-full bg-accent/20 text-accent text-[9px]">{unread}</span>
+              )}
             </button>
             <button
-              onClick={handleClear}
-              className="p-1 rounded-md text-content-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
-              title="清空日志"
+              onClick={() => switchTab("terminal")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-colors border-b-2 ${
+                activeTab === "terminal"
+                  ? "border-emerald-500 text-emerald-500"
+                  : "border-transparent text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary"
+              }`}
             >
-              <Trash2 size={12} />
+              <Terminal size={12} />
+              <span>终端</span>
+              {terminalUnread > 0 && (
+                <span className="px-1 rounded-full bg-emerald-500/20 text-emerald-500 text-[9px]">{terminalUnread}</span>
+              )}
             </button>
           </div>
 
-          {/* 日志内容 */}
-          <div
-            ref={scrollRef}
-            className="h-48 overflow-y-auto bg-black/[0.02] dark:bg-white/[0.02] font-mono text-[11px] leading-relaxed px-3 py-2 select-text"
-          >
-            {logs.length === 0 ? (
-              <div className="text-center py-6 text-content-tertiary dark:text-content-tertiary-dark">
-                暂无日志
+          {/* ---- 日志内容 ---- */}
+          {activeTab === "log" && (
+            <div className="relative">
+              {/* 工具栏 */}
+              <div className="absolute top-0 right-0 z-10 flex items-center gap-1 p-1">
+                <button
+                  onClick={handleCopyAll}
+                  className="p-1 rounded-md text-content-tertiary hover:text-accent hover:bg-accent/10 transition-all"
+                  title="复制全部日志"
+                >
+                  <Copy size={12} />
+                </button>
+                <button
+                  onClick={handleClear}
+                  className="p-1 rounded-md text-content-tertiary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
+                  title="清空日志"
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
-            ) : (
-              logs.map((entry) => (
-                <div key={entry.id} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] px-1 rounded">
-                  <span className="text-content-tertiary dark:text-content-tertiary-dark mr-2 select-none">
-                    {entry.timestamp}
-                  </span>
-                  <span className={`mr-1.5 select-none ${levelColor[entry.level]}`}>
-                    {levelIcon[entry.level]}
-                  </span>
-                  <span className={levelColor[entry.level]}>{entry.message}</span>
-                </div>
-              ))
-            )}
-          </div>
+
+              <div
+                ref={scrollRef}
+                onScroll={() => {
+                  const el = scrollRef.current;
+                  if (!el) return;
+                  const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+                  setAutoScroll(distance < 40);
+                }}
+                className="h-48 overflow-y-auto bg-black/[0.02] dark:bg-white/[0.02] font-mono text-[11px] leading-relaxed px-3 py-2 select-text"
+              >
+                {logs.length === 0 ? (
+                  <div className="text-center py-6 text-content-tertiary dark:text-content-tertiary-dark">
+                    暂无日志
+                  </div>
+                ) : (
+                  logs.map((entry) => (
+                    <div key={entry.id} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] px-1 rounded">
+                      <span className="text-content-tertiary dark:text-content-tertiary-dark mr-2 select-none">
+                        {entry.timestamp}
+                      </span>
+                      <span className={`mr-1.5 select-none ${levelColor[entry.level]}`}>
+                        {levelIcon[entry.level]}
+                      </span>
+                      <span className={levelColor[entry.level]}>{entry.message}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ---- 终端内容 ---- */}
+          {activeTab === "terminal" && <TerminalPanel />}
         </div>
       )}
     </div>

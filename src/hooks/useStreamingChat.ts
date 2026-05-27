@@ -5,6 +5,7 @@ import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSessio
 import { useStore, syncStore } from "./useStore";
 import { flog } from "../services/frontendLogger";
 import { healthSSEClient } from "../services/healthSSEClient";
+import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd } from "../services/shellEventBus";
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
 const MESSAGES_PAGE_SIZE = 5;
@@ -663,6 +664,15 @@ export function useStreamingChat(
                 onToolEnd: (toolCallId, toolName, result) => {
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
                   onStreamEvent?.("tool-end", convId, { toolCallId, toolName, result: result.output || "", error: result.error });
+                  // shell 命令结束 → 发射到终端事件总线（在所有会话中都捕获）
+                  if (toolName === "shell") {
+                    emitShellCommandEnd({
+                      toolCallId,
+                      stdout: result.output || "",
+                      stderr: result.error || "",
+                      error: result.error,
+                    });
+                  }
                   if (activeConversationIdRef.current !== convId) return;
                   setConversations((prev) => {
                     return prev.map((conv) => {
@@ -697,6 +707,15 @@ export function useStreamingChat(
                     toolName: data.toolName,
                     args: data.args,
                   });
+                  // shell 命令 → 发射到终端事件总线
+                  if (data.toolName === "shell") {
+                    emitShellCommandStart({
+                      toolCallId: data.toolCallId,
+                      command: (data.args.command as string) || "",
+                      cwd: effectiveCwd,
+                      timestamp: Date.now(),
+                    });
+                  }
                   setPendingToolRequests((prev) => [...prev, data]);
                   const pendingToolCall: ToolCallResult = {
                     toolCallId: data.toolCallId,
@@ -773,9 +792,13 @@ export function useStreamingChat(
                   flog.debug('STREAMING', `消息结束`, { role });
                   onStreamEvent?.("message-end", convId, { role });
                 },
-                onToolUpdate: (toolCallId, toolName) => {
-                  flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName });
-                  onStreamEvent?.("tool-update", convId, { toolCallId, toolName });
+                onToolUpdate: (toolCallId, toolName, output) => {
+                  flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName, hasOutput: !!output });
+                  onStreamEvent?.("tool-update", convId, { toolCallId, toolName, output });
+                  // shell 命令增量输出 → 终端事件总线
+                  if (toolName === "shell" && output) {
+                    emitShellCommandOutput({ toolCallId, output });
+                  }
                 },
                 onUsage: (usage) => {
                   flog.debug('STREAMING', `收到 usage 事件`, {
