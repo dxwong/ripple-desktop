@@ -39,8 +39,8 @@ export default {
           "user-dark": "#262629",
           ai: "#F0F0EB",
           "ai-dark": "#18181B",
-          code: "#F5F5F5",
-          "code-dark": "#1A1A1E",
+          code: "#E8E8E5",
+          "code-dark": "#1E1E22",
         },
       },
       fontFamily: {
