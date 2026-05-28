@@ -11,9 +11,9 @@ const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36
 const MESSAGES_PAGE_SIZE = 5;
 const BATCH_UPDATE_INTERVAL = 50;
 
-const DEFAULT_TIMEOUT_MS = 300_000;
-const CODE_TASK_TIMEOUT_MS = 600_000;
-const TEST_TASK_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 900_000;
+const CODE_TASK_TIMEOUT_MS = 900_000;
+const TEST_TASK_TIMEOUT_MS = 900_000;
 
 function detectTaskTimeout(content: string): number {
   const lowerContent = content.toLowerCase();
@@ -143,6 +143,8 @@ export function useStreamingChat(
   const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
+  // SSE 请求代际标记：每次发送新请求时递增，旧回调检查发现代际不匹配则跳过操作
+  const requestGenerationRef = useRef(0);
   // 同步 processing 锁：防止 React 异步状态更新导致的竞态条件
   // isProcessing 是 state，setIsProcessing 后需要 re-render 才生效
   // isProcessingRef 是同步的，赋值后立即生效，用于并发防护
@@ -627,6 +629,9 @@ export function useStreamingChat(
           const sseClient = new SSEClient({ baseUrl: agentGatewayUrl });
           sseClientRef.current = sseClient;
 
+          // 递增请求代际，旧回调可通过它判断自己是否已过期
+          const currentGeneration = ++requestGenerationRef.current;
+
           // 预先添加一个空的 assistant 消息，以便后续能在上面显示错误或内容
           // （前面已添加，不再重复）
 
@@ -637,22 +642,25 @@ export function useStreamingChat(
 
             const taskTimeout = detectTaskTimeout(content);
 
-            // 超时保护：防止 SSEClient 内部 AbortError 静默处理导致 Promise 永远不 resolve
-            const promiseTimeout = setTimeout(() => {
-              if (!resolved) {
-                resolved = true;
-                flog.warn('STREAMING', `发送消息超时（${taskTimeout / 1000}秒），任务可能还在后台执行中`, { convId, timeout: taskTimeout });
-                onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise ${taskTimeout / 1000}秒未resolve，正在检查状态...`);
-                
-                // 添加用户友好的提示信息
-                const timeoutMsg = `\n\n__RIPPLE_INFO__\n⏱️ 任务执行时间较长，已等待 ${taskTimeout / 1000}秒。\n\n提示：\n- Agent可能正在执行复杂操作（如多步骤工具调用、文件处理等）\n- 请耐心等待，任务可能仍在后台进行\n- 如果长时间无响应，可以稍后重试\n__RIPPLE_INFO_END__\n\n`;
-                appendToConversation(convId, timeoutMsg);
-                
-                // 如果 SSE 还在连接中，尝试停止
-                sseClientRef.current?.abort();
-                resolve();
-              }
-            }, taskTimeout);
+            // 空闲超时保护：任何活跃事件（onText/onThinking/onToolUpdate 等）都会重置计时器
+            let idleTimer: ReturnType<typeof setTimeout> | null = null;
+            const resetIdleTimer = () => {
+              if (idleTimer) clearTimeout(idleTimer);
+              idleTimer = setTimeout(() => {
+                if (!resolved) {
+                  resolved = true;
+                  flog.warn('STREAMING', `发送消息超时（${taskTimeout / 1000}秒），任务可能还在后台执行中`, { convId, timeout: taskTimeout });
+                  onLog?.(`sendMessage TIMEOUT: convId=${convId} — Promise ${taskTimeout / 1000}秒未resolve，正在检查状态...`);
+                  
+                  const timeoutMsg = `\n\n__RIPPLE_INFO__\n⏱️ 任务执行时间较长，已等待 ${taskTimeout / 1000}秒。\n\n提示：\n- Agent可能正在执行复杂操作（如多步骤工具调用、文件处理等）\n- 请耐心等待，任务可能仍在后台进行\n- 如果长时间无响应，可以稍后重试\n__RIPPLE_INFO_END__\n\n`;
+                  appendToConversation(convId, timeoutMsg);
+                  
+                  sseClientRef.current?.abort();
+                  resolve();
+                }
+              }, taskTimeout);
+            };
+            resetIdleTimer();
 
             const currentConv = conversationsRef.current.find((c) => c.id === convId);
             
@@ -686,15 +694,18 @@ export function useStreamingChat(
               backendParams,
               {
                 onText: (text) => {
+                  resetIdleTimer();
                   hasContent = true;
                   appendToConversation(convId, text);
                   onStreamEvent?.("text", convId, { text });
                 },
                 onThinking: (text) => {
+                  resetIdleTimer();
                   appendThinkingToConversation(convId, text);
                   onStreamEvent?.("thinking", convId, { text });
                 },
                 onToolStart: (toolCallId, toolName) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `工具开始执行`, { toolCallId, toolName });
                   onStreamEvent?.("tool-start", convId, { toolCallId, toolName });
                   if (activeConversationIdRef.current !== convId) return;
@@ -716,6 +727,7 @@ export function useStreamingChat(
                   });
                 },
                 onToolEnd: (toolCallId, toolName, result) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
                   onStreamEvent?.("tool-end", convId, { toolCallId, toolName, result: result.output || "", error: result.error });
                   // 所有工具结束 → 发射到终端事件总线（在所有会话中都捕获）并更新历史记录
@@ -756,6 +768,7 @@ export function useStreamingChat(
                   }
                 },
                 onToolRequest: (data) => {
+                  resetIdleTimer();
                   flog.info('STREAMING', `工具执行请求`, { toolCallId: data.toolCallId, toolName: data.toolName });
                   onStreamEvent?.("tool-request", convId, {
                     toolCallId: data.toolCallId,
@@ -817,14 +830,17 @@ export function useStreamingChat(
                 },
                 // Agent 生命周期事件（日志级别，用于追踪）
                 onAgentStart: () => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', 'Agent 开始处理');
                   onStreamEvent?.("agent-start", convId);
                 },
                 onTurnStart: () => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', '新轮次开始');
                   onStreamEvent?.("turn-start", convId);
                 },
                 onTurnEnd: (data) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `轮次结束`, {
                     hasToolResults: data.hasToolResults,
                     hasError: data.hasError,
@@ -852,14 +868,17 @@ export function useStreamingChat(
                   }
                 },
                 onMessageStart: (role) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `消息开始`, { role });
                   onStreamEvent?.("message-start", convId, { role });
                 },
                 onMessageEnd: (role) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `消息结束`, { role });
                   onStreamEvent?.("message-end", convId, { role });
                 },
                 onToolUpdate: (toolCallId, toolName, output) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `工具部分结果更新`, { toolCallId, toolName, hasOutput: !!output });
                   onStreamEvent?.("tool-update", convId, { toolCallId, toolName, output });
                   // 工具增量输出 → 终端事件总线和历史记录
@@ -869,6 +888,7 @@ export function useStreamingChat(
                   }
                 },
                 onUsage: (usage) => {
+                  resetIdleTimer();
                   flog.debug('STREAMING', `收到 usage 事件`, {
                     convId,
                     usage,
@@ -897,17 +917,24 @@ export function useStreamingChat(
                   });
                 },
                 onDone: () => {
-                  clearTimeout(promiseTimeout);
+                  if (idleTimer) clearTimeout(idleTimer);
                   flog.info('STREAMING', 'SSE 流正常结束');
                   onStreamEvent?.("done", convId);
                   safeResolve();
                 },
                 onError: (error, errorDetails) => {
-                  clearTimeout(promiseTimeout);
+                  if (idleTimer) clearTimeout(idleTimer);
                   console.error(`[StreamError] error="${error}" convId=${convId}`, errorDetails);
                   flog.error('STREAMING', `SSE 流错误`, { error, errorDetails });
                   onStreamEvent?.("error", convId, { error, details: errorDetails });
                   onLog?.(`onError: error="${error}" convId=${convId} hasDetails=${!!errorDetails}`);
+                  
+                  // 如果已经有更新的请求，旧回调不再追加错误信息到对话
+                  if (requestGenerationRef.current !== currentGeneration) {
+                    flog.debug('STREAMING', `跳过旧回调的错误信息（请求代际已变更）`, { convId, currentGen: requestGenerationRef.current, callbackGen: currentGeneration });
+                    safeResolve();
+                    return;
+                  }
                   
                   // 构建完整的错误信息
                   let fullErrorMessage = error;
