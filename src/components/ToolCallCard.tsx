@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   FileText, Folder, Terminal, Trash2, Check, X,
-  ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, XCircle
+  ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, XCircle, Clock
 } from 'lucide-react';
 import type { ToolCallResult } from '../types';
 
@@ -31,44 +31,30 @@ const TOOL_NAMES: Record<string, string> = {
   Grep: '文本搜索',
 };
 
-/**
- * 状态配置 — 柔和且与品牌色系统协调的配色方案
- * 整体使用暖色调家族，与项目的 warm terracotta 设计语言一致
- * - 成功/已批准：使用品牌 accent 暖色（替代刺眼的翠绿和蓝）
- * - 失败/已拒绝：使用暖调玫瑰色（替代刺眼的正红）
- * - 等待中：使用暖琥珀色
- */
+/** 状态配置 */
 const STATUS_CONFIG: Record<ToolCallResult['status'], {
   label: string;
-  /** 状态文本和指示灯的配色 */
   color: string;
-  /** 执行中显示的呼吸灯颜色（仅 pending 使用） */
-  dotColor: string;
 }> = {
   pending: {
     label: '等待中',
     color: 'text-amber-600/55 dark:text-amber-400/55',
-    dotColor: 'bg-amber-400',
   },
   approved: {
     label: '已批准',
     color: 'text-accent/70 dark:text-accent/70',
-    dotColor: 'bg-accent',
   },
   denied: {
     label: '已拒绝',
     color: 'text-rose-500/50 dark:text-rose-400/50',
-    dotColor: 'bg-rose-400',
   },
   success: {
     label: '已完成',
     color: 'text-accent/75 dark:text-accent/75',
-    dotColor: 'bg-accent',
   },
   error: {
     label: '失败',
     color: 'text-rose-500/50 dark:text-rose-400/50',
-    dotColor: 'bg-rose-400/80',
   },
 };
 
@@ -81,6 +67,15 @@ const STATUS_ICONS: Record<ToolCallResult['status'], React.ElementType> = {
   error: XCircle,
 };
 
+/** 格式化执行耗时 */
+function formatDuration(start?: number, end?: number): string {
+  if (!start) return '';
+  const ms = (end ?? Date.now()) - start;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(0)}s`;
+}
+
 /** 截取路径显示（太长时省略中间） */
 function truncatePath(path: string, maxLen = 60): string {
   if (!path || path.length <= maxLen) return path;
@@ -90,35 +85,53 @@ function truncatePath(path: string, maxLen = 60): string {
 
 /** 预览内容（过长省略） */
 function truncateOutput(output: string, maxLen = 150): string {
-	if (!output) return '';
-	if (output.length <= maxLen) return output;
-	return output.slice(0, maxLen) + '\n... (已截断，点击展开查看完整内容)';
+  if (!output) return '';
+  if (output.length <= maxLen) return output;
+  return output.slice(0, maxLen) + '\n... (已截断，点击展开查看完整内容)';
 }
 
 interface ToolCallCardProps {
   toolCall: ToolCallResult;
-  /** 默认展开状态（工具正在执行时自动展开） */
-  defaultExpanded?: boolean;
 }
 
-export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCardProps) {
-	// 始终默认折叠，除非明确指定展开
-	const [expanded, setExpanded] = useState(false);
+export function ToolCallCard({ toolCall }: ToolCallCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [liveDuration, setLiveDuration] = useState('');
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   const Icon = TOOL_ICONS[toolCall.toolName] || FileText;
   const toolLabel = TOOL_NAMES[toolCall.toolName] || toolCall.toolName;
   const statusCfg = STATUS_CONFIG[toolCall.status] || STATUS_CONFIG.pending;
   const StatusIcon = STATUS_ICONS[toolCall.status] || Check;
 
-  // 从 args 中提取关键参数显示
+  const isRunning = toolCall.status === 'approved';
+  const isFinished = toolCall.status === 'success' || toolCall.status === 'error';
+
   const displayPath = (toolCall.args.path as string) || (toolCall.args.file_path as string);
   const displayCommand = toolCall.args.command as string | undefined;
   const displayGlob = toolCall.args.pattern as string || toolCall.args.glob as string;
 
   const hasOutput = !!(toolCall.output || toolCall.error);
   const showExpandToggle = hasOutput || toolCall.status === 'pending';
-  /** 工具是否正在等待执行（显示呼吸灯） */
-  const isWaiting = toolCall.status === 'pending';
+
+  // 正在执行时实时刷新耗时
+  useEffect(() => {
+    if (!isRunning || !toolCall.startTime) {
+      setLiveDuration('');
+      return;
+    }
+    const update = () => setLiveDuration(formatDuration(toolCall.startTime));
+    update();
+    timerRef.current = setInterval(update, 200);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isRunning, toolCall.startTime]);
+
+  // 执行结束后显示最终耗时
+  const finalDuration = isFinished && toolCall.startTime
+    ? formatDuration(toolCall.startTime, toolCall.endTime)
+    : '';
+
+  const durationText = isRunning ? liveDuration : finalDuration;
 
   return (
     <div className="rounded-lg border border-border/60 dark:border-border-dark/60 overflow-hidden mt-1.5">
@@ -163,10 +176,20 @@ export function ToolCallCard({ toolCall, defaultExpanded = false }: ToolCallCard
           </button>
         )}
 
-        {/* 状态标签 — 执行中显示缓慢呼吸灯，完成显示静态图标 */}
+        {/* 执行耗时（如果有） */}
+        {durationText && (
+          <span className="flex items-center gap-1 text-[10px] text-content-tertiary/40 shrink-0">
+            <Clock size={9} />
+            {durationText}
+          </span>
+        )}
+
+        {/* 状态标签 */}
         <div className={`flex items-center gap-1.5 shrink-0 ${statusCfg.color}`}>
-          {isWaiting ? (
-            <span className={`inline-flex rounded-full h-2 w-2 ${statusCfg.dotColor} animate-pulse`} />
+          {isRunning ? (
+            <span className="inline-flex rounded-full h-2 w-2 bg-amber-400 animate-breath" />
+          ) : toolCall.status === 'pending' ? (
+            <span className="inline-flex rounded-full h-2 w-2 bg-amber-400 animate-pulse" />
           ) : (
             <StatusIcon size={11} />
           )}

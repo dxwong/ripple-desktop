@@ -275,3 +275,19 @@
     opacity: 1;
   }
 }
+
+/* 呼吸灯动画：模拟真实指示灯的缓进缓出呼吸效果 */
+@keyframes breath {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.7);
+  }
+}
+
+.animate-breath {
+  animation: breath 2s ease-in-out infinite;
+}

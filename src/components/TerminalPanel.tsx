@@ -159,11 +159,11 @@ function TerminalPanel() {
         style={{ fontFamily: '"JetBrains Mono", "Fira Code", "Consolas", monospace' }}
       >
         {isEmpty ? (
-          <div className="text-gray-500">
-            <span className="text-green-400">ripple@dev</span>
-            <span className="text-gray-400">:</span>
-            <span className="text-blue-400">~</span>
-            <span className="text-gray-400">$</span>
+          <div className="text-content-tertiary/50">
+            <span className="text-emerald-500">ripple@dev</span>
+            <span className="text-content-tertiary/40">:</span>
+            <span className="text-blue-500">~</span>
+            <span className="text-content-tertiary/40">$</span>
             <span className="animate-pulse ml-1">_</span>
           </div>
         ) : (
@@ -187,20 +187,20 @@ function TerminalPanel() {
                     )}
                   </span>
                   {/* 命令内容 */}
-                  <code className="text-white break-all flex-1">
+                  <code className="text-content-secondary dark:text-content-secondary-dark break-all flex-1">
                     {entry.toolName === "shell" ? (
                       <>
-                        <span className="text-gray-500">ripple@dev:</span>
-                        <span className="text-blue-400">{entry.cwd || "~"}</span>
-                        <span className="text-gray-500">$</span>
+                        <span className="text-content-tertiary/50">ripple@dev:</span>
+                        <span className="text-blue-500">{entry.cwd || "~"}</span>
+                        <span className="text-content-tertiary/50">$</span>
                         <span className="ml-1">{entry.command}</span>
                       </>
                     ) : (
                       <>
-                        <span className="text-purple-400">tool:</span>
-                        <span className="text-cyan-400 ml-1">{entry.toolName}</span>
-                        <span className="text-gray-500 ml-1">→</span>
-                        <span className="ml-1 text-gray-300">{entry.command}</span>
+                        <span className="text-violet-500">tool:</span>
+                        <span className="text-cyan-500 ml-1">{entry.toolName}</span>
+                        <span className="text-content-tertiary/50 ml-1">→</span>
+                        <span className="ml-1 text-content-secondary dark:text-content-secondary-dark">{entry.command}</span>
                       </>
                     )}
                   </code>
@@ -229,14 +229,14 @@ function TerminalPanel() {
 
                 {/* 标准输出 */}
                 {entry.output && (
-                  <pre className="ml-10 text-gray-300 whitespace-pre-wrap break-all leading-relaxed text-[11px]">
+                  <pre className="ml-10 text-content-secondary/80 dark:text-content-secondary-dark/80 whitespace-pre-wrap break-all leading-relaxed text-[11px]">
                     {entry.output}
                   </pre>
                 )}
 
                 {/* 错误输出 */}
                 {entry.stderr && (
-                  <pre className="ml-10 text-red-400 whitespace-pre-wrap break-all leading-relaxed text-[11px]">
+                  <pre className="ml-10 text-rose-500 whitespace-pre-wrap break-all leading-relaxed text-[11px]">
                     {entry.stderr}
                   </pre>
                 )}
@@ -247,8 +247,8 @@ function TerminalPanel() {
                     <span
                       className={`text-[10px] ${
                         entry.status === "success"
-                          ? "text-green-500"
-                          : "text-red-400"
+                          ? "text-emerald-500"
+                          : "text-rose-500"
                       }`}
                     >
                       {entry.status === "success"

@@ -742,6 +742,7 @@ export function useStreamingChat(
                           status: result.error ? "error" : "success",
                           output: result.output,
                           error: result.error,
+                          endTime: Date.now(),
                         };
                       }
                       msgs[msgs.length - 1] = { ...last, toolCalls };
@@ -787,6 +788,7 @@ export function useStreamingChat(
                     toolName: data.toolName,
                     args: data.args,
                     status: "pending",
+                    startTime: Date.now(),
                   };
                   setConversations((prev) =>
                     prev.map((conv): Conversation => {
