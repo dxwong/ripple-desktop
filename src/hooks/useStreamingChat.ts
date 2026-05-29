@@ -348,7 +348,8 @@ export function useStreamingChat(
         prev.map((c) => {
           if (c.id !== convId) return c;
           if (c.messages && c.messages.length > 0) {
-            return { ...c, cwd: sessionData.cwd || c.cwd };
+            // 同步后端最新标题（手机端或其他桌面端可能已重命名）
+            return { ...c, cwd: sessionData.cwd || c.cwd, title: sessionData.title || c.title };
           }
           return {
             ...c,
@@ -951,14 +952,8 @@ export function useStreamingChat(
                         setConversations((prev) =>
                           prev.map((conv) => {
                             if (conv.id !== convId) return conv;
-                            const priorMessages = conv.messages.filter((m) =>
-                              msgs.every((nm) => nm.id !== m.id)
-                            );
-                            return {
-                              ...conv,
-                              messages: [...priorMessages, ...msgs],
-                              updatedAt: Date.now(),
-                            };
+                            // JSONL 是唯一事实来源，直接替换不合并（前端临时 ID 与后端 ID 不同）
+                            return { ...conv, messages: msgs, updatedAt: Date.now() };
                           })
                         );
                         flog.info('STREAMING', `JSONL 恢复成功`, { convId, msgCount: msgs.length });
@@ -983,6 +978,14 @@ export function useStreamingChat(
                     return;
                   }
                   
+                  // 用户主动停止（非错误）：追加中断标记而非错误信息
+                  if (error === '请求被中止') {
+                    const stopMsg = `\n\n---\n⏹️ 用户已中断`;
+                    appendToConversation(convId, stopMsg);
+                    safeResolve();
+                    return;
+                  }
+
                   // 构建完整的错误信息
                   let fullErrorMessage = error;
                   if (errorDetails) {
@@ -1179,6 +1182,7 @@ export function useStreamingChat(
     }
     // 切换对话后恢复输入框状态（原会话的 SSE 仍在后台运行）
     setIsProcessing(false);
+    isProcessingRef.current = false;  // 同步重置锁，否则新会话无法发送消息
     setPendingToolRequests([]);
     setActiveConversationId(id);
     if (!loadedMessageIds.has(id)) {
