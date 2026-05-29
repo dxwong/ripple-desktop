@@ -922,6 +922,19 @@ export function useStreamingChat(
                   onStreamEvent?.("done", convId);
                   safeResolve();
                 },
+                onClose: () => {
+                  if (idleTimer) clearTimeout(idleTimer);
+                  flog.warn('STREAMING', `SSE 连接关闭`, { convId });
+                  onStreamEvent?.("close", convId);
+                  
+                  // 如果连接关闭但还没有正常结束，显示错误提示并重置状态
+                  if (!resolved) {
+                    flog.error('STREAMING', `SSE 连接意外断开`, { convId });
+                    const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ 连接已断开，请刷新页面重试\n__RIPPLE_ERROR_END__\n\n`;
+                    appendToConversation(convId, errorMsg);
+                    safeResolve();
+                  }
+                },
                 onError: (error, errorDetails) => {
                   if (idleTimer) clearTimeout(idleTimer);
                   console.error(`[StreamError] error="${error}" convId=${convId}`, errorDetails);
