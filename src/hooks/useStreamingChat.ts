@@ -626,7 +626,10 @@ export function useStreamingChat(
       try {
         if (useBackend) {
           flog.info('STREAMING', '使用后端模式发送');
-          const sseClient = new SSEClient({ baseUrl: agentGatewayUrl });
+          const sseClient = new SSEClient({ 
+            baseUrl: agentGatewayUrl,
+            idleTimeout: 1_800_000,  // 30分钟空闲超时（长任务工具执行可能很久无数据）
+          });
           sseClientRef.current = sseClient;
 
           // 递增请求代际，旧回调可通过它判断自己是否已过期
@@ -1373,12 +1376,9 @@ export function useStreamingChat(
         })
       );
 
-      // 2.1 持久化截断后的对话（写入 .json，确保重启后 GET 直接返回截断消息，不再从 .jsonl 完整读取）
-      if (truncatedMessages) {
-        saveSession(convId, { messages: truncatedMessages }).catch((err) => {
-          flog.warn('STREAMING', '回滚后持久化失败', { convId, error: String(err) });
-        });
-      }
+      // 注意：回滚截断仅在内存中生效。重启后从 .jsonl 重新加载完整历史。
+      // v2.0：不再向服务端持久化截断消息（单文件架构，消息唯一来源是 .jsonl）。
+      // 如需持久化截断，应通过 Agent Session.moveTo() 修改 .jsonl 的 leaf 指针。
 
       // 3. 通知后端重置会话（清理 Agent 上下文）
       if (backendConnected) {
