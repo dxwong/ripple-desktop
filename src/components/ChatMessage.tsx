@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, Undo2 } from "lucide-react";
 import { marked } from "marked";
 import { Message } from "../types";
@@ -67,6 +68,7 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
   /** 复制状态 */
   const [copied, setCopied] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const codeRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
   const thinkingEndRef = useRef<HTMLDivElement>(null);
   const thinkingContainerRef = useRef<HTMLDivElement>(null);
   const thinkingScrolledUpRef = useRef(false);
@@ -127,11 +129,20 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
     if (isStreaming || !contentRef.current) return
     const timer = setTimeout(() => {
       const mounts = contentRef.current?.querySelectorAll<HTMLElement>(".code-block-mount")
+      const roots = codeRootsRef.current;
+      const seen = new Set<HTMLElement>();
+
       mounts?.forEach((mount) => {
+        seen.add(mount);
         const code = decodeURIComponent(mount.getAttribute("data-code") || "")
         const lang = mount.getAttribute("data-lang") || ""
-        mount.innerHTML = ""
-        const root = createRoot(mount)
+
+        let root = roots.get(mount);
+        if (!root) {
+          mount.innerHTML = ""
+          root = createRoot(mount)
+          roots.set(mount, root);
+        }
         root.render(
           <CodeEditor
             code={code.replace(/\n$/, "")}
@@ -141,9 +152,28 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
           />
         )
       })
+
+      // 清理不再在 DOM 中的旧 root（消息内容变化导致之前创建的 mount 被移除）
+      for (const [mount, root] of roots) {
+        if (!seen.has(mount)) {
+          root.unmount();
+          roots.delete(mount);
+        }
+      }
     }, 0)
     return () => clearTimeout(timer)
   }, [isStreaming, displayContent, darkMode])
+
+  // 组件卸载时清理所有 Monaco Editor root
+  useEffect(() => {
+    return () => {
+      const roots = codeRootsRef.current;
+      for (const [mount, root] of roots) {
+        root.unmount();
+      }
+      roots.clear();
+    };
+  }, [])
 
   renderLog(message.id, message.role, message.content.length, (message.thinking || "").length);
 

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from "react";
 import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X, Wifi } from "lucide-react";
 import ChatMessage from "./ChatMessage";
+import { ErrorBoundary } from "./ErrorBoundary";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
 import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
@@ -513,6 +514,7 @@ function ChatView({
                 </div>
               )}
               {messages.map((msg, index) => (
+                <ErrorBoundary key={msg.id}>
                 <ChatMessage
                   key={msg.id}
                   message={msg}
@@ -522,6 +524,7 @@ function ChatView({
                   onRegenerate={msg.role === "assistant" && index === lastAssistantIdx ? () => handleRegenerate(index) : undefined}
                   onRollback={msg.role === "user" ? () => onRollbackToSnapshot?.(msg.id) : undefined}
                 />
+                </ErrorBoundary>
               ))}
             </div>
           )}

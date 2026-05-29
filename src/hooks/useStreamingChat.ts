@@ -930,11 +930,38 @@ export function useStreamingChat(
                   flog.warn('STREAMING', `SSE 连接关闭`, { convId });
                   onStreamEvent?.("close", convId);
                   
-                  // 如果连接关闭但还没有正常结束，显示错误提示并重置状态
+                  // 如果连接关闭但还没有正常结束，尝试从 JSONL 恢复消息
                   if (!resolved) {
-                    flog.error('STREAMING', `SSE 连接意外断开`, { convId });
-                    const errorMsg = `\n\n__RIPPLE_ERROR__\n❌ 连接已断开，请刷新页面重试\n__RIPPLE_ERROR_END__\n\n`;
-                    appendToConversation(convId, errorMsg);
+                    flog.warn('STREAMING', `SSE 意外断开，尝试从 JSONL 恢复`, { convId });
+                    fetchSession(convId, { limit: 50 }).then(result => {
+                      if (result.data?.messages && result.data.messages.length > 0) {
+                        const msgs: Message[] = result.data.messages
+                          .filter((m: any) => m.role !== 'toolResult')
+                          .map((m: any) => ({
+                            id: m.id! || Math.random().toString(36).slice(2),
+                            role: m.role as 'user' | 'assistant',
+                            content: m.content || '',
+                            thinking: m.thinking || '',
+                            timestamp: typeof m.timestamp === 'number' ? m.timestamp : Date.now(),
+                          }));
+                        setConversations((prev) =>
+                          prev.map((conv) => {
+                            if (conv.id !== convId) return conv;
+                            const priorMessages = conv.messages.filter((m) =>
+                              msgs.every((nm) => nm.id !== m.id)
+                            );
+                            return {
+                              ...conv,
+                              messages: [...priorMessages, ...msgs],
+                              updatedAt: Date.now(),
+                            };
+                          })
+                        );
+                        flog.info('STREAMING', `JSONL 恢复成功`, { convId, msgCount: msgs.length });
+                      }
+                    }).catch(() => {
+                      flog.error('STREAMING', `JSONL 恢复异常`, { convId });
+                    });
                     safeResolve();
                   }
                 },
