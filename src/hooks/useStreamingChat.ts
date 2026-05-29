@@ -837,6 +837,10 @@ export function useStreamingChat(
                   flog.debug('STREAMING', 'Agent 开始处理');
                   onStreamEvent?.("agent-start", convId);
                 },
+                // 心跳：服务端 30s 发送，重置空闲计时器防止长任务误杀
+                onHeartbeat: () => {
+                  resetIdleTimer();
+                },
                 onTurnStart: () => {
                   resetIdleTimer();
                   flog.debug('STREAMING', '新轮次开始');
