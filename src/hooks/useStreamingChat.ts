@@ -8,7 +8,7 @@ import { healthSSEClient } from "../services/healthSSEClient";
 import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd, terminalHistory } from "../services/shellEventBus";
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
-const MESSAGES_PAGE_SIZE = 5;
+const MESSAGES_PAGE_SIZE = 6;
 const BATCH_UPDATE_INTERVAL = 100;
 
 const DEFAULT_TIMEOUT_MS = 900_000;
