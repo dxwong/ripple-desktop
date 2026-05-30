@@ -162,6 +162,7 @@ export function MainApp() {
       broadcastToMobile("session-changed", newId, {
         title: conv?.title || "",
         cwd: conv?.cwd || "",
+        usage: chat.conversationUsageMap[newId] || null,
       });
       logger.info(`广播会话切换: ${prevId} → ${newId}`);
     }

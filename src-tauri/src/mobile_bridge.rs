@@ -13,9 +13,11 @@ const DEFAULT_PORT: u16 = 9876;
 const AGENT_URL: &str = "http://127.0.0.1:3002";
 const READ_TIMEOUT_SECS: u64 = 30;
 // 空闲超时（心跳计数）：手机端发消息后等待回复，超过此阈值认为连接已死
-// 每个心跳间隔 1 秒，故 RESPONSE_IDLE_MAX = 60 即 60 秒无事件则断开
-const RESPONSE_IDLE_MAX: u32 = 60;    // handle_chat_stream: 60秒无转发事件则断开
-const SUBSCRIBE_IDLE_MAX: u32 = 120;  // handle_bridge_subscribe: 120秒无任何事件则断开
+// 每个心跳间隔 1 秒
+// 注意：这些值必须 ≥ 手机端 SSEClient 的 idleTimeout（当前 1_800_000ms = 30分钟）
+// 否则 Bridge 提前切断 SSE 后，SSEClient 收不到 done 事件，按钮被误释放
+const RESPONSE_IDLE_MAX: u32 = 1800;  // handle_chat_stream: 1800秒=30分钟无转发事件则断开
+const SUBSCRIBE_IDLE_MAX: u32 = 1800; // handle_bridge_subscribe: 1800秒=30分钟无任何事件则断开
 
 // ── SSE 客户端连接 ──────────────────────────────────────────
 
@@ -627,7 +629,12 @@ fn handle_chat_stream(
 
         error_count += 1;
         if error_count > RESPONSE_IDLE_MAX {
-            // 60秒无真实事件，断开
+            // 超时断开前发送 error 事件，让手机端 SSEClient 触发 onError 而非 onDone
+            // 这样手机端可以进入恢复等待模式（F3），等待 Bridge 订阅推送 done 事件
+            write_sse_event(
+                stream,
+                &serde_json::json!({"type": "error", "error": "bridge-idle-timeout"}).to_string(),
+            );
             break;
         }
     }
@@ -707,6 +714,7 @@ fn handle_bridge_subscribe(
                     continue;
                 }
                 if event_json == "__done__" {
+                    // 正常结束时不发送额外事件
                     break;
                 }
                 if !write_sse_event(stream, &event_json) {
@@ -727,7 +735,7 @@ fn handle_bridge_subscribe(
 
         error_count += 1;
         if error_count > SUBSCRIBE_IDLE_MAX {
-            // 120秒无真实事件，断开（心跳不计）
+            // 1800秒无真实事件，断开（心跳不计）
             break;
         }
     }
