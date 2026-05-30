@@ -191,11 +191,12 @@ export function useStreamingChat(
         const last = msgs[msgs.length - 1];
 
         if (last && last.role === "assistant") {
-          if (textChunk) {
-            msgs[msgs.length - 1] = { ...last, content: last.content + textChunk };
-          }
-          if (thinkingChunk) {
-            msgs[msgs.length - 1] = { ...last, thinking: (last.thinking || "") + thinkingChunk };
+          if (textChunk || thinkingChunk) {
+            msgs[msgs.length - 1] = {
+              ...last,
+              ...(textChunk ? { content: last.content + textChunk } : {}),
+              ...(thinkingChunk ? { thinking: (last.thinking || "") + thinkingChunk } : {}),
+            };
           }
         } else if (textChunk || thinkingChunk) {
           msgs.push({
@@ -353,7 +354,7 @@ export function useStreamingChat(
           }
           return {
             ...c,
-            messages: (sessionData.messages || []) as Message[],
+            messages: ((sessionData.messages || []).filter((m: any) => m.role !== 'toolResult')) as Message[],
             mode: inferredMode,
             cwd: sessionData.cwd || c.cwd,
           };
@@ -392,7 +393,7 @@ export function useStreamingChat(
         return;
       }
 
-      const olderMessages = (result.data.messages || []) as Message[];
+      const olderMessages = ((result.data.messages || []).filter((m: any) => m.role !== 'toolResult')) as Message[];
       if (olderMessages.length === 0) {
         setHasMoreMessages((prev) => ({ ...prev, [convId]: false }));
         return;
@@ -886,7 +887,7 @@ export function useStreamingChat(
                   onStreamEvent?.("message-end", convId, { role, stopReason });
                   // stopReason=length 表示 AI 回复因 Token 限制被截断，追加提示
                   if (role === 'assistant' && stopReason === 'length') {
-                    const hint = '\n\n*（回复因长度限制被截断）*';
+                    const hint = '\n\n*（大模型API输出长度已达上限，输出已停止。）*';
                     setConversations((prev) =>
                       prev.map((conv) => {
                         if (conv.id !== convId) return conv;
