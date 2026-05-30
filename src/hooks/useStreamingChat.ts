@@ -9,7 +9,7 @@ import { emitShellCommandStart, emitShellCommandOutput, emitShellCommandEnd, ter
 
 const genId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
 const MESSAGES_PAGE_SIZE = 5;
-const BATCH_UPDATE_INTERVAL = 50;
+const BATCH_UPDATE_INTERVAL = 100;
 
 const DEFAULT_TIMEOUT_MS = 900_000;
 const CODE_TASK_TIMEOUT_MS = 900_000;
@@ -880,10 +880,25 @@ export function useStreamingChat(
                   flog.debug('STREAMING', `消息开始`, { role });
                   onStreamEvent?.("message-start", convId, { role });
                 },
-                onMessageEnd: (role) => {
+                onMessageEnd: (role, stopReason) => {
                   resetIdleTimer();
-                  flog.debug('STREAMING', `消息结束`, { role });
-                  onStreamEvent?.("message-end", convId, { role });
+                  flog.debug('STREAMING', `消息结束`, { role, stopReason });
+                  onStreamEvent?.("message-end", convId, { role, stopReason });
+                  // stopReason=length 表示 AI 回复因 Token 限制被截断，追加提示
+                  if (role === 'assistant' && stopReason === 'length') {
+                    const hint = '\n\n*（回复因长度限制被截断）*';
+                    setConversations((prev) =>
+                      prev.map((conv) => {
+                        if (conv.id !== convId) return conv;
+                        const msgs = [...conv.messages];
+                        const last = msgs[msgs.length - 1];
+                        if (last && last.role === 'assistant') {
+                          msgs[msgs.length - 1] = { ...last, content: last.content + hint };
+                        }
+                        return { ...conv, messages: msgs, updatedAt: Date.now() };
+                      })
+                    );
+                  }
                 },
                 onToolUpdate: (toolCallId, toolName, output) => {
                   resetIdleTimer();
