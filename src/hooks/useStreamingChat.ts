@@ -940,6 +940,13 @@ export function useStreamingChat(
                     };
                   });
                 },
+                onCompact: (data) => {
+                  resetIdleTimer();
+                  flog.info('STREAMING', `上下文已自动压缩`, { convId, tokensBefore: data.tokensBefore });
+                  onStreamEvent?.("compact", convId, data);
+                  const compactMsg = `\n\n__RIPPLE_INFO__\n📝 上下文已自动压缩（压缩前约 ${(data.tokensBefore || 0).toLocaleString()} tokens）\n__RIPPLE_INFO_END__\n\n`;
+                  appendToConversation(convId, compactMsg);
+                },
                 onDone: () => {
                   if (idleTimer) clearTimeout(idleTimer);
                   flog.info('STREAMING', 'SSE 流正常结束');
