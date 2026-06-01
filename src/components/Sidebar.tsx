@@ -381,7 +381,7 @@ function Sidebar({
                       <Pencil size={12} />
                     </button>
                     <button
-                      onClick={() => onDeleteConversation(conv.id)}
+                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
                       className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
                       title="删除对话"
                     >
