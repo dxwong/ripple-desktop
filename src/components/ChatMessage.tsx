@@ -1,9 +1,9 @@
 import { memo, useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, Undo2 } from "lucide-react";
+import { User, Sparkles, Brain, ChevronDown, ChevronRight, Copy, Check, RefreshCw, Undo2, XCircle, CheckCircle2, AlertTriangle } from "lucide-react";
 import { marked } from "marked";
-import { Message } from "../types";
+import { Message, ToolCallResult } from "../types";
 import CodeEditor from "./CodeEditor";
 import { ToolCallCard } from "./ToolCallCard";
 import EditBlockPreview from "./EditBlockPreview";
@@ -38,6 +38,15 @@ function formatTimestamp(ts: number): string {
   return `${Y}/${M}/${D} ${h}:${m}`;
 }
 
+/** 格式化执行耗时（毫秒） */
+export function formatDuration(start?: number, end?: number): string {
+  if (!start) return "";
+  const ms = (end ?? Date.now()) - start;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(0)}s`;
+}
+
 interface ChatMessageProps {
   message: Message;
   isStreaming?: boolean;
@@ -48,6 +57,311 @@ interface ChatMessageProps {
   onRegenerate?: () => void;
   /** 回滚到该消息（撤销后续 AI 操作） */
   onRollback?: (messageId: string) => void;
+}
+
+/**
+ * ⭐ 专家调用卡片（Phase 1: 子代理执行可视化）
+ *
+ * 用于在聊天消息中展示 invoke_expert 工具调用：
+ * - 进行中：默认展开，蓝色呼吸点 + 实时耗时
+ * - 已完成/失败：默认折叠，绿色✅ / 红色❌ + 总耗时
+ * - 展示专家名、任务描述、输出内容或错误
+ *
+ * 导出供测试使用（生产环境从 ChatMessage 内部引用）。
+ */
+export function InvokeExpertCard({ toolCall }: { toolCall: ToolCallResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const [liveDuration, setLiveDuration] = useState("");
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
+
+  const isRunning = toolCall.status === "approved";
+  const isFinished = toolCall.status === "success" || toolCall.status === "error";
+
+  // 进行中默认展开；已完成/失败默认折叠（用户可手动切换）
+  const effectiveExpanded = isRunning || expanded;
+
+  // 进行中时实时刷新耗时
+  useEffect(() => {
+    if (!isRunning || !toolCall.startTime) {
+      setLiveDuration("");
+      return;
+    }
+    const update = () => setLiveDuration(formatDuration(toolCall.startTime));
+    update();
+    timerRef.current = setInterval(update, 200);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isRunning, toolCall.startTime]);
+
+  const finalDuration =
+    isFinished && toolCall.startTime
+      ? formatDuration(toolCall.startTime, toolCall.endTime)
+      : "";
+  const durationText = isRunning ? liveDuration : finalDuration;
+
+  const expertName = (toolCall.args.expertName as string) || "未知专家";
+  const task = (toolCall.args.task as string) || "";
+
+  return (
+    <div className="rounded-xl border border-border/60 dark:border-border-dark/60 overflow-hidden mt-1.5">
+      {/* 标题栏 */}
+      <div
+        className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none hover:bg-black/[0.02] dark:hover:bg-white/[0.03] transition-colors"
+        onClick={() => !isRunning && setExpanded(!expanded)}
+      >
+        {/* 专家图标 */}
+        <div className="w-6 h-6 rounded-md bg-accent/10 text-accent flex items-center justify-center shrink-0">
+          <Brain size={13} />
+        </div>
+
+        {/* 专家名 + 任务 */}
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-content dark:text-content-dark leading-tight">
+            调用专家：{expertName}
+          </div>
+          {task && (
+            <div
+              className="text-[11px] text-content-secondary dark:text-content-secondary-dark mt-0.5 truncate"
+              title={task}
+            >
+              {task}
+            </div>
+          )}
+        </div>
+
+        {/* 状态 + 耗时 + 折叠箭头 */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isRunning ? (
+            <>
+              <span className="inline-flex rounded-full h-2 w-2 bg-blue-500 animate-breath" />
+              <span className="text-[11px] text-blue-500 font-medium tabular-nums">
+                {durationText}
+              </span>
+            </>
+          ) : toolCall.status === "error" ? (
+            <>
+              <XCircle size={11} className="text-rose-500" />
+              <span className="text-[11px] text-rose-500 font-medium">
+                失败 · {durationText}
+              </span>
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={11} className="text-green-500" />
+              <span className="text-[11px] text-green-500 font-medium">{durationText}</span>
+            </>
+          )}
+          {!isRunning && (
+            effectiveExpanded ? (
+              <ChevronDown size={12} className="text-content-tertiary/50 ml-0.5" />
+            ) : (
+              <ChevronRight size={12} className="text-content-tertiary/50 ml-0.5" />
+            )
+          )}
+        </div>
+      </div>
+
+      {/* 展开内容 */}
+      {effectiveExpanded && (
+        <div className="px-3 py-2.5 border-t border-border/30 dark:border-border-dark/30">
+          {toolCall.error ? (
+            <>
+              <div className="flex items-center gap-1 text-[10px] text-rose-500/60 dark:text-rose-400/60 mb-1">
+                <AlertTriangle size={10} />
+                错误
+              </div>
+              <pre className="text-[11px] font-mono bg-rose-500/[0.04] dark:bg-rose-400/[0.04] rounded-lg p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-rose-500/70 dark:text-rose-400/70 leading-relaxed">
+                {toolCall.error}
+              </pre>
+            </>
+          ) : toolCall.output ? (
+            <pre className="text-[11px] font-mono bg-black/[0.02] dark:bg-white/[0.02] rounded-lg p-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-content-secondary dark:text-content-secondary-dark leading-relaxed">
+              {toolCall.output}
+            </pre>
+          ) : isRunning ? (
+            <div className="flex items-center gap-2 text-[11px] text-content-tertiary dark:text-content-tertiary-dark italic">
+              <span className="inline-flex rounded-full h-1.5 w-1.5 bg-blue-500 animate-pulse" />
+              正在执行...
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ⭐ 编排结果卡片（Phase 1: orchestrate 工具的 fallback 渲染）
+ *
+ * 用途说明：
+ * - `orchestrate` 实际上不是 AI 可调用的工具，而是后端 HTTP API（POST /api/orchestrate）
+ * - AI 在对话中只能通过多次 `invoke_expert` 顺序调用实现编排效果
+ * - 本卡片作为防御性 fallback：如果未来 orchestrate 变成 AI 工具，或前端以其他方式注入
+ *   了 orchestrate 工具调用，本卡片会优雅地展示其结果，不会出现空白
+ * - 状态、计时、折叠逻辑与 InvokeExpertCard 一致；内容区会尝试解析 JSON 渲染结构化视图，
+ *   解析失败时回退到原始文本
+ *
+ * 导出供测试使用（生产环境从 ChatMessage 内部引用）。
+ */
+export function OrchestrationResultCard({ toolCall }: { toolCall: ToolCallResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const [liveDuration, setLiveDuration] = useState("");
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
+
+  const isRunning = toolCall.status === "approved";
+  const isFinished = toolCall.status === "success" || toolCall.status === "error";
+
+  // 编排结果卡片：始终默认折叠，用户可手动展开
+  const effectiveExpanded = expanded;
+
+  // 进行中时实时刷新耗时
+  useEffect(() => {
+    if (!isRunning || !toolCall.startTime) {
+      setLiveDuration("");
+      return;
+    }
+    const update = () => setLiveDuration(formatDuration(toolCall.startTime));
+    update();
+    timerRef.current = setInterval(update, 200);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isRunning, toolCall.startTime]);
+
+  const finalDuration =
+    isFinished && toolCall.startTime
+      ? formatDuration(toolCall.startTime, toolCall.endTime)
+      : "";
+  const durationText = isRunning ? liveDuration : finalDuration;
+
+  // 尝试解析 output 为 JSON（结构化编排结果）
+  let parsed: any = null;
+  if (toolCall.output) {
+    try {
+      parsed = JSON.parse(toolCall.output);
+    } catch {
+      parsed = null;
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border/60 dark:border-border-dark/60 overflow-hidden mt-1.5">
+      {/* 标题栏 */}
+      <div
+        className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none hover:bg-black/[0.02] dark:hover:bg-white/[0.03] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {/* 总管家图标 */}
+        <div className="w-6 h-6 rounded-md bg-accent/10 text-accent flex items-center justify-center shrink-0">
+          <Brain size={13} />
+        </div>
+
+        {/* 标题 + 摘要 */}
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-content dark:text-content-dark leading-tight">
+            总管家编排结果
+          </div>
+          <div className="text-[11px] text-content-secondary dark:text-content-secondary-dark mt-0.5 truncate">
+            {parsed && Array.isArray(parsed.results)
+              ? `${parsed.results.length} 位专家参与`
+              : "总管家调度多个专家完成任务"}
+          </div>
+        </div>
+
+        {/* 状态 + 耗时 + 折叠箭头 */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isRunning ? (
+            <>
+              <span className="inline-flex rounded-full h-2 w-2 bg-blue-500 animate-breath" />
+              <span className="text-[11px] text-blue-500 font-medium tabular-nums">
+                {durationText}
+              </span>
+            </>
+          ) : toolCall.status === "error" ? (
+            <>
+              <XCircle size={11} className="text-rose-500" />
+              <span className="text-[11px] text-rose-500 font-medium">
+                失败 · {durationText}
+              </span>
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={11} className="text-green-500" />
+              <span className="text-[11px] text-green-500 font-medium">{durationText}</span>
+            </>
+          )}
+          {effectiveExpanded ? (
+            <ChevronDown size={12} className="text-content-tertiary/50 ml-0.5" />
+          ) : (
+            <ChevronRight size={12} className="text-content-tertiary/50 ml-0.5" />
+          )}
+        </div>
+      </div>
+
+      {/* 展开内容 */}
+      {effectiveExpanded && (
+        <div className="px-3 py-2.5 border-t border-border/30 dark:border-border-dark/30 space-y-2">
+          {toolCall.error ? (
+            <>
+              <div className="flex items-center gap-1 text-[10px] text-rose-500/60 dark:text-rose-400/60">
+                <AlertTriangle size={10} />
+                错误
+              </div>
+              <pre className="text-[11px] font-mono bg-rose-500/[0.04] dark:bg-rose-400/[0.04] rounded-lg p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-rose-500/70 dark:text-rose-400/70 leading-relaxed">
+                {toolCall.error}
+              </pre>
+            </>
+          ) : parsed && Array.isArray(parsed.results) ? (
+            /* 结构化渲染（如果 output 是 JSON） */
+            <>
+              <div className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark">
+                各专家结果：
+              </div>
+              {parsed.results.map((r: any, i: number) => (
+                <div
+                  key={i}
+                  className="text-[12px] text-content-secondary dark:text-content-secondary-dark flex items-start gap-1.5"
+                >
+                  {r.success ? (
+                    <CheckCircle2 size={11} className="text-green-500 mt-0.5 shrink-0" />
+                  ) : (
+                    <XCircle size={11} className="text-rose-500 mt-0.5 shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-content dark:text-content-dark">
+                      {r.expertName || `专家 ${i + 1}`}
+                    </span>
+                    {typeof r.durationMs === "number" ? (
+                      <span className="ml-2 text-content-tertiary dark:text-content-tertiary-dark tabular-nums">
+                        {(r.durationMs / 1000).toFixed(1)}s
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+              {parsed.summary && (
+                <div className="pt-2 border-t border-border/30 dark:border-border-dark/30 text-[12px] text-content-secondary dark:text-content-secondary-dark leading-relaxed">
+                  <span className="font-medium text-content dark:text-content-dark">总管家汇总：</span>
+                  {parsed.summary}
+                </div>
+              )}
+            </>
+          ) : toolCall.output ? (
+            /* 原始文本回退 */
+            <pre className="text-[11px] font-mono bg-black/[0.02] dark:bg-white/[0.02] rounded-lg p-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-content-secondary dark:text-content-secondary-dark leading-relaxed">
+              {toolCall.output}
+            </pre>
+          ) : isRunning ? (
+            <div className="flex items-center gap-2 text-[11px] text-content-tertiary dark:text-content-tertiary-dark italic">
+              <span className="inline-flex rounded-full h-1.5 w-1.5 bg-blue-500 animate-pulse" />
+              正在执行...
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -230,12 +544,32 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
         {/* 工具调用卡片（在思考之后、文本之前，默认折叠） */}
         {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-2">
-            {message.toolCalls.map((toolCall) => (
-              <ToolCallCard
-                key={toolCall.toolCallId}
-                toolCall={toolCall}
-              />
-            ))}
+            {message.toolCalls.map((toolCall) => {
+              // ⭐ Phase 1: invoke_expert 走专用专家调用卡片
+              if (toolCall.toolName === "invoke_expert") {
+                return (
+                  <InvokeExpertCard
+                    key={toolCall.toolCallId}
+                    toolCall={toolCall}
+                  />
+                );
+              }
+              // ⭐ Phase 1: orchestrate 走专用编排结果卡片（防御性 fallback）
+              if (toolCall.toolName === "orchestrate") {
+                return (
+                  <OrchestrationResultCard
+                    key={toolCall.toolCallId}
+                    toolCall={toolCall}
+                  />
+                );
+              }
+              return (
+                <ToolCallCard
+                  key={toolCall.toolCallId}
+                  toolCall={toolCall}
+                />
+              );
+            })}
           </div>
         )}
 
