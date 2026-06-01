@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage } from "../types";
+import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage, AppSettings } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint, copySession } from "../services/api";
 import { useStore, syncStore } from "./useStore";
@@ -125,6 +125,7 @@ export function useStreamingChat(
   onStreamEvent?: (eventType: string, sessionId: string, data?: Record<string, unknown>) => void,
   onLog?: (message: string) => void,  // 可选：回调日志到调用方（用于磁盘日志）
   onConversationsChanged?: () => void, // 可选：对话列表变更时通知对方刷新
+  settings?: AppSettings, // 可选：读取 riskManagement 配置
 ) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
@@ -680,6 +681,16 @@ export function useStreamingChat(
               cwd: effectiveCwd,
               title: currentConv?.title,
               requestId,
+              // v1.1: 传递风险管理配置给后端
+              riskManagement: settings?.riskManagement ? {
+                commandWhitelistEnabled: settings.riskManagement.commandWhitelistEnabled,
+                whitelist: settings.riskManagement.whitelist,
+                pathRestriction: {
+                  enabled: settings.riskManagement.pathRestriction.enabled,
+                  allowedDir: settings.riskManagement.pathRestriction.allowedDir || effectiveCwd,
+                  allowReadOutside: settings.riskManagement.pathRestriction.allowReadOutside,
+                },
+              } : undefined,
             };
             flog.info('STREAMING', `发送到后端的参数`, {
               sessionId: backendParams.sessionId,

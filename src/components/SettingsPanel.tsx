@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import {
   X, Key, Globe, Cpu, Eye, EyeOff, Check, RefreshCw,
   Server, Palette, Trash2, Plus, Edit3, Save, Loader2, Smartphone,
+  Shield, ShieldCheck, ShieldOff, FolderOpen,
 } from "lucide-react";
-import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider, PermissionMode } from "../types";
-import { PERMISSION_MODES } from "../types";
+import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider, PermissionMode, WhitelistEntry } from "../types";
+import { PERMISSION_MODES, DEFAULT_WHITELIST } from "../types";
 import { testConnection } from "../services/api";
 
 interface SettingsPanelProps {
@@ -29,6 +30,7 @@ const PROVIDERS: { value: ApiProvider; label: string; endpoint: string; model: s
 /** 导航项 */
 const NAV_ITEMS = [
   { key: "api", label: "API 配置", icon: Server },
+  { key: "risk", label: "风险控制", icon: Shield },
   { key: "general", label: "通用", icon: Palette },
 ];
 
@@ -435,6 +437,201 @@ function SettingsPanel({
                 </div>
               )}
 
+              {/* ===== 风险控制 ===== */}
+              {activeTab === "risk" && (
+                <div className="space-y-5 max-w-lg">
+                  {/* 命令白名单 */}
+                  <section>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="flex items-center gap-1.5 text-sm font-medium text-content-secondary dark:text-content-secondary-dark">
+                        <ShieldCheck size={15} />
+                        命令白名单
+                      </label>
+                      <button
+                        onClick={() => {
+                          const current = settings.riskManagement;
+                          onUpdate({
+                            riskManagement: {
+                              ...current,
+                              commandWhitelistEnabled: !current.commandWhitelistEnabled,
+                            },
+                          });
+                        }}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          settings.riskManagement.commandWhitelistEnabled
+                            ? "bg-accent"
+                            : "bg-gray-300 dark:bg-gray-600"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            settings.riskManagement.commandWhitelistEnabled
+                              ? "translate-x-4.5 ml-0.5"
+                              : "translate-x-0.5"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mb-3">
+                      开启后，AI 只能执行白名单中的 shell 命令。不在白名单的命令会被拒绝执行。
+                    </p>
+
+                    {/* 白名单命令列表 */}
+                    {settings.riskManagement.commandWhitelistEnabled && (
+                      <div className="space-y-1 max-h-48 overflow-y-auto border border-border dark:border-border-dark rounded-xl p-2">
+                        {settings.riskManagement.whitelist.map((entry) => (
+                          <label
+                            key={entry.command}
+                            className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-black/[0.02] dark:hover:bg-white/[0.02] cursor-pointer text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={entry.enabled}
+                              onChange={() => {
+                                const current = settings.riskManagement;
+                                onUpdate({
+                                  riskManagement: {
+                                    ...current,
+                                    whitelist: current.whitelist.map((w) =>
+                                      w.command === entry.command
+                                        ? { ...w, enabled: !w.enabled }
+                                        : w
+                                    ),
+                                  },
+                                });
+                              }}
+                              className="rounded border-gray-300 text-accent focus:ring-accent/30"
+                            />
+                            <span className="font-mono text-xs text-accent w-16 shrink-0">{entry.command}</span>
+                            <span className="text-content-secondary dark:text-content-secondary-dark">{entry.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <hr className="border-border dark:border-border-dark" />
+
+                  {/* 文件系统限制 */}
+                  <section>
+                    <label className="flex items-center gap-1.5 text-sm font-medium mb-3 text-content-secondary dark:text-content-secondary-dark">
+                      <FolderOpen size={15} />
+                      文件系统路径限制
+                    </label>
+
+                    {/* 启用限制 */}
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm">限制到工作目录</span>
+                      <button
+                        onClick={() => {
+                          const current = settings.riskManagement;
+                          onUpdate({
+                            riskManagement: {
+                              ...current,
+                              pathRestriction: {
+                                ...current.pathRestriction,
+                                enabled: !current.pathRestriction.enabled,
+                              },
+                            },
+                          });
+                        }}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          settings.riskManagement.pathRestriction.enabled
+                            ? "bg-accent"
+                            : "bg-gray-300 dark:bg-gray-600"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            settings.riskManagement.pathRestriction.enabled
+                              ? "translate-x-4.5 ml-0.5"
+                              : "translate-x-0.5"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mb-3">
+                      AI 只能操作当前项目工作目录下的文件（通过 cwd 指定）。
+                    </p>
+
+                    {/* 允许读取外部文件（仅当路径限制启用时显示） */}
+                    {settings.riskManagement.pathRestriction.enabled && (
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm">允许读取外部文件</span>
+                        <button
+                          onClick={() => {
+                            const current = settings.riskManagement;
+                            onUpdate({
+                              riskManagement: {
+                                ...current,
+                                pathRestriction: {
+                                  ...current.pathRestriction,
+                                  allowReadOutside: !current.pathRestriction.allowReadOutside,
+                                },
+                              },
+                            });
+                          }}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                            settings.riskManagement.pathRestriction.allowReadOutside
+                              ? "bg-accent"
+                              : "bg-gray-300 dark:bg-gray-600"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                              settings.riskManagement.pathRestriction.allowReadOutside
+                                ? "translate-x-4.5 ml-0.5"
+                                : "translate-x-0.5"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark">
+                      开启后 AI 可以读取工作目录外的文件，但不能写入。关闭后 AI 只能访问工作目录内的文件。
+                    </p>
+                  </section>
+
+                  <hr className="border-border dark:border-border-dark" />
+
+                  {/* 权限模式 */}
+                  <section>
+                    <label className="flex items-center gap-1.5 text-sm font-medium mb-3 text-content-secondary dark:text-content-secondary-dark">
+                      <Shield size={15} />
+                      权限模式
+                    </label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {PERMISSION_MODES.map((mode) => (
+                        <button
+                          key={mode.value}
+                          onClick={() => onUpdate({ permissionMode: mode.value })}
+                          className={`text-left px-4 py-3 rounded-xl border transition-all ${
+                            settings.permissionMode === mode.value
+                              ? "border-accent bg-accent/5 dark:bg-accent/10"
+                              : "border-border dark:border-border-dark hover:border-accent/30 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">
+                              {mode.value === "auto" && <ShieldOff size={14} className="inline mr-1.5" />}
+                              {mode.value === "confirm" && <Shield size={14} className="inline mr-1.5" />}
+                              {mode.value === "read-only" && <ShieldCheck size={14} className="inline mr-1.5" />}
+                              {mode.label}
+                            </span>
+                            {settings.permissionMode === mode.value && (
+                              <Check size={15} className="text-accent" />
+                            )}
+                          </div>
+                          <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1">
+                            {mode.description}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              )}
+
               {/* ===== 通用 ===== */}
               {activeTab === "general" && (
                 <div className="space-y-4 max-w-lg">
@@ -493,40 +690,6 @@ function SettingsPanel({
                       桌面端内嵌 HTTP 服务端口，手机端通过此端口连接桌面端进行交互。
                       修改后需重启应用生效。手机端访问地址示例：<code className="bg-black/[0.04] dark:bg-white/[0.06] px-1 py-0.5 rounded text-[11px]">http://192.168.1.x:{settings.mobileBridgePort || 9876}</code>
                     </p>
-                  </section>
-
-                  <hr className="border-border dark:border-border-dark" />
-
-                  {/* 权限设置 */}
-                  <section>
-                    <label className="text-sm font-medium text-content-secondary dark:text-content-secondary-dark mb-3 block">
-                      操作权限
-                    </label>
-                    <div className="grid grid-cols-1 gap-2">
-                      {PERMISSION_MODES.map((mode) => (
-                        <button
-                          key={mode.value}
-                          onClick={() => onUpdate({ permissionMode: mode.value })}
-                          className={`text-left px-4 py-3 rounded-xl border transition-all ${
-                            settings.permissionMode === mode.value
-                              ? "border-accent bg-accent/5 dark:bg-accent/10"
-                              : "border-border dark:border-border-dark hover:border-accent/30 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium">
-                              {mode.label}
-                            </span>
-                            {settings.permissionMode === mode.value && (
-                              <Check size={15} className="text-accent" />
-                            )}
-                          </div>
-                          <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark mt-1">
-                            {mode.description}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
                   </section>
 
                   <hr className="border-border dark:border-border-dark" />

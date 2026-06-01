@@ -85,6 +85,7 @@ export function MainApp() {
       broadcastToMobile("conversations-changed", convId || "", { refresh: true });
       debugLog(`广播对话列表变更通知: convId=${convId}`);
     },
+    settings,  // v1.1: 传递风险配置到 SSE 请求
   );
 
   // 当 gateway URL 变化时，更新所有服务

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useStore } from "./useStore";
 import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
+import { DEFAULT_RISK_CONFIG } from "../types";
 
 /** 生成唯一 ID */
 const genId = () => Math.random().toString(36).substring(2, 10);
@@ -28,6 +29,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   permissionMode: "confirm",
   agentGatewayUrl: "http://localhost:3002",
   mobileBridgePort: 9876,
+  riskManagement: DEFAULT_RISK_CONFIG,
 };
 
 /** 设置存储键名 */
