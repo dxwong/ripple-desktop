@@ -12,7 +12,7 @@ class HealthSSEClient {
   private retryCount = 0;
   private readonly BASE_RECONNECT_DELAY = 1000;
   private readonly MAX_RECONNECT_DELAY = 30000;
-  private baseUrl = "http://localhost:3002";
+  private baseUrl = "http://192.168.1.10:3002";
 
   setBaseUrl(url: string) {
     this.baseUrl = url;
