@@ -982,6 +982,7 @@ export function useStreamingChat(
                             content: m.content || '',
                             thinking: m.thinking || '',
                             timestamp: typeof m.timestamp === 'number' ? m.timestamp : Date.now(),
+                            toolCalls: m.toolCalls,
                           }));
                         setConversations((prev) =>
                           prev.map((conv) => {

@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Pencil,
   Copy,
+  Code,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Conversation, ChatMode } from "../types";
@@ -95,11 +96,23 @@ function Sidebar({
   // 普通对话 = 无 cwd 的对话
   const normalConversations = conversations.filter(c => !c.cwd);
 
-  // 按 cwd 分组：{ [cwd]: Conversation[] }
+  // 归一化路径：Windows 路径不区分大小写，处理尾部反斜杠差异
+  const normalizePath = (p: string) => p.toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '');
+
+  // 按 cwd 分组
   const groupedProjects = projectConversations.reduce<Record<string, Conversation[]>>((acc, conv) => {
-    const dir = conv.cwd!;
-    if (!acc[dir]) acc[dir] = [];
-    acc[dir].push(conv);
+    const rawDir = conv.cwd!;
+    const normalized = normalizePath(rawDir);
+    if (!acc[normalized]) {
+      acc[normalized] = [];
+    }
+    acc[normalized].push(conv);
+    return acc;
+  }, {});
+  // 保留原始路径用于显示（取该分组中第一个对话的 cwd）
+  const originalDirMap = projectConversations.reduce<Record<string, string>>((acc, conv) => {
+    const normalized = normalizePath(conv.cwd!);
+    if (!acc[normalized]) acc[normalized] = conv.cwd!;
     return acc;
   }, {});
   // 按目录路径排序
@@ -236,34 +249,43 @@ function Sidebar({
               <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark">暂无项目</p>
             </div>
           ) : (
-            sortedDirs.map((dir) => {
-              const convs = groupedProjects[dir];
-              const isCollapsed = folderCollapsedMap[dir] !== false; // 默认展开
+            sortedDirs.map((normalizedDir) => {
+              const convs = groupedProjects[normalizedDir];
+              const dir = originalDirMap[normalizedDir] || normalizedDir;
+              const isCollapsed = folderCollapsedMap[normalizedDir] !== false; // 默认展开
               const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || dir;
 
               return (
-                <div key={dir}>
+                <div key={normalizedDir}>
                   {/* 文件夹头 */}
                   <button
-                    onClick={() => toggleFolder(dir)}
-                    className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg
-                               hover:bg-black/[0.02] dark:hover:bg-white/[0.02]
-                               transition-colors text-xs text-content-tertiary dark:text-content-tertiary-dark group/folder"
+                    onClick={() => toggleFolder(normalizedDir)}
+                    className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors text-xs group/folder ${
+                      isCollapsed
+                        ? "text-content-tertiary/70 dark:text-content-tertiary-dark/70"
+                        : "text-content-tertiary dark:text-content-tertiary-dark"
+                    }`}
                   >
                     {isCollapsed ? (
-                      <ChevronRight size={12} className="shrink-0" />
+                      <ChevronRight size={11} className="shrink-0 opacity-50" />
                     ) : (
-                      <ChevronDown size={12} className="shrink-0" />
+                      <ChevronDown size={11} className="shrink-0 opacity-70" />
                     )}
                     {isCollapsed ? (
-                      <Folder size={12} className="shrink-0 text-accent/50" />
+                      <Folder size={11} className="shrink-0 text-accent/40" />
                     ) : (
-                      <FolderOpen size={12} className="shrink-0 text-accent/60" />
+                      <FolderOpen size={11} className="shrink-0 text-accent/70" />
                     )}
-                    <span className="flex-1 text-left truncate font-medium text-content dark:text-content-dark text-xs">
+                    <span className={`flex-1 text-left truncate text-xs ${
+                      isCollapsed
+                        ? "font-normal text-content/60 dark:text-content-dark/60"
+                        : "font-semibold text-content dark:text-content-dark"
+                    }`}>
                       {folderName}
                     </span>
-                    <span className="text-[10px] opacity-60">{convs.length}</span>
+                    {!isCollapsed && (
+                      <span className="text-[10px] text-content-tertiary/50 dark:text-content-tertiary-dark/50">{convs.length}</span>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleNewConvInFolder(dir); }}
                       className="opacity-0 group-hover/folder:opacity-60 hover:!opacity-100 transition-opacity !p-0.5"
@@ -272,11 +294,13 @@ function Sidebar({
                       <Plus size={11} />
                     </button>
                   </button>
-                  {/* 文件夹路径 */}
-                  <div className="px-7 pb-0.5 text-[10px] text-content-tertiary/50 dark:text-content-tertiary-dark/50 truncate"
-                       title={dir}>
-                    {dir}
-                  </div>
+                  {/* 文件夹路径（仅展开时显示） */}
+                  {!isCollapsed && (
+                    <div className="px-7 pb-0.5 text-[10px] text-content-tertiary/40 dark:text-content-tertiary-dark/40 truncate"
+                         title={dir}>
+                      {dir}
+                    </div>
+                  )}
                   {/* 对话列表 */}
                   {!isCollapsed && (
                     <div className="ml-2 space-y-0.5 mt-0.5 mb-1">
@@ -290,6 +314,7 @@ function Sidebar({
                                 : "sidebar-btn"
                             }`}
                           >
+                            <Code size={13} className="shrink-0 opacity-40 group-hover:opacity-60 transition-opacity" />
                             <div className="flex-1 min-w-0 overflow-hidden">
                               {renamingId === conv.id ? (
                                 <input
