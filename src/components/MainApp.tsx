@@ -4,7 +4,7 @@ import ChatView from "./ChatView";
 import FileTree from "./FileTree";
 import FilePreview from "./FilePreview";
 import CheckpointPanel from "./CheckpointPanel";
-import SettingsPanel from "./SettingsPanel";
+import { SettingsPage } from "./SettingsPage";
 import LogPanel from "./LogPanel";
 import { StartupLoading } from "./StartupLoading";
 import { ErrorModal } from "./ErrorModal";
@@ -47,8 +47,7 @@ export function MainApp() {
   const [startupState, setStartupState] = useState<"loading" | "error" | "ready">("loading");
   const [startupMessage, setStartupMessage] = useState("正在加载配置，请稍后...");
   const [errorMessage, setErrorMessage] = useState("");
-  
-  const [showSettings, setShowSettings] = useState(false);
+
   const [backendModels, setBackendModels] = useState<{ id: string; name: string }[]>([]);
   // 手机端连接状态
   const [mobileConnected, setMobileConnected] = useState(false);
@@ -534,9 +533,9 @@ export function MainApp() {
   }, []);
 
   // ========== v2.0 视图路由 ==========
-  // 当前主区显示的页面：chat / experts / memory
-  const [currentView, setCurrentView] = useState<"chat" | "experts" | "memory">(() =>
-    syncStore.getItem("current-view", "chat") as "chat" | "experts" | "memory"
+  // 当前主区显示的页面：chat / experts / memory / settings
+  const [currentView, setCurrentView] = useState<"chat" | "experts" | "memory" | "settings">(() =>
+    syncStore.getItem("current-view", "chat") as "chat" | "experts" | "memory" | "settings"
   );
 
   // 持久化当前视图（用于刷新后恢复）
@@ -544,8 +543,8 @@ export function MainApp() {
     syncStore.setItem("current-view", currentView);
   }, [currentView]);
 
-  // 跳转到非对话页（专家 / 记忆）
-  const handleNavigate = useCallback((view: "experts" | "memory") => {
+  // 跳转到非对话页（专家 / 记忆 / 设置）
+  const handleNavigate = useCallback((view: "experts" | "memory" | "settings") => {
     setCurrentView(view);
     // 移动端：跳转后关闭 drawer
     if (isMobile) setSidebarOpen(false);
@@ -585,7 +584,7 @@ export function MainApp() {
               onNewConversation={handleNewConversation}
               onSwitchConversation={handleSwitchConversation}
               onDeleteConversation={chat.deleteConversation}
-              onOpenSettings={() => setShowSettings(true)}
+              onOpenSettings={() => handleNavigate("settings")}
               onNewProjectConversation={handleNewProjectConversation}
               onRenameConversation={chat.renameConversation}
               onCopyConversation={chat.copyConversation}
@@ -672,8 +671,18 @@ export function MainApp() {
                 <ExpertsPage
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                 />
-              ) : (
+              ) : currentView === "memory" ? (
                 <MemoryPage
+                  onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                />
+              ) : (
+                <SettingsPage
+                  settings={settings}
+                  onUpdate={updateSettings}
+                  onReset={resetSettings}
+                  onSaveModelConfig={saveModelConfig}
+                  onDeleteModelConfig={deleteModelConfig}
+                  onSetActiveModel={setActiveModel}
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                 />
               )}
@@ -691,19 +700,6 @@ export function MainApp() {
 
       {/* 底部日志面板 */}
       <LogPanel />
-
-      {/* 设置面板 */}
-            {showSettings && (
-              <SettingsPanel
-                settings={settings}
-                onUpdate={updateSettings}
-                onReset={resetSettings}
-                onClose={() => setShowSettings(false)}
-                onSaveModelConfig={saveModelConfig}
-                onDeleteModelConfig={deleteModelConfig}
-                onSetActiveModel={setActiveModel}
-              />
-            )}
           </div>
         )}
       </div>

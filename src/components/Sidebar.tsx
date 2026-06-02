@@ -57,9 +57,9 @@ interface SidebarProps {
 
   // ===== v2.0 新增：视图路由 =====
   /** 当前激活的视图（用于 nav-item 高亮） */
-  activeView?: "chat" | "experts" | "memory";
-  /** 跳转到非对话页（专家 / 记忆） */
-  onNavigate?: (view: "experts" | "memory") => void;
+  activeView?: "chat" | "experts" | "memory" | "settings";
+  /** 跳转到非对话页（专家 / 记忆 / 设置） */
+  onNavigate?: (view: "experts" | "memory" | "settings") => void;
 }
 
 type TabKey = "projects" | "general";
@@ -608,9 +608,10 @@ function Sidebar({
       <div className="titlebar-no-drag sidebar-foot">
         <button
           onClick={onOpenSettings}
-          className="user-pill"
+          className={`user-pill ${activeView === "settings" ? "active" : ""}`}
           title="设置"
           aria-label="设置"
+          aria-current={activeView === "settings" ? "page" : undefined}
         >
           <div className="user-avatar">
             <Settings size={14} />
