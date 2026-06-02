@@ -8,6 +8,8 @@ import SettingsPanel from "./SettingsPanel";
 import LogPanel from "./LogPanel";
 import { StartupLoading } from "./StartupLoading";
 import { ErrorModal } from "./ErrorModal";
+import { ExpertsPage } from "./ExpertsPage";
+import { MemoryPage } from "./MemoryPage";
 import { useStreamingChat } from "../hooks/useStreamingChat";
 import { useSettings } from "../hooks/useSettings";
 import { useFolderPicker } from "../hooks/useFolderPicker";
@@ -439,6 +441,8 @@ export function MainApp() {
 
   // 切换对话
   const handleSwitchConversation = useCallback((id: string) => {
+    // v2.0: 切换对话时自动回到 chat 视图
+    setCurrentView("chat");
     chat.switchConversation(id);
   }, [chat.switchConversation]);
 
@@ -529,6 +533,24 @@ export function MainApp() {
     setSidebarOpen(false);
   }, []);
 
+  // ========== v2.0 视图路由 ==========
+  // 当前主区显示的页面：chat / experts / memory
+  const [currentView, setCurrentView] = useState<"chat" | "experts" | "memory">(() =>
+    syncStore.getItem("current-view", "chat") as "chat" | "experts" | "memory"
+  );
+
+  // 持久化当前视图（用于刷新后恢复）
+  useEffect(() => {
+    syncStore.setItem("current-view", currentView);
+  }, [currentView]);
+
+  // 跳转到非对话页（专家 / 记忆）
+  const handleNavigate = useCallback((view: "experts" | "memory") => {
+    setCurrentView(view);
+    // 移动端：跳转后关闭 drawer
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   return (
     <div className={[
       syncStore.getItem("dark-mode", false) ? "dark" : "",
@@ -574,74 +596,89 @@ export function MainApp() {
               isCollapsed={isMobile ? false : sidebarCollapsed}
               expertCount={7}
               memoryCount={3}
+              // v2.0 新增：视图路由
+              activeView={currentView}
+              onNavigate={handleNavigate}
             />
 
-            {/* 中间：聊天区 */}
+            {/* 中间：主区（按 currentView 路由） */}
             <div className="flex-1 flex min-h-0">
-              <ChatView
-                conversationId={chat.activeConversationId}
-                messages={chat.activeConversation?.messages || []}
-                onSendMessage={handleSendMessage}
-                isProcessing={chat.isProcessing}
-                onStop={chat.stopStreaming}
-                darkMode={settings.darkMode}
-                activeConfig={activeConfig}
-                modelConfigs={settings.modelConfigs}
-                onSwitchModel={setActiveModel}
-                chatMode={currentMode}
-                cwd={currentCwd}
-                backendConnected={chat.backendConnected}
-                backendModels={backendModels}
-                mobileConnected={mobileConnected}
-                pendingToolRequests={chat.pendingToolRequests}
-                onToolConfirm={chat.handleToolConfirm}
-                permissionMode={settings.permissionMode}
-                onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
-                onRollbackToSnapshot={handleRollbackToSnapshot}
-                conversationUsageMap={chat.conversationUsageMap}
-                hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
-                onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
-                // v1.4 新增：顶栏 menu 按钮
-                onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
-                sidebarOpen={isMobile ? sidebarOpen : sidebarCollapsed}
-              />
+              {currentView === "chat" ? (
+                <>
+                  <ChatView
+                    conversationId={chat.activeConversationId}
+                    messages={chat.activeConversation?.messages || []}
+                    onSendMessage={handleSendMessage}
+                    isProcessing={chat.isProcessing}
+                    onStop={chat.stopStreaming}
+                    darkMode={settings.darkMode}
+                    activeConfig={activeConfig}
+                    modelConfigs={settings.modelConfigs}
+                    onSwitchModel={setActiveModel}
+                    chatMode={currentMode}
+                    cwd={currentCwd}
+                    backendConnected={chat.backendConnected}
+                    backendModels={backendModels}
+                    mobileConnected={mobileConnected}
+                    pendingToolRequests={chat.pendingToolRequests}
+                    onToolConfirm={chat.handleToolConfirm}
+                    permissionMode={settings.permissionMode}
+                    onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+                    onRollbackToSnapshot={handleRollbackToSnapshot}
+                    conversationUsageMap={chat.conversationUsageMap}
+                    hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
+                    onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
+                    // v1.4 新增：顶栏 menu 按钮
+                    onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                    sidebarOpen={isMobile ? sidebarOpen : sidebarCollapsed}
+                  />
 
-          {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
-          {currentCwd && (
-            <div className="flex shrink-0">
-              <FileTree
-                directory={currentCwd}
-                onFileClick={(path) => {
-                  setSelectedFilePath(path);
-                  setShowCheckpointPanel(false);
-                }}
-                onClose={() => setFileTreeExpanded(false)}
-                isExpanded={fileTreeExpanded}
-                onToggleExpand={() => setFileTreeExpanded(!fileTreeExpanded)}
-                showPanel={!!currentCwd}
-                onToggleCheckpointPanel={() => setShowCheckpointPanel(v => !v)}
-                isCheckpointPanelActive={showCheckpointPanel}
-                agentGatewayUrl={settings.agentGatewayUrl}
-              />
+                  {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
+                  {currentCwd && (
+                    <div className="flex shrink-0">
+                      <FileTree
+                        directory={currentCwd}
+                        onFileClick={(path) => {
+                          setSelectedFilePath(path);
+                          setShowCheckpointPanel(false);
+                        }}
+                        onClose={() => setFileTreeExpanded(false)}
+                        isExpanded={fileTreeExpanded}
+                        onToggleExpand={() => setFileTreeExpanded(!fileTreeExpanded)}
+                        showPanel={!!currentCwd}
+                        onToggleCheckpointPanel={() => setShowCheckpointPanel(v => !v)}
+                        isCheckpointPanelActive={showCheckpointPanel}
+                        agentGatewayUrl={settings.agentGatewayUrl}
+                      />
 
-              {/* 文件预览面板 / 快照面板（互斥） */}
-              {showCheckpointPanel ? (
-                <CheckpointPanel
-                  cwd={currentCwd}
-                  sessionId={chat.activeConversationId}
-                  onClose={() => setShowCheckpointPanel(false)}
+                      {/* 文件预览面板 / 快照面板（互斥） */}
+                      {showCheckpointPanel ? (
+                        <CheckpointPanel
+                          cwd={currentCwd}
+                          sessionId={chat.activeConversationId}
+                          onClose={() => setShowCheckpointPanel(false)}
+                        />
+                      ) : (
+                        <FilePreview
+                          filePath={selectedFilePath}
+                          onClose={() => setSelectedFilePath(null)}
+                          agentGatewayUrl={settings.agentGatewayUrl}
+                        />
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : currentView === "experts" ? (
+                <ExpertsPage
+                  onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                 />
               ) : (
-                <FilePreview
-                  filePath={selectedFilePath}
-                  onClose={() => setSelectedFilePath(null)}
-                  agentGatewayUrl={settings.agentGatewayUrl}
+                <MemoryPage
+                  onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                 />
               )}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
 
       {/* 移动端 sidebar drawer 打开时的背景遮罩 */}
       {isMobile && sidebarOpen && (

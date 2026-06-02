@@ -54,6 +54,12 @@ interface SidebarProps {
   expertCount?: number;
   /** 顶部「记忆」徽章数字（占位） */
   memoryCount?: number;
+
+  // ===== v2.0 新增：视图路由 =====
+  /** 当前激活的视图（用于 nav-item 高亮） */
+  activeView?: "chat" | "experts" | "memory";
+  /** 跳转到非对话页（专家 / 记忆） */
+  onNavigate?: (view: "experts" | "memory") => void;
 }
 
 type TabKey = "projects" | "general";
@@ -103,6 +109,9 @@ function Sidebar({
   isCollapsed = false,
   expertCount = 0,
   memoryCount = 0,
+  // v2.0 新增
+  activeView = "chat",
+  onNavigate,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   // 当前 tab：默认「项目」
@@ -251,7 +260,8 @@ function Sidebar({
     Icon: LucideIcon,
     label: string,
     count: number,
-    onClick?: () => void
+    onClick?: () => void,
+    active = false
   ) => {
     const content = (
       <>
@@ -267,7 +277,11 @@ function Sidebar({
     );
     if (onClick) {
       return (
-        <button onClick={onClick} className="nav-item" type="button">
+        <button
+          onClick={onClick}
+          className={`nav-item ${active ? "active" : ""}`}
+          type="button"
+        >
           {content}
         </button>
       );
@@ -310,19 +324,21 @@ function Sidebar({
         </div>
       </div>
 
-      {/* ===== 主导航：专家 / 记忆（占位） ===== */}
+      {/* ===== 主导航：专家 / 记忆（v2.0：跳转对应页） ===== */}
       <nav className="titlebar-no-drag primary-nav">
         {renderPrimaryNavItem(
           Users,
           "专家",
           expertCount,
-          () => alert("专家管理页面开发中，敬请期待")
+          () => onNavigate?.("experts"),
+          activeView === "experts"
         )}
         {renderPrimaryNavItem(
           Brain,
           "记忆",
           memoryCount,
-          () => alert("记忆管理页面开发中，敬请期待")
+          () => onNavigate?.("memory"),
+          activeView === "memory"
         )}
       </nav>
 
