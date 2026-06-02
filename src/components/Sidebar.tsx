@@ -6,9 +6,9 @@ import {
   Settings,
   Trash2,
   Search,
+  Folder,
   FolderOpen,
   FolderPlus,
-  Code,
   X,
   ChevronDown,
   ChevronRight,
@@ -44,8 +44,12 @@ interface SidebarProps {
  * ┌──────────────────────────────┐
  * │  顶部：Logo + 搜索 + [+]      │
  * ├──────────────────────────────┤
- * │  上半部分：项目对话列表        │
- * │  （有 cwd 的对话）            │
+ * │  项目对话列表（按文件夹分组）   │
+ * │  E:\...\plans (2) ▾          │
+ * │    ├ 聊点什么                 │
+ * │    ├ 配置上云                 │
+ * │  E:\...\dev (3) ▾            │
+ * │    ├ 重构                     │
  * │  [+] 新建项目对话             │
  * ├──────────────────────────────┤
  * │  下半部分：普通对话列表        │
@@ -67,7 +71,10 @@ function Sidebar({
   onPickFolder,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [projectsCollapsed, setProjectsCollapsed] = useState<boolean>(() => syncStore.getItem("sidebar-projects-collapsed", true) as boolean);
+  // 每个项目文件夹独立的折叠状态 { [cwd]: boolean }
+  const [folderCollapsedMap, setFolderCollapsedMap] = useState<Record<string, boolean>>(() =>
+    syncStore.getItem("project-folders-collapsed", {}) as Record<string, boolean>
+  );
   const [showAddProject, setShowAddProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [projectDir, setProjectDir] = useState("");
@@ -78,15 +85,36 @@ function Sidebar({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
-  // 持久化项目折叠状态
+  // 持久化项目文件夹折叠状态
   useEffect(() => {
-    syncStore.setItem("sidebar-projects-collapsed", projectsCollapsed);
-  }, [projectsCollapsed]);
+    syncStore.setItem("project-folders-collapsed", folderCollapsedMap);
+  }, [folderCollapsedMap]);
 
   // 项目对话 = 有 cwd 的对话
   const projectConversations = conversations.filter(c => c.cwd);
   // 普通对话 = 无 cwd 的对话
   const normalConversations = conversations.filter(c => !c.cwd);
+
+  // 按 cwd 分组：{ [cwd]: Conversation[] }
+  const groupedProjects = projectConversations.reduce<Record<string, Conversation[]>>((acc, conv) => {
+    const dir = conv.cwd!;
+    if (!acc[dir]) acc[dir] = [];
+    acc[dir].push(conv);
+    return acc;
+  }, {});
+  // 按目录路径排序
+  const sortedDirs = Object.keys(groupedProjects).sort();
+
+  /** 切换文件夹的折叠状态 */
+  const toggleFolder = (dir: string) => {
+    setFolderCollapsedMap(prev => ({ ...prev, [dir]: !prev[dir] }));
+  };
+
+  /** 在指定文件夹下新建对话 */
+  const handleNewConvInFolder = (dir: string) => {
+    const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'new';
+    onNewProjectConversation(folderName, dir);
+  };
 
   // 拷贝弹窗重名检测
   const isDuplicate = copyConfirm
@@ -184,118 +212,137 @@ function Sidebar({
         </div>
       </div>
 
-      {/* ===== 上半部分：项目对话列表（有 cwd 的对话） ===== */}
+      {/* ===== 上半部分：项目对话列表（按 cwd 分组） ===== */}
       <div className="min-w-0">
-        <button
-          onClick={() => setProjectsCollapsed(!projectsCollapsed)}
-          className="w-full flex items-center justify-between px-3 py-2 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
-        >
+        <div className="flex items-center justify-between px-3 py-2">
           <div className="flex items-center gap-1.5">
-            {projectsCollapsed ? (
-              <ChevronRight size={13} className="text-content-tertiary dark:text-content-tertiary-dark" />
-            ) : (
-              <ChevronDown size={13} className="text-content-tertiary dark:text-content-tertiary-dark" />
-            )}
             <FolderOpen size={13} className="text-content-tertiary dark:text-content-tertiary-dark" />
             <span className="text-xs font-medium text-content-tertiary dark:text-content-tertiary-dark">项目</span>
           </div>
           <div className="flex items-center gap-0.5">
-            <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark mr-1">{projectConversations.length}</span>
-            {/* 新建项目对话按钮 */}
+            <span className="text-xs text-content-tertiary dark:text-content-tertiary-dark mr-1">{sortedDirs.length}</span>
             <button
               onClick={(e) => { e.stopPropagation(); handleOpenAddProject(); }}
               className="icon-btn !p-1"
-              title="添加本地文件夹作为项目对话"
+              title="新建项目对话"
             >
               <FolderPlus size={15} />
             </button>
           </div>
-        </button>
-        {!projectsCollapsed && (
-        <div className="px-2 pb-2 max-h-[40vh] overflow-y-auto min-w-0">
-          {projectConversations.length === 0 ? (
+        </div>
+        <div className="px-2 pb-2 max-h-[40vh] overflow-y-auto min-w-0 space-y-1">
+          {sortedDirs.length === 0 ? (
             <div className="text-center py-4">
               <p className="text-xs text-content-tertiary dark:text-content-tertiary-dark">暂无项目</p>
             </div>
           ) : (
-            <div className="space-y-0.5">
-              {projectConversations.map((conv) => (
-                <div key={conv.id} className="group relative">
+            sortedDirs.map((dir) => {
+              const convs = groupedProjects[dir];
+              const isCollapsed = folderCollapsedMap[dir] !== false; // 默认展开
+              const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || dir;
+
+              return (
+                <div key={dir}>
+                  {/* 文件夹头 */}
                   <button
-                    onClick={() => onSwitchConversation(conv.id)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-all duration-150 ${
-                      conv.id === activeConversationId
-                        ? "sidebar-btn active"
-                        : "sidebar-btn"
-                    }`}
+                    onClick={() => toggleFolder(dir)}
+                    className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg
+                               hover:bg-black/[0.02] dark:hover:bg-white/[0.02]
+                               transition-colors text-xs text-content-tertiary dark:text-content-tertiary-dark group/folder"
                   >
-                    <Code size={14} className={`shrink-0 ${
-                      conv.id === activeConversationId ? "opacity-100" : "opacity-60"
-                    }`} />
-                    <div className="flex-1 min-w-0 overflow-hidden">
-                      {renamingId === conv.id ? (
-                        <input
-                          type="text"
-                          value={renameText}
-                          onChange={(e) => setRenameText(e.target.value)}
-                          onBlur={() => {
-                            if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
-                            setRenamingId(null);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
-                              setRenamingId(null);
-                            } else if (e.key === "Escape") {
-                              setRenamingId(null);
-                            }
-                            e.stopPropagation();
-                          }}
-                          className="w-full text-sm bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
-                          autoFocus
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <div className="truncate">{conv.title}</div>
-                      )}
-                      {conv.cwd && (
-                        <div className="text-[11px] text-content-tertiary dark:text-content-tertiary-dark truncate">
-                          {conv.cwd}
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
-                    {conv.id === activeConversationId && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setCopyConfirm(conv.id); setCopyTitle(`${conv.title} - 副本`); }}
-                        className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all duration-150"
-                        title="拷贝对话"
-                      >
-                        <Copy size={12} />
-                      </button>
+                    {isCollapsed ? (
+                      <ChevronRight size={12} className="shrink-0" />
+                    ) : (
+                      <ChevronDown size={12} className="shrink-0" />
                     )}
+                    {isCollapsed ? (
+                      <Folder size={12} className="shrink-0 text-accent/50" />
+                    ) : (
+                      <FolderOpen size={12} className="shrink-0 text-accent/60" />
+                    )}
+                    <span className="flex-1 text-left truncate font-medium text-content dark:text-content-dark text-xs">
+                      {folderName}
+                    </span>
+                    <span className="text-[10px] opacity-60">{convs.length}</span>
                     <button
-                      onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
-                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all duration-150"
-                      title="重命名"
+                      onClick={(e) => { e.stopPropagation(); handleNewConvInFolder(dir); }}
+                      className="opacity-0 group-hover/folder:opacity-60 hover:!opacity-100 transition-opacity !p-0.5"
+                      title="在此文件夹下新建对话"
                     >
-                      <Pencil size={12} />
+                      <Plus size={11} />
                     </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
-                      className="p-1 rounded-md text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all duration-150"
-                      title="删除对话"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                  </button>
+                  {/* 文件夹路径 */}
+                  <div className="px-7 pb-0.5 text-[10px] text-content-tertiary/50 dark:text-content-tertiary-dark/50 truncate"
+                       title={dir}>
+                    {dir}
                   </div>
+                  {/* 对话列表 */}
+                  {!isCollapsed && (
+                    <div className="ml-2 space-y-0.5 mt-0.5 mb-1">
+                      {convs.map((conv) => (
+                        <div key={conv.id} className="group relative">
+                          <button
+                            onClick={() => onSwitchConversation(conv.id)}
+                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left transition-all duration-150 ${
+                              conv.id === activeConversationId
+                                ? "sidebar-btn active"
+                                : "sidebar-btn"
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0 overflow-hidden">
+                              {renamingId === conv.id ? (
+                                <input
+                                  type="text"
+                                  value={renameText}
+                                  onChange={(e) => setRenameText(e.target.value)}
+                                  onBlur={() => {
+                                    if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                                    setRenamingId(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                                      setRenamingId(null);
+                                    } else if (e.key === "Escape") {
+                                      setRenamingId(null);
+                                    }
+                                    e.stopPropagation();
+                                  }}
+                                  className="w-full text-xs bg-surface dark:bg-surface-dark px-1 py-0.5 rounded border border-accent/40 outline-none"
+                                  autoFocus
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <div className="truncate">{conv.title}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-150 shrink-0">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                                className="p-0.5 rounded text-content-tertiary dark:text-content-tertiary-dark hover:text-blue-500"
+                                title="重命名"
+                              >
+                                <Pencil size={10} />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
+                                className="p-0.5 rounded text-content-tertiary dark:text-content-tertiary-dark hover:text-red-500"
+                                title="删除"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
+              );
+            })
           )}
         </div>
-        )}
       </div>
 
       {/* ===== 下半部分：普通对话列表（无 cwd 的对话） ===== */}
