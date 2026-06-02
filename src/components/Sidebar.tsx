@@ -468,14 +468,17 @@ function Sidebar({
       </div>
 
       {/* ===== 底部菜单 ===== */}
-      <div className="p-1.5 border-t border-border dark:border-border-dark space-y-0.5">
-        <button onClick={onToggleDarkMode} className="sidebar-btn">
-          {darkMode ? <Sun size={14} /> : <Moon size={14} />}
-          <span>{darkMode ? "浅色" : "深色"}</span>
-        </button>
-        <button onClick={onOpenSettings} className="sidebar-btn">
+      <div className="p-1.5 border-t border-border dark:border-border-dark flex gap-1.5">
+        <button onClick={onOpenSettings} className="sidebar-btn flex-1">
           <Settings size={14} />
           <span>设置</span>
+        </button>
+        <button
+          onClick={onToggleDarkMode}
+          className="sidebar-btn !w-auto px-2.5 shrink-0"
+          title={darkMode ? "切换到浅色" : "切换到深色"}
+        >
+          {darkMode ? <Sun size={14} /> : <Moon size={14} />}
         </button>
       </div>
 
