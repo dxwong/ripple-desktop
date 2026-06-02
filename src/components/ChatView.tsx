@@ -1,5 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from "react";
-import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X, Wifi } from "lucide-react";
+import { Sparkles, FolderOpen, Code, MessageCircle, Minus, Square, Maximize2, X, Wifi, Menu } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import MessageInput from "./MessageInput";
@@ -88,6 +88,15 @@ interface ChatViewProps {
   hasMore?: boolean;
   /** 加载更早消息 */
   onLoadMore?: () => void;
+  /** v1.4 新增：顶栏 menu 按钮点击回调（移动端：开 drawer；桌面端：折叠/展开 sidebar） */
+  onMenuClick?: () => void;
+  /** v1.4 新增：sidebar 当前状态（用于决定 menu 按钮图标）
+   *  - mobile + true  → drawer 打开中（显示 X 或 Menu 高亮态）
+   *  - mobile + false → drawer 关闭（显示 Menu）
+   *  - desktop + true → sidebar 已折叠（显示 PanelLeftOpen 让用户点开）
+   *  - desktop + false → sidebar 展开（显示 PanelLeftClose 让用户折叠）
+   */
+  sidebarOpen?: boolean;
 }
 
 function TypingIndicator() {
@@ -205,6 +214,9 @@ function ChatView({
   conversationUsageMap = {},
   hasMore,
   onLoadMore,
+  // v1.4 新增
+  onMenuClick,
+  sidebarOpen = false,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -374,6 +386,20 @@ function ChatView({
     <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
       {/* ===== 顶部栏：窗口拖拽 + 会话信息 + 窗口控制 ===== */}
       <div className="titlebar-drag flex items-center gap-3 px-3 h-9 bg-surface-secondary dark:bg-surface-secondary-dark border-b border-border dark:border-border-dark shrink-0">
+        {/* v1.4 新增：menu 按钮（顶栏最左）
+         *  - 移动端：hamburger 图标，控制 drawer 开/关
+         *  - 桌面端：折叠/展开图标，控制 sidebar 折叠
+         *  - 始终 titlebar-no-drag，确保可点击（不影响窗口拖拽）
+         */}
+        <button
+          onClick={onMenuClick}
+          className="titlebar-no-drag icon-btn !p-1 shrink-0"
+          title={sidebarOpen ? "关闭侧栏" : "打开侧栏"}
+          aria-label={sidebarOpen ? "关闭侧栏" : "打开侧栏"}
+        >
+          <Menu size={15} />
+        </button>
+
         {/* 左侧：会话模式/项目目录 — 始终显示 */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {(chatMode === "code" || cwd) ? (

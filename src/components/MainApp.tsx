@@ -12,6 +12,7 @@ import { useStreamingChat } from "../hooks/useStreamingChat";
 import { useSettings } from "../hooks/useSettings";
 import { useFolderPicker } from "../hooks/useFolderPicker";
 import { syncStore } from "../hooks/useStore";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { ChatMode } from "../types";
 import { fetchModels, setBaseUrl } from "../services/api";
 import { logger } from "./LogPanel";
@@ -476,13 +477,69 @@ export function MainApp() {
     window.location.reload();
   };
 
+  // ========== 侧边栏响应式状态 ==========
+  // 移动端（≤ 768px）检测
+  const isMobile = useMediaQuery("(max-width: 768px)");
+
+  // 移动端：drawer 是否打开（React state，不写 localStorage）
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 桌面端：sidebar 是否折叠（localStorage 记忆，跨会话保留）
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    syncStore.getItem("sidebar-collapsed", false)
+  );
+
+  // 持久化桌面端折叠状态
+  useEffect(() => {
+    syncStore.setItem("sidebar-collapsed", sidebarCollapsed);
+  }, [sidebarCollapsed]);
+
+  // 跨断点清理：避免 mobile-open 与 desktop-hidden 叠加
+  // - 切到 mobile：清掉 desktop-collapsed（mobile 下用 drawer，不需要它）
+  // - 切到 desktop：清掉 mobile-open（desktop 下 sidebar 始终展示，无需 drawer）
+  useEffect(() => {
+    if (isMobile) {
+      setSidebarCollapsed(false);
+    } else {
+      setSidebarOpen(false);
+    }
+  }, [isMobile]);
+
+  // 移动端 drawer 打开时锁定 body 滚动
+  useEffect(() => {
+    if (isMobile && sidebarOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [isMobile, sidebarOpen]);
+
+  // 切换桌面端 sidebar 折叠
+  const handleToggleSidebarCollapse = useCallback(() => {
+    setSidebarCollapsed(prev => !prev);
+  }, []);
+
+  // 切换移动端 drawer（仅在 mobile 下被调用）
+  const handleToggleSidebarOpen = useCallback(() => {
+    setSidebarOpen(prev => !prev);
+  }, []);
+
+  // 关闭移动端 drawer
+  const handleCloseSidebar = useCallback(() => {
+    setSidebarOpen(false);
+  }, []);
+
   return (
-    <div className={syncStore.getItem("dark-mode", false) ? "dark" : ""}>
+    <div className={[
+      syncStore.getItem("dark-mode", false) ? "dark" : "",
+      // 桌面端折叠：给 body 加 collapsed 类（CSS 控制 sidebar 宽度）
+      !isMobile && sidebarCollapsed ? "sidebar-collapsed" : "",
+    ].filter(Boolean).join(" ")}>
       {/* 启动 Loading */}
       {startupState === "loading" && (
         <StartupLoading message={startupMessage} />
       )}
-      
+
       {/* 错误弹窗 */}
       {startupState === "error" && (
         <ErrorModal
@@ -491,7 +548,7 @@ export function MainApp() {
           onRetry={handleRetryStartup}
         />
       )}
-      
+
       {/* 主应用界面（启动完成后显示） */}
       {startupState === "ready" && (
         <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
@@ -499,46 +556,55 @@ export function MainApp() {
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/* 左侧边栏 */}
             <Sidebar
-          darkMode={settings.darkMode}
-          onToggleDarkMode={() => updateSettings({ darkMode: !settings.darkMode })}
-          conversations={chat.conversations}
-          activeConversationId={chat.activeConversationId}
-          onNewConversation={handleNewConversation}
-          onSwitchConversation={handleSwitchConversation}
-          onDeleteConversation={chat.deleteConversation}
-          onOpenSettings={() => setShowSettings(true)}
-          onNewProjectConversation={handleNewProjectConversation}
-          onRenameConversation={chat.renameConversation}
-          onCopyConversation={chat.copyConversation}
-          onPickFolder={pickFolder}
-        />
+              darkMode={settings.darkMode}
+              onToggleDarkMode={() => updateSettings({ darkMode: !settings.darkMode })}
+              conversations={chat.conversations}
+              activeConversationId={chat.activeConversationId}
+              onNewConversation={handleNewConversation}
+              onSwitchConversation={handleSwitchConversation}
+              onDeleteConversation={chat.deleteConversation}
+              onOpenSettings={() => setShowSettings(true)}
+              onNewProjectConversation={handleNewProjectConversation}
+              onRenameConversation={chat.renameConversation}
+              onCopyConversation={chat.copyConversation}
+              onPickFolder={pickFolder}
+              // v1.4 新增：移动端 drawer + 桌面端折叠
+              isOpen={sidebarOpen}
+              onClose={handleCloseSidebar}
+              isCollapsed={isMobile ? false : sidebarCollapsed}
+              expertCount={7}
+              memoryCount={3}
+            />
 
-        {/* 中间：聊天区 */}
-        <div className="flex-1 flex min-h-0">
-          <ChatView
-            conversationId={chat.activeConversationId}
-            messages={chat.activeConversation?.messages || []}
-            onSendMessage={handleSendMessage}
-            isProcessing={chat.isProcessing}
-            onStop={chat.stopStreaming}
-            darkMode={settings.darkMode}
-            activeConfig={activeConfig}
-            modelConfigs={settings.modelConfigs}
-            onSwitchModel={setActiveModel}
-            chatMode={currentMode}
-            cwd={currentCwd}
-            backendConnected={chat.backendConnected}
-            backendModels={backendModels}
-            mobileConnected={mobileConnected}
-            pendingToolRequests={chat.pendingToolRequests}
-            onToolConfirm={chat.handleToolConfirm}
-            permissionMode={settings.permissionMode}
-            onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
-            onRollbackToSnapshot={handleRollbackToSnapshot}
-            conversationUsageMap={chat.conversationUsageMap}
-            hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
-            onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
-          />
+            {/* 中间：聊天区 */}
+            <div className="flex-1 flex min-h-0">
+              <ChatView
+                conversationId={chat.activeConversationId}
+                messages={chat.activeConversation?.messages || []}
+                onSendMessage={handleSendMessage}
+                isProcessing={chat.isProcessing}
+                onStop={chat.stopStreaming}
+                darkMode={settings.darkMode}
+                activeConfig={activeConfig}
+                modelConfigs={settings.modelConfigs}
+                onSwitchModel={setActiveModel}
+                chatMode={currentMode}
+                cwd={currentCwd}
+                backendConnected={chat.backendConnected}
+                backendModels={backendModels}
+                mobileConnected={mobileConnected}
+                pendingToolRequests={chat.pendingToolRequests}
+                onToolConfirm={chat.handleToolConfirm}
+                permissionMode={settings.permissionMode}
+                onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+                onRollbackToSnapshot={handleRollbackToSnapshot}
+                conversationUsageMap={chat.conversationUsageMap}
+                hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
+                onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
+                // v1.4 新增：顶栏 menu 按钮
+                onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                sidebarOpen={isMobile ? sidebarOpen : sidebarCollapsed}
+              />
 
           {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}
           {currentCwd && (
@@ -576,6 +642,15 @@ export function MainApp() {
           )}
         </div>
       </div>
+
+      {/* 移动端 sidebar drawer 打开时的背景遮罩 */}
+      {isMobile && sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={handleCloseSidebar}
+          aria-hidden="true"
+        />
+      )}
 
       {/* 底部日志面板 */}
       <LogPanel />
