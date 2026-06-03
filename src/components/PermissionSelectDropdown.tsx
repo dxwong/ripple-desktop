@@ -8,7 +8,7 @@ import type { PermissionMode } from "../types";
  *
  * 视觉：
  *   - 默认权限      → Bot        (confirm,  默认色)
- *   - 完全访问权限  → ShieldAlert (auto,     选中后浅红 rose-600)
+ *   - 完全访问权限  → ShieldAlert (auto,     选中后浅橙 amber-600，与 demo 一致)
  *   - Plan 模式     → Lock        (read-only, 蓝色)
  *
  * 选 Plan 模式时内部值仍是 `permissionMode === "read-only"`，
@@ -18,10 +18,10 @@ import type { PermissionMode } from "../types";
 /**
  * 主题色调：
  *   - false      → 默认灰（智能体-手动）
- *   - "rose"     → 浅红 rose-600（智能体-自动，选中后字体/图标变这个色）
+ *   - "amber"    → 浅橙 amber-600（智能体-自动，选中后字体/图标变这个色，与 demo 一致）
  *   - "blue"     → 蓝色 blue-600（任务计划）
  */
-type AccentTone = false | "rose" | "blue";
+type AccentTone = false | "amber" | "blue";
 
 interface OptionMeta {
   label: string;
@@ -32,8 +32,8 @@ interface OptionMeta {
 
 const PERMISSION_LABELS: Record<PermissionMode, OptionMeta> = {
   "confirm":   { label: "默认权限",    desc: "风险操作前询问",         Icon: Bot,        accent: false },
-  "auto":      { label: "完全访问权限", desc: "跳过确认，直接处理任务", Icon: ShieldAlert, accent: "rose" },
-  "read-only": { label: "Plan 模式",    desc: "先出计划只读模式",       Icon: Lock,       accent: "blue" },
+  "auto":      { label: "完全访问权限", desc: "跳过确认，直接处理任务", Icon: ShieldAlert, accent: "amber" },
+  "read-only": { label: "Plan 模式",    desc: "先出计划，只读模式",     Icon: Lock,       accent: "blue" },
 };
 
 const ORDER: PermissionMode[] = ["confirm", "auto", "read-only"];
@@ -94,8 +94,8 @@ export default function PermissionSelectDropdown({
           "border border-transparent",
           disabled
             ? "cursor-not-allowed opacity-45 text-content-tertiary dark:text-content-tertiary-dark"
-            : current.accent === "rose"
-              ? "text-rose-600 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+            : current.accent === "amber"
+              ? "text-amber-600 dark:text-amber-400"
               : current.accent === "blue"
                 ? "text-blue-600 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/30"
                 : "text-content-tertiary dark:text-content-tertiary-dark hover:bg-black/[0.04] dark:hover:bg-white/[0.05] hover:text-content dark:hover:text-content-dark",
@@ -143,8 +143,8 @@ export default function PermissionSelectDropdown({
                   "w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-left",
                   "transition-colors duration-100",
                   isSelected
-                    ? opt.accent === "rose"
-                      ? "bg-rose-50 dark:bg-rose-950/30"
+                    ? opt.accent === "amber"
+                      ? "bg-amber-100 dark:bg-amber-950/30"
                       : opt.accent === "blue"
                         ? "bg-blue-50 dark:bg-blue-950/30"
                         : "bg-accent/10"
@@ -154,8 +154,8 @@ export default function PermissionSelectDropdown({
                 <OptIcon
                   className={[
                     "h-4 w-4 shrink-0",
-                    opt.accent === "rose"
-                      ? "text-rose-600 dark:text-rose-300"
+                    opt.accent === "amber"
+                      ? "text-amber-600 dark:text-amber-400"
                       : opt.accent === "blue"
                         ? "text-blue-600 dark:text-blue-300"
                         : isSelected
@@ -168,8 +168,8 @@ export default function PermissionSelectDropdown({
                   <div
                     className={[
                       "text-[13px] font-medium truncate",
-                      opt.accent === "rose"
-                        ? "text-rose-700 dark:text-rose-300"
+                      opt.accent === "amber"
+                        ? "text-amber-700 dark:text-amber-400"
                         : opt.accent === "blue"
                           ? "text-blue-700 dark:text-blue-300"
                           : "text-content dark:text-content-dark",
@@ -185,8 +185,8 @@ export default function PermissionSelectDropdown({
                   <Check
                     className={[
                       "h-4 w-4 shrink-0",
-                      opt.accent === "rose"
-                        ? "text-rose-600 dark:text-rose-300"
+                      opt.accent === "amber"
+                        ? "text-amber-600 dark:text-amber-400"
                         : opt.accent === "blue"
                           ? "text-blue-600 dark:text-blue-300"
                           : "text-content-tertiary dark:text-content-tertiary-dark",
