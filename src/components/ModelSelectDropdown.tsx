@@ -69,6 +69,23 @@ function getProviderShort(providerId: string, providerName: string): string {
   return trimmed.slice(0, 2).toUpperCase();
 }
 
+/**
+ * 把 entry.name 拆成 { provider, model }
+ * entry.name 形如 "DeepSeek · DeepSeek V4 Pro" → { provider: "DeepSeek", model: "DeepSeek V4 Pro" }
+ * 拆分失败时降级：model = entry.model（id），provider = entry.provider（id）
+ */
+function splitEntryName(
+  name: string,
+  fallbackModel?: string,
+  fallbackProvider?: string,
+): { provider: string; model: string } {
+  if (name.includes(" · ")) {
+    const [provider, model] = name.split(" · ");
+    return { provider, model };
+  }
+  return { provider: fallbackProvider || "", model: fallbackModel || name };
+}
+
 export default function ModelSelectDropdown({
   activeConfig,
   entries,
@@ -106,9 +123,11 @@ export default function ModelSelectDropdown({
     (e) => e.provider === activeConfig?.provider && e.model === activeConfig?.model,
   );
 
-  // 显示文本：name · model（短）
+  // 显示文本：model 在前 · provider 在后（短）
   const displayLabel = activeConfig
-    ? activeEntry?.name || `${activeConfig.name} · ${activeConfig.model}`
+    ? activeEntry
+      ? `${splitEntryName(activeEntry.name).model} · ${splitEntryName(activeEntry.name).provider}`
+      : `${activeConfig.model} · ${activeConfig.name}`
     : "未配置模型";
 
   const currentProviderId = activeConfig?.provider || "";
@@ -197,7 +216,10 @@ export default function ModelSelectDropdown({
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium truncate">
-                      {entry.name}
+                      {(() => {
+                        const { model, provider } = splitEntryName(entry.name);
+                        return `${model} · ${provider}`;
+                      })()}
                     </div>
                     {entry.tags && entry.tags.length > 0 && (
                       <div className="flex items-center gap-1 mt-0.5">
