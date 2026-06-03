@@ -263,6 +263,7 @@ export function SettingsPage({
       endpoint: activeProviderCfg.baseUrl,
       apiKey: activeProviderCfg.apiKey,
       model: settings.activeModel,
+      provider: activeProvider,
     });
     if (result.error) {
       setTestResult({ ok: false, msg: result.error });
@@ -539,7 +540,7 @@ export function SettingsPage({
                       <input
                         type="text"
                         className="field-input"
-                        value={activeProviderCfg?.baseUrl ?? ""}
+                        value={activeProviderCfg?.baseUrl || activeProviderDef?.defaultBaseUrl || ""}
                         onChange={(e) =>
                           updateProviderConfig(activeProvider, {
                             baseUrl: e.target.value,
@@ -550,7 +551,7 @@ export function SettingsPage({
                         spellCheck={false}
                       />
                       <p className="setting-section-desc">
-                        默认地址由系统预设。修改可用于代理转发或自建网关。
+                        已预填系统默认地址。可手动修改用于代理转发或自定义网关。
                       </p>
                     </div>
 

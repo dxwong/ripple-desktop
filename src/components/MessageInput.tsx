@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, ChevronDown, Square } from "lucide-react";
-import type { ModelConfig, ChatMode, ActiveModelConfig } from "../types";
+import type { ChatMode, ActiveModelConfig } from "../types";
 
 /**
  * v2.1: modelEntries 数据源（id 形如 "provider::model"）
@@ -21,15 +21,11 @@ interface MessageInputProps {
   /** 停止处理回调 */
   onStop?: () => void;
   placeholder?: string;
-  /** 当前激活的对话模型配置（v2.1: ActiveModelConfig 优先；v2.0: ModelConfig 也兼容） */
-  activeConfig?: ModelConfig | ActiveModelConfig;
-  /** v2.0 风格：所有已保存的对话模型配置列表 */
-  modelConfigs?: ModelConfig[];
-  /** v2.0 风格：切换对话模型 */
-  onSwitchModel?: (id: string) => void;
-  /** v2.1 风格：模型条目列表（id 形如 "provider::model"） */
+  /** 当前激活的对话模型配置 */
+  activeConfig?: ActiveModelConfig;
+  /** 模型条目列表（id 形如 "provider::model"） */
   modelEntries?: ModelEntry[];
-  /** v2.1 风格：切换模型条目 */
+  /** 切换模型条目 */
   onSwitchModelEntry?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
@@ -38,13 +34,10 @@ interface MessageInputProps {
 }
 
 /**
- * 消息输入框组件（v2.0 baseline + v2.1 modelEntries 适配）
+ * 消息输入框组件
  *
- * UI 与 v2.0 一致：textarea + 右下"模型选择器 + 发送/停止"
- * 数据源支持两种：
- *   - v2.0: modelConfigs: ModelConfig[] + onSwitchModel(id)
- *   - v2.1: modelEntries: {id,name,model,provider}[] + onSwitchModelEntry(id)
- * 同时存在时优先使用 v2.1
+ * UI：textarea + 右下"模型选择器 + 发送/停止"
+ * 数据源：modelEntries 列表（v2.1 格式）
  */
 function MessageInput({
   onSend,
@@ -53,8 +46,6 @@ function MessageInput({
   onStop,
   placeholder = "输入消息...",
   activeConfig,
-  modelConfigs = [],
-  onSwitchModel,
   modelEntries,
   onSwitchModelEntry,
   chatMode = "chat",
@@ -67,9 +58,7 @@ function MessageInput({
 
   const isCodeMode = chatMode === "code" || hasProject;
 
-  // v2.1 优先使用 modelEntries；回退 v2.0 modelConfigs
-  const useV21 = !!modelEntries && modelEntries.length > 0;
-  const entryList = useV21 ? modelEntries! : [];
+  const entryList = modelEntries ?? [];
 
   // 自动调整高度
   useEffect(() => {
@@ -114,16 +103,14 @@ function MessageInput({
 
   const hasInput = input.trim().length > 0;
 
-  // 模型按钮显示文本：v2.1 ActiveModelConfig 是 "name · model"；v2.0 ModelConfig 是 "name"
-  const modelLabel = useV21
-    ? (activeConfig?.name
-        ? `${(activeConfig as ActiveModelConfig).name} · ${(activeConfig as ActiveModelConfig).model}`
-        : (activeConfig as ActiveModelConfig)?.model || "未配置")
-    : (activeConfig?.name || activeConfig?.model || "未配置");
+  // 模型按钮显示文本："name · model"
+  const modelLabel = activeConfig
+    ? `${activeConfig.name} · ${activeConfig.model}`
+    : "未配置";
 
-  // 当前激活条目 id（v2.1 风格）
-  const activeEntryId = useV21 && activeConfig
-    ? `${(activeConfig as ActiveModelConfig).provider}::${(activeConfig as ActiveModelConfig).model}`
+  // 当前激活条目 id
+  const activeEntryId = activeConfig
+    ? `${activeConfig.provider}::${activeConfig.model}`
     : "";
 
   return (
@@ -164,7 +151,7 @@ function MessageInput({
               <ChevronDown size={12} className="shrink-0" />
             </button>
 
-            {showCMDropdown && (useV21 ? entryList.length > 0 : modelConfigs.length > 0) && (
+            {showCMDropdown && entryList.length > 0 && (
               <div className="absolute bottom-full right-0 mb-1.5 w-56
                               bg-surface-secondary dark:bg-surface-secondary-dark
                               border border-border dark:border-border-dark
@@ -173,50 +160,26 @@ function MessageInput({
                   对话模型
                 </div>
                 <div className="max-h-[200px] overflow-y-auto py-1">
-                  {useV21
-                    ? entryList.map((entry) => {
-                        const isActive = entry.id === activeEntryId;
-                        return (
-                          <button
-                            key={entry.id}
-                            onClick={() => { onSwitchModelEntry?.(entry.id); setShowCMDropdown(false); }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-all duration-100
-                              ${isActive
-                                ? "bg-accent/10 text-accent font-medium"
-                                : "text-content dark:text-content-dark hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
-                              }`}
-                          >
-                            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent" : "bg-transparent"}`} />
-                            <div className="flex-1 min-w-0">
-                              <div className="truncate">{entry.name}</div>
-                              <div className="text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">{entry.model}</div>
-                            </div>
-                          </button>
-                        );
-                      })
-                    : modelConfigs.map((cfg) => {
-                        // v2.0 ModelConfig 有 id 字段；v2.1 ActiveModelConfig 没有 id
-                        const activeIsV20 = activeConfig && "id" in activeConfig;
-                        const isActive = activeIsV20 && (activeConfig as ModelConfig).id === cfg.id;
-                        return (
-                        <button
-                          key={cfg.id}
-                          onClick={() => { onSwitchModel?.(cfg.id); setShowCMDropdown(false); }}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-all duration-100
-                            ${isActive
-                              ? "bg-accent/10 text-accent font-medium"
-                              : "text-content dark:text-content-dark hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
-                            }`}
-                        >
-                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent" : "bg-transparent"}`} />
-                          <div className="flex-1 min-w-0">
-                            <div className="truncate">{cfg.name}</div>
-                            <div className="text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">{cfg.model}</div>
-                          </div>
-                        </button>
-                        );
-                      })
-                  }
+                  {entryList.map((entry) => {
+                    const isActive = entry.id === activeEntryId;
+                    return (
+                      <button
+                        key={entry.id}
+                        onClick={() => { onSwitchModelEntry?.(entry.id); setShowCMDropdown(false); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-all duration-100
+                          ${isActive
+                            ? "bg-accent/10 text-accent font-medium"
+                            : "text-content dark:text-content-dark hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
+                          }`}
+                      >
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent" : "bg-transparent"}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="truncate">{entry.name}</div>
+                          <div className="text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">{entry.model}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

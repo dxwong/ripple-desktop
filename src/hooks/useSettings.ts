@@ -71,9 +71,8 @@ const STORAGE_KEY = "app_settings";
 /**
  * v2.1 重构：从旧的 modelConfigs 体系迁移到 providerConfigs 体系
  *
- * - 不保留旧 modelConfigs（旧数据丢弃）
- * - 旧 settings.json 数据若包含 modelConfigs，自动用 DEFAULT_SETTINGS 覆盖
- * - 旧 ripple-settings (v1.x 单配置) 也不再迁移
+ * - 检测到 v1.x schema 时，做字段映射迁移而非静默丢弃
+ * - 旧 settings.json 数据若包含 modelConfigs，自动迁移为 v2.1 providerConfigs
  */
 function isLegacyShape(data: any): boolean {
   if (!data || typeof data !== "object") return false;
@@ -83,6 +82,105 @@ function isLegacyShape(data: any): boolean {
     "modelConfigs" in data ||
     ("apiProvider" in data && "apiEndpoint" in data)
   );
+}
+
+/**
+ * v1.x → v2.1 字段迁移
+ * - modelConfigs → providerConfigs
+ * - 检测 provider 是否为内置 provider，决定走 custom 还是内置路径
+ */
+function migrateFromV1(v1: any): AppSettings | null {
+  try {
+    const configs = v1.modelConfigs || []
+    if (configs.length === 0) {
+      // 兼容旧扁平格式（只有 apiProvider/apiEndpoint/apiKey/modelName）
+      if (v1.apiKey && v1.apiEndpoint) {
+        return migrateFlatV1(v1)
+      }
+      return null
+    }
+
+    const first = configs[0]
+    if (!first || !first.apiKey) return null
+
+    // 判断 targetProvider 是否为内置 provider
+    const isBuiltin = !!getProviderDef(first.provider)
+    const targetProvider = isBuiltin ? first.provider : 'custom'
+
+    const base = { ...DEFAULT_SETTINGS }
+
+    if (!isBuiltin) {
+      // 自定义 provider 迁移
+      base.activeProvider = 'custom'
+      base.activeModel = first.model || 'deepseek-v4-flash'
+      base.enabledProviders = { ...base.enabledProviders, custom: true }
+      base.providerConfigs = {
+        ...base.providerConfigs,
+        custom: {
+          apiKey: first.apiKey,
+          baseUrl: (first.endpoint || '').replace(/\/+$/, ''),
+          enabledModels: { [first.model || 'deepseek-v4-flash']: true },
+          customModels: [],
+        },
+      }
+      base.customProviders = [{
+        id: 'custom',
+        name: first.name || '迁移的配置',
+        baseUrl: (first.endpoint || '').replace(/\/+$/, ''),
+        apiKey: first.apiKey,
+      }]
+    } else {
+      // 内置 provider 迁移
+      base.activeProvider = targetProvider
+      base.activeModel = first.model || base.activeModel
+      base.providerConfigs = {
+        ...base.providerConfigs,
+        [targetProvider]: {
+          ...base.providerConfigs[targetProvider],
+          apiKey: first.apiKey,
+          baseUrl: (first.endpoint || DEFAULT_SETTINGS.providerConfigs[targetProvider]?.baseUrl || '').replace(/\/+$/, ''),
+        },
+      }
+    }
+
+    // 保留通用字段
+    if (typeof v1.darkMode === 'boolean') base.darkMode = v1.darkMode
+    if (typeof v1.permissionMode === 'string') base.permissionMode = v1.permissionMode
+    if (typeof v1.agentGatewayUrl === 'string') base.agentGatewayUrl = v1.agentGatewayUrl
+    if (typeof v1.mobileBridgePort === 'number') base.mobileBridgePort = v1.mobileBridgePort
+
+    return base
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 兼容旧扁平格式迁移：apiProvider/apiEndpoint/apiKey/modelName → v2.1
+ */
+function migrateFlatV1(v1: any): AppSettings | null {
+  const base = { ...DEFAULT_SETTINGS }
+  base.activeProvider = 'custom'
+  base.activeModel = v1.modelName || v1.modelId || 'deepseek-v4-flash'
+  base.enabledProviders = { ...base.enabledProviders, custom: true }
+  base.providerConfigs = {
+    ...base.providerConfigs,
+    custom: {
+      apiKey: v1.apiKey,
+      baseUrl: (v1.apiEndpoint || '').replace(/\/+$/, ''),
+      enabledModels: { [base.activeModel]: true },
+      customModels: [],
+    },
+  }
+  base.customProviders = [{
+    id: 'custom',
+    name: '迁移的配置',
+    baseUrl: (v1.apiEndpoint || '').replace(/\/+$/, ''),
+    apiKey: v1.apiKey,
+  }]
+  if (typeof v1.darkMode === 'boolean') base.darkMode = v1.darkMode
+  if (typeof v1.agentGatewayUrl === 'string') base.agentGatewayUrl = v1.agentGatewayUrl
+  return base
 }
 
 /**
@@ -102,6 +200,9 @@ export function useSettings() {
   const { saveItem, loadItem } = useStore();
 
   // ========== 初始化加载：云端优先，本地兜底 ==========
+  /** init 完成前锁，防止用户操作在 init 完成前修改 state 后被覆盖 */
+  const initLockRef = useRef(true);
+
   useEffect(() => {
     const init = async () => {
       let merged: AppSettings | null = null;
@@ -112,9 +213,19 @@ export function useSettings() {
         const cloudRes = await fetchSettings();
         if (cloudRes.data?.settings) {
           const cloud = cloudRes.data.settings as Record<string, unknown>;
-          // 旧版 schema 检测 → 丢弃整个云端数据用默认
+          // 旧版 schema 检测 → 尝试迁移而非丢弃
           if (isLegacyShape(cloud)) {
-            await log("warn", "SETTINGS", "云端是 v1.x 旧格式，已忽略，使用默认");
+            const migrated = migrateFromV1(cloud);
+            if (migrated) {
+              merged = migrated;
+              source = "cloud";
+              await log("info", "SETTINGS", "云端 v1.x 数据已迁移到 v2.1");
+              // 立即写回迁移后的数据
+              await saveSettingsToCloud(migrated as unknown as Record<string, unknown>).catch(() => {});
+              await saveItem(STORAGE_KEY, migrated);
+            } else {
+              await log("warn", "SETTINGS", "云端 v1.x 数据无法迁移，使用默认");
+            }
           } else {
             merged = {
               ...DEFAULT_SETTINGS,
@@ -139,8 +250,16 @@ export function useSettings() {
           merged = { ...DEFAULT_SETTINGS, ...saved };
           source = "local";
         } else if (saved && isLegacyShape(saved)) {
-          // 本地也是旧格式：丢弃，用默认
-          await log("warn", "SETTINGS", "本地是 v1.x 旧格式，已忽略，使用默认");
+          // 本地旧格式 → 迁移
+          const migrated = migrateFromV1(saved);
+          if (migrated) {
+            merged = migrated;
+            source = "local";
+            await log("info", "SETTINGS", "本地 v1.x 数据已迁移到 v2.1");
+            await saveItem(STORAGE_KEY, migrated);
+          } else {
+            await log("warn", "SETTINGS", "本地 v1.x 数据无法迁移，使用默认");
+          }
         }
       }
 
@@ -175,6 +294,9 @@ export function useSettings() {
           }
         }
       }
+
+      // 释放 init 锁，允许 provider 操作
+      initLockRef.current = false;
 
       setSettings(merged);
       setSettingsSource(source);
@@ -215,6 +337,7 @@ export function useSettings() {
 
   // ========== 更新部分设置 ==========
   const updateSettings = useCallback((partial: Partial<AppSettings>) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -222,6 +345,7 @@ export function useSettings() {
 
   /** 切换激活的 provider（同步切换 activeModel 到该 provider 第一个启用的 model） */
   const setActiveProvider = useCallback((providerId: string, modelId?: string) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => {
       const targetModel =
         modelId ??
@@ -243,11 +367,13 @@ export function useSettings() {
 
   /** 切换激活的 model（必须在当前 activeProvider 下） */
   const setActiveModel = useCallback((modelId: string) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => ({ ...prev, activeModel: modelId }));
   }, []);
 
   /** 启用 / 禁用某个 provider */
   const setProviderEnabled = useCallback((providerId: string, enabled: boolean) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => ({
       ...prev,
       enabledProviders: { ...prev.enabledProviders, [providerId]: enabled },
@@ -257,6 +383,7 @@ export function useSettings() {
   /** 更新某个 provider 的配置（apiKey / baseUrl / enabledModels / customModels） */
   const updateProviderConfig = useCallback(
     (providerId: string, patch: Partial<ProviderConfig>) => {
+      if (initLockRef.current) return; // init 未完成，禁止修改
       setSettings((prev) => {
         const existing = prev.providerConfigs[providerId] ?? {
           apiKey: "",
@@ -278,6 +405,7 @@ export function useSettings() {
 
   /** 添加自定义 provider */
   const addCustomProvider = useCallback((provider: CustomProvider) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => ({
       ...prev,
       customProviders: [...prev.customProviders, provider],
@@ -296,6 +424,7 @@ export function useSettings() {
 
   /** 移除自定义 provider */
   const removeCustomProvider = useCallback((providerId: string) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => {
       const remaining = prev.customProviders.filter((p) => p.id !== providerId);
       const { [providerId]: _removed, ...restConfigs } = prev.providerConfigs;
@@ -318,6 +447,7 @@ export function useSettings() {
   /** 启用 / 禁用某个 model */
   const setModelEnabled = useCallback(
     (providerId: string, modelId: string, enabled: boolean) => {
+      if (initLockRef.current) return; // init 未完成，禁止修改
       setSettings((prev) => {
         const cfg = prev.providerConfigs[providerId];
         if (!cfg) return prev;
@@ -338,6 +468,7 @@ export function useSettings() {
 
   /** 添加自定义 model id 到某个 provider */
   const addCustomModel = useCallback((providerId: string, modelId: string) => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings((prev) => {
       const cfg = prev.providerConfigs[providerId];
       if (!cfg) return prev;
@@ -358,9 +489,10 @@ export function useSettings() {
 
   // ========== 重置 ==========
   const resetSettings = useCallback(() => {
+    if (initLockRef.current) return; // init 未完成，禁止修改
     setSettings({ ...DEFAULT_SETTINGS });
     try {
-      localStorage.removeItem("ripple-settings");
+      localStorage.removeItem(STORAGE_KEY);
     } catch {}
     saveSettingsToCloud(DEFAULT_SETTINGS as unknown as Record<string, unknown>).catch(() => {});
   }, []);
