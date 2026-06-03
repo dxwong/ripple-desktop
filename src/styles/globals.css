@@ -1,4 +1,4 @@
-﻿/* Inter 瀛椾綋锛堜娇鐢?swap 绛栫暐閬垮厤闃诲娓叉煋锛?*/
+/* Inter 瀛椾綋锛堜娇鐢?swap 绛栫暐閬垮厤闃诲娓叉煋锛?*/
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
@@ -1386,6 +1386,19 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.card-head-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;          /* 允许内部 title-row 收缩换行 */
+}
+.card-head-right {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
 }
 .card-icon {
   width: 36px;

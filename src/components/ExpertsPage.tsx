@@ -492,26 +492,30 @@ function ExpertCard({ expert, onEdit, onDelete }: ExpertCardProps) {
   return (
     <article className="card" data-type={expert.type}>
       <div className="card-head">
-        <div className={`card-icon ${gradient}`}>
-          <Icon />
-        </div>
-        <div className="card-title-row">
-          <h3 className="card-title">{expert.name}</h3>
-          <span className={status.className}>
-            <span className="tag-dot" />
-            {status.label}
-          </span>
+        <div className="card-head-top">
+          <div className={`card-icon ${gradient}`}>
+            <Icon />
+          </div>
+          <div className="card-head-right">
+            <div className="card-title-row">
+              <h3 className="card-title">{expert.name}</h3>
+              <span className={status.className}>
+                <span className="tag-dot" />
+                {status.label}
+              </span>
+            </div>
+            <div className="card-meta">
+              <span className="meta-item">
+                <WrenchIcon />
+                {expert.tools.length > 0 ? expert.tools.join(" · ") : "无工具"}
+              </span>
+              <span className="meta-item">
+                {expert.type === "agent" ? "提示词专家" : "会话专家"}
+              </span>
+            </div>
+          </div>
         </div>
         <p className="card-desc">{expert.description}</p>
-      </div>
-      <div className="card-meta">
-        <span className="meta-item">
-          <WrenchIcon />
-          {expert.tools.length > 0 ? expert.tools.join(" · ") : "无工具"}
-        </span>
-        <span className="meta-item">
-          {expert.type === "agent" ? "提示词专家" : "会话专家"}
-        </span>
       </div>
       {usageLine && (
         <div className="card-meta" style={{ marginTop: 4 }}>
