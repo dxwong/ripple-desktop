@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import {
   Server,
   Shield,
@@ -9,55 +9,63 @@ import {
   EyeOff,
   Check,
   RefreshCw,
-  Save,
   Loader2,
   Trash2,
   Plus,
   Search,
-  Cpu,
-  Globe,
-  Key,
   Smartphone,
   Folder,
+  Key,
+  X as XIcon,
+  ExternalLink,
 } from "lucide-react";
 import type {
   AppSettings,
-  ModelConfig,
-  ModelConfigFormData,
-  ApiProvider,
   PermissionMode,
+  CustomProvider,
+  ProviderConfig,
 } from "ripple-shared/types";
 import { PERMISSION_MODES } from "ripple-shared/types";
+import {
+  KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_MODELS,
+  getProviderDef,
+  type ProviderDefinition,
+} from "ripple-shared/providers";
 import { testConnection } from "../services/api";
 
 /**
  * 设置全屏页 — v2.1
  *  - 移植自 demo (plans/desktop/settings.html + settings.js)
  *  - 三个 pane: API 配置 / 风险控制 / 通用
- *  - 顶部横向 nav 切换，左侧服务商列表 + 右侧详情布局
- *  - 第一阶段 (UI) 只覆盖现有 AppSettings 字段；下一阶段再扩展 32 provider 列表
+ *  - API 配置 pane: 32 个内置 provider + 自定义添加
+ *  - 复用 CSS 体系（providers-layout / provider-item / provider-icon / model-card 等）
  */
 
 type SettingsPane = "api" | "risk" | "general";
-
-/** API 提供商选项（与现有 SettingsPanel 一致） */
-const PROVIDERS: { value: ApiProvider; label: string; endpoint: string; model: string }[] = [
-  { value: "custom", label: "自定义 OpenAI 兼容", endpoint: "https://api.openai.com/v1", model: "gpt-4o" },
-  { value: "openai", label: "OpenAI", endpoint: "https://api.openai.com/v1", model: "gpt-4o" },
-];
 
 interface SettingsPageProps {
   settings: AppSettings;
   onUpdate: (partial: Partial<AppSettings>) => void;
   onReset: () => void;
-  /** 保存模型配置（新建或编辑） */
-  onSaveModelConfig: (form: ModelConfigFormData, editId?: string) => void;
-  /** 删除模型配置 */
-  onDeleteModelConfig: (id: string) => void;
-  /** 切换当前模型 */
-  onSetActiveModel: (id: string) => void;
   /** 顶栏左侧菜单按钮回调 */
   onMenuClick?: () => void;
+
+  // ── v2.1: Provider 体系操作（从 useSettings 注入，避免双重 hook 实例） ──
+  /** 切换激活的 provider，可选同时指定 model */
+  setActiveProvider: (providerId: string, modelId?: string) => void;
+  /** 启用 / 禁用某个 provider */
+  setProviderEnabled: (providerId: string, enabled: boolean) => void;
+  /** 更新某个 provider 的配置（apiKey / baseUrl / enabledModels / customModels） */
+  updateProviderConfig: (providerId: string, patch: Partial<ProviderConfig>) => void;
+  /** 启用 / 禁用某个 model */
+  setModelEnabled: (providerId: string, modelId: string, enabled: boolean) => void;
+  /** 添加自定义 model id 到某个 provider */
+  addCustomModel: (providerId: string, modelId: string) => void;
+  /** 添加自定义 provider */
+  addCustomProvider: (provider: CustomProvider) => void;
+  /** 移除自定义 provider */
+  removeCustomProvider: (providerId: string) => void;
 }
 
 /** 小图标（避免 lucide 库和现有 icon 类冲突） */
@@ -86,150 +94,175 @@ function FolderOpenIcon() {
   );
 }
 
+/** 校验自定义 provider id 格式：小写字母开头，仅含小写字母/数字/连字符 */
+function isValidCustomId(id: string): boolean {
+  return /^[a-z][a-z0-9-]*$/.test(id);
+}
+
 export function SettingsPage({
   settings,
   onUpdate,
   onReset,
-  onSaveModelConfig,
-  onDeleteModelConfig,
-  onSetActiveModel,
   onMenuClick,
+  // v2.1: provider 操作（从 MainApp 注入，复用同一份 hook 状态）
+  setActiveProvider,
+  setProviderEnabled,
+  updateProviderConfig,
+  setModelEnabled,
+  addCustomModel,
+  addCustomProvider,
+  removeCustomProvider,
 }: SettingsPageProps) {
-  // 当前 pane
   const [activePane, setActivePane] = useState<SettingsPane>("api");
 
-  // ===== API 配置：列表选中态 =====
-  const [selectedConfigId, setSelectedConfigId] = useState<string>(
-    settings.activeModelId || settings.modelConfigs[0]?.id || ""
-  );
-  // 编辑态（undefined = 新建）
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
-  // 表单字段
-  const [formName, setFormName] = useState("");
-  const [formProvider, setFormProvider] = useState<ApiProvider>("custom");
-  const [formModel, setFormModel] = useState("");
-  const [formEndpoint, setFormEndpoint] = useState("");
-  const [formKey, setFormKey] = useState("");
-  // API Key 显示/隐藏
-  const [showKey, setShowKey] = useState(false);
-  // 服务商列表搜索
+  // API 配置：服务商搜索
   const [providerSearch, setProviderSearch] = useState("");
-  // 已保存提示
-  const [saved, setSaved] = useState(false);
-  // 测试连接
+
+  // API 配置：自定义服务商弹窗
+  const [showAddCustom, setShowAddCustom] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customId, setCustomId] = useState("");
+  const [customEndpoint, setCustomEndpoint] = useState("");
+  const [customKey, setCustomKey] = useState("");
+  const [customError, setCustomError] = useState("");
+
+  // API 配置：测试连接结果
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  // 当前选中的配置（来自 selectedConfigId，找不到则用第一个）
-  const activeCfg = useMemo(
-    () => settings.modelConfigs.find((c) => c.id === selectedConfigId) ?? settings.modelConfigs[0],
-    [settings.modelConfigs, selectedConfigId]
-  );
+  // 风险控制：重置提示
+  const [savedRisk, setSavedRisk] = useState(false);
 
-  // 表单对应的源配置
-  // - editingId 为真（非空字符串） → 编辑该 ID 的配置
-  // - editingId 为 "" → 新建模式（formSource = undefined）
-  // - editingId 为 undefined → 查看模式，用 activeCfg
-  const formSource = useMemo(() => {
-    if (editingId !== undefined) {
-      // 编辑或新建模式：editingId 是空字符串或具体 ID
-      if (editingId === "") return undefined;
-      return settings.modelConfigs.find((c) => c.id === editingId);
+  // API Key 显示/隐藏
+  const [showKeyState, setShowKeyState] = useState(false);
+
+  // API 配置：添加模型内联输入（替代 window.prompt，Tauri WebView 不支持原生 dialog）
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [addModelInput, setAddModelInput] = useState("");
+  const [addModelError, setAddModelError] = useState("");
+
+  // 当前激活的 provider id（兼容字段 → 优先 activeProvider）
+  const activeProvider = settings.activeProvider;
+  const activeProviderDef = getProviderDef(activeProvider);
+  const activeProviderCfg = settings.providerConfigs[activeProvider];
+
+  // ── 拼接"全量 provider 列表"（32 内置 + 自定义） ──
+  const allProviders = useMemo(() => {
+    const list: Array<
+      | { type: "builtin"; def: ProviderDefinition }
+      | { type: "custom"; def: CustomProvider; iconClass: string }
+    > = [];
+    for (const p of KNOWN_PROVIDERS) {
+      list.push({ type: "builtin", def: p });
     }
-    return activeCfg;
-  }, [editingId, activeCfg, settings.modelConfigs]);
-
-  // 同步表单字段（仅在 formSource 变化或 editingId 变化时同步）
-  useEffect(() => {
-    if (formSource === undefined) {
-      // 新建模式（editingId === ""）
-      setFormName("");
-      setFormProvider("custom");
-      setFormModel("gpt-4o");
-      setFormEndpoint("https://api.openai.com/v1");
-      setFormKey("");
-    } else {
-      // 查看或编辑模式
-      setFormName(formSource.name);
-      setFormProvider(formSource.provider);
-      setFormModel(formSource.model);
-      setFormEndpoint(formSource.endpoint);
-      setFormKey(formSource.apiKey);
+    for (const cp of settings.customProviders) {
+      list.push({
+        type: "custom",
+        def: cp,
+        iconClass: "custom",
+      });
     }
-  }, [formSource]);
+    return list;
+  }, [settings.customProviders]);
 
-  // 新建标志：editingId 为 ""（空字符串）表示新建
-  const isNew = editingId === "";
-
-  // 过滤后的服务商列表（按名称搜索）
-  const filteredConfigs = useMemo(() => {
+  // ── 按"启用 / 禁用"分组 + 搜索过滤 ──
+  const groupedProviders = useMemo(() => {
     const q = providerSearch.trim().toLowerCase();
-    if (!q) return settings.modelConfigs;
-    return settings.modelConfigs.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.model.toLowerCase().includes(q)
-    );
-  }, [settings.modelConfigs, providerSearch]);
+    const matches = allProviders.filter((item) => {
+      const name = item.def.name.toLowerCase();
+      const id = item.def.id.toLowerCase();
+      return !q || name.includes(q) || id.includes(q);
+    });
+    const enabled = matches.filter((it) => !!settings.enabledProviders[it.def.id]);
+    const disabled = matches.filter((it) => !settings.enabledProviders[it.def.id]);
+    return { enabled, disabled };
+  }, [allProviders, settings.enabledProviders, providerSearch]);
 
-  /** 选择提供商时自动填充 */
-  const handleProviderChange = (value: ApiProvider) => {
-    const provider = PROVIDERS.find((p) => p.value === value);
-    if (provider) {
-      setFormEndpoint(provider.endpoint);
-      if (isNew) setFormModel(provider.model);
+  // ── 选中 provider 的内置 model 列表 + 自定义 model 列表 ──
+  // 统一类型：所有元素都有 custom 字段（boolean），避免 union 类型推断导致的 JSX 类型问题
+  const providerModels = useMemo(() => {
+    if (!activeProvider) return [] as Array<{ id: string; name: string; inPrice: string; outPrice: string; cacheWrite: string; cacheRead: string; custom: boolean }>;
+    const builtin = (KNOWN_PROVIDER_MODELS[activeProvider] ?? []).map((m) => ({
+      ...m,
+      custom: false as const,
+    }));
+    const customIds = activeProviderCfg?.customModels ?? [];
+    const customAsModels = customIds.map((id) => ({
+      id,
+      name: id,
+      inPrice: "—",
+      outPrice: "—",
+      cacheWrite: "—",
+      cacheRead: "—",
+      custom: true as const,
+    }));
+    // 拼接 + 去重
+    const seen = new Set(builtin.map((m) => m.id));
+    return [...builtin, ...customAsModels.filter((m) => !seen.has(m.id))];
+  }, [activeProvider, activeProviderCfg]);
+
+  // 当前 provider 是否是自定义
+  const activeProviderIsCustom = useMemo(() => {
+    if (!activeProvider) return false;
+    return settings.customProviders.some((p) => p.id === activeProvider);
+  }, [activeProvider, settings.customProviders]);
+
+  // ── 切换 provider ──
+  const handleSelectProvider = (id: string) => {
+    if (id === activeProvider) return;
+    setActiveProvider(id); // 自动挑该 provider 第一个启用的 model
+    setTestResult(null);
+  };
+
+  // ── 启用/禁用 provider ──
+  const handleToggleProvider = (enabled: boolean) => {
+    setProviderEnabled(activeProvider, enabled);
+  };
+
+  // ── 启用/禁用 model ──
+  const handleToggleModel = (modelId: string, enabled: boolean) => {
+    setModelEnabled(activeProvider, modelId, enabled);
+  };
+
+  // ── 添加自定义 model id（内联输入框，避免依赖 Tauri 不支持的 window.prompt） ──
+  const handleOpenAddModel = () => {
+    setAddModelInput("");
+    setAddModelError("");
+    setAddModelOpen(true);
+  };
+
+  const handleCloseAddModel = () => {
+    setAddModelOpen(false);
+    setAddModelInput("");
+    setAddModelError("");
+  };
+
+  const handleSubmitAddModel = () => {
+    const trimmed = addModelInput.trim();
+    if (!trimmed) {
+      setAddModelError("请输入模型 ID");
+      return;
     }
-    setFormProvider(value);
+    if (providerModels.some((m) => m.id === trimmed)) {
+      setAddModelError(`模型 "${trimmed}" 已存在`);
+      return;
+    }
+    addCustomModel(activeProvider, trimmed);
+    handleCloseAddModel();
   };
 
-  /** 开始编辑已有配置 */
-  const handleEdit = (cfg: ModelConfig) => {
-    setSelectedConfigId(cfg.id);
-    setEditingId(cfg.id);
-  };
-
-  /** 开始新建配置 */
-  const handleNew = () => {
-    setEditingId(""); // 空字符串 = 新建模式
-    setSelectedConfigId("");
-  };
-
-  /** 保存当前表单为模型配置 */
-  const handleSave = () => {
-    if (!formName.trim()) return;
-    // 新建：传 undefined；编辑：传 editingId；查看但修改：传 selectedConfigId（当作编辑）
-    const targetId = isNew
-      ? undefined
-      : editingId ?? (selectedConfigId || undefined);
-    onSaveModelConfig(
-      {
-        name: formName.trim(),
-        provider: formProvider,
-        endpoint: formEndpoint,
-        apiKey: formKey,
-        model: formModel,
-      },
-      targetId
-    );
-    setSaved(true);
-    setEditingId(undefined);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  /** 切换配置为激活 */
-  const handleSwitchModel = (id: string) => {
-    onSetActiveModel(id);
-    setSelectedConfigId(id);
-    setEditingId(undefined);
-  };
-
-  /** 测试当前表单配置的连接（通过后端） */
+  // ── 测试连接 ──
   const handleTestConnection = async () => {
-    if (!formEndpoint || !formKey || !formModel) return;
+    if (!activeProviderCfg?.apiKey || !activeProviderCfg?.baseUrl || !settings.activeModel) {
+      setTestResult({ ok: false, msg: "请先填写 API Key、接口地址并选择模型" });
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     const result = await testConnection({
-      endpoint: formEndpoint,
-      apiKey: formKey,
-      model: formModel,
+      endpoint: activeProviderCfg.baseUrl,
+      apiKey: activeProviderCfg.apiKey,
+      model: settings.activeModel,
     });
     if (result.error) {
       setTestResult({ ok: false, msg: result.error });
@@ -240,6 +273,67 @@ export function SettingsPage({
       });
     }
     setTesting(false);
+  };
+
+  // ── 添加自定义 provider ──
+  const handleAddCustom = () => {
+    setCustomError("");
+    const name = customName.trim();
+    const id = customId.trim();
+    const endpoint = customEndpoint.trim();
+    const apiKey = customKey.trim();
+    if (!name) return setCustomError("请输入服务商名称");
+    if (!id) return setCustomError("请输入服务商标识");
+    if (!isValidCustomId(id))
+      return setCustomError("服务商标识仅支持小写字母、数字和连字符，且必须以字母开头");
+    if (!endpoint) return setCustomError("请输入接口地址");
+    if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://"))
+      return setCustomError("接口地址必须以 http:// 或 https:// 开头");
+    if (KNOWN_PROVIDERS.some((p) => p.id === id))
+      return setCustomError(`标识 "${id}" 已被内置服务商占用`);
+    if (settings.customProviders.some((p) => p.id === id))
+      return setCustomError(`标识 "${id}" 已被其他自定义服务商占用`);
+
+    addCustomProvider({ id, name, baseUrl: endpoint, apiKey });
+    setShowAddCustom(false);
+    setCustomName("");
+    setCustomId("");
+    setCustomEndpoint("");
+    setCustomKey("");
+  };
+
+  // ── 渲染 provider 列表条目 ──
+  const renderProviderItem = (
+    item:
+      | { type: "builtin"; def: ProviderDefinition }
+      | { type: "custom"; def: CustomProvider; iconClass: string },
+    enabled: boolean
+  ) => {
+    const isActive = item.def.id === activeProvider;
+    const iconText =
+      item.type === "builtin"
+        ? item.def.icon
+        : item.def.name.slice(0, 2).toUpperCase();
+    const iconCls =
+      item.type === "builtin"
+        ? item.def.iconClass
+        : item.iconClass;
+    return (
+      <button
+        key={item.def.id}
+        type="button"
+        className={`provider-item ${isActive ? "active" : ""}`}
+        onClick={() => handleSelectProvider(item.def.id)}
+      >
+        <span className={`provider-icon ${iconCls}`}>{iconText}</span>
+        <span className="provider-name">{item.def.name}</span>
+        <span
+          className="provider-dot"
+          style={{ background: enabled ? "#22c55e" : "#737373" }}
+          title={enabled ? "已启用" : "已禁用"}
+        />
+      </button>
+    );
   };
 
   // 渲染 nav 按钮
@@ -253,6 +347,12 @@ export function SettingsPage({
       <span>{label}</span>
     </button>
   );
+
+  // 风险控制 toggle 包装
+  const triggerRiskSaved = () => {
+    setSavedRisk(true);
+    setTimeout(() => setSavedRisk(false), 1500);
+  };
 
   return (
     <section className="page page-settings" id="page-settings">
@@ -296,7 +396,7 @@ export function SettingsPage({
                   <input
                     type="text"
                     className="providers-search-input"
-                    placeholder="搜索模型配置..."
+                    placeholder="搜索服务商..."
                     value={providerSearch}
                     onChange={(e) => setProviderSearch(e.target.value)}
                     spellCheck={false}
@@ -304,201 +404,119 @@ export function SettingsPage({
                   <button
                     className="icon-btn providers-add-btn"
                     type="button"
-                    onClick={handleNew}
-                    title="新建模型配置"
-                    aria-label="新建模型配置"
+                    onClick={() => setShowAddCustom(true)}
+                    title="添加自定义服务商"
+                    aria-label="添加自定义服务商"
                   >
                     <Plus size={14} />
                   </button>
                 </div>
 
                 <div className="providers-list">
-                  {filteredConfigs.length === 0 ? (
-                    <div className="providers-empty">
-                      {providerSearch ? "没有匹配的模型配置" : "还没有模型配置"}
+                  {/* 已启用组 */}
+                  <div className="providers-group">
+                    <div className="providers-group-title">
+                      已启用 ({groupedProviders.enabled.length})
                     </div>
-                  ) : (
-                    <div className="providers-group">
-                      <div className="providers-group-items">
-                        {filteredConfigs.map((cfg) => (
-                          <button
-                            key={cfg.id}
-                            type="button"
-                            className={`provider-item ${
-                              cfg.id === selectedConfigId && editingId === undefined ? "active" : ""
-                            }`}
-                            onClick={() => {
-                              setSelectedConfigId(cfg.id);
-                              setEditingId(undefined);
-                            }}
-                          >
-                            <span
-                              className={`provider-icon ${cfg.provider === "openai" ? "openai" : "custom"}`}
-                            >
-                              {cfg.provider === "openai" ? "O" : "C"}
-                            </span>
-                            <span className="provider-name">{cfg.name}</span>
-                            {cfg.id === settings.activeModelId && (
-                              <span className="provider-dot" title="当前激活" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
+                    <div className="providers-group-items">
+                      {groupedProviders.enabled.length === 0 ? (
+                        <div className="providers-empty">暂无启用的服务商</div>
+                      ) : (
+                        groupedProviders.enabled.map((it) => renderProviderItem(it, true))
+                      )}
                     </div>
-                  )}
+                  </div>
+
+                  {/* 已禁用组 */}
+                  <div className="providers-group">
+                    <div className="providers-group-title">
+                      已禁用 ({groupedProviders.disabled.length})
+                    </div>
+                    <div className="providers-group-items">
+                      {groupedProviders.disabled.length === 0 ? (
+                        <div className="providers-empty">暂无其他服务商</div>
+                      ) : (
+                        groupedProviders.disabled.map((it) => renderProviderItem(it, false))
+                      )}
+                    </div>
+                  </div>
                 </div>
               </aside>
 
               {/* 右侧：详情 */}
               <div className="provider-detail">
-                {activeCfg || isNew ? (
+                {activeProvider ? (
                   <>
+                    {/* 头部 */}
                     <div className="provider-detail-head">
                       <div className="provider-detail-title">
                         <span
-                          className={`provider-icon ${formProvider === "openai" ? "openai" : "custom"}`}
+                          className={`provider-icon ${
+                            activeProviderDef?.iconClass ||
+                            (activeProviderIsCustom ? "custom" : "")
+                          }`}
+                          style={
+                            activeProviderIsCustom && !activeProviderDef
+                              ? { background: "#888" }
+                              : undefined
+                          }
                         >
-                          {formProvider === "openai" ? "O" : "C"}
+                          {activeProviderDef?.icon ||
+                            (activeProviderIsCustom
+                              ? activeProvider.slice(0, 2).toUpperCase()
+                              : "?")}
                         </span>
                         <div>
                           <div className="provider-detail-name">
-                            {isNew
-                              ? "新建模型配置"
-                              : editingId
-                                ? `编辑：${formName || "(未命名)"}`
-                                : formName || "(未命名)"}
+                            {activeProviderDef?.name ||
+                              settings.customProviders.find((p) => p.id === activeProvider)?.name ||
+                              activeProvider}
                           </div>
                           <div className="provider-detail-sub">
-                            {isNew
-                              ? "填写下方字段后点击保存"
-                              : editingId
-                                ? "修改后点击保存"
-                                : `${activeCfg?.model ?? ""} · ${activeCfg?.endpoint ?? ""}`}
+                            {activeProviderDef?.apiType ||
+                              (activeProviderIsCustom ? "OpenAI 兼容 (自定义)" : "")}
                           </div>
                         </div>
                       </div>
-                      {!isNew && !editingId && activeCfg && (
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {activeCfg.id !== settings.activeModelId && (
-                            <button
-                              type="button"
-                              className="page-btn-secondary"
-                              onClick={() => handleSwitchModel(activeCfg.id)}
-                            >
-                              <Check size={14} />
-                              <span>启用</span>
-                            </button>
-                          )}
-                          {settings.modelConfigs.length > 1 && (
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => onDeleteModelConfig(activeCfg.id)}
-                              title="删除配置"
-                              aria-label="删除配置"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 配置名称 */}
-                    <div className="setting-section">
-                      <div className="setting-section-title">
-                        <Server size={15} />
-                        <span>配置名称</span>
-                      </div>
-                      <input
-                        type="text"
-                        className="field-input"
-                        value={formName}
-                        onChange={(e) => setFormName(e.target.value)}
-                        placeholder="例如：我的 OpenAI、工作用 DeepSeek"
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                    </div>
-
-                    {/* API 提供商 */}
-                    <div className="setting-section">
-                      <div className="setting-section-title">
-                        <Globe size={15} />
-                        <span>API 提供商</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {PROVIDERS.map((p) => (
-                          <button
-                            key={p.value}
-                            type="button"
-                            onClick={() => handleProviderChange(p.value)}
-                            className={`page-btn-secondary ${
-                              formProvider === p.value ? "!border-rose" : ""
-                            }`}
-                            style={
-                              formProvider === p.value
-                                ? {
-                                    borderColor: "var(--page-rose)",
-                                    color: "var(--page-rose)",
-                                    background: "var(--page-rose-soft)",
-                                  }
-                                : undefined
-                            }
-                          >
-                            <span className="font-medium">{p.label}</span>
-                            <span className="text-xs opacity-60 ml-1.5">{p.endpoint}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* 模型名称 */}
-                    <div className="setting-section">
-                      <div className="setting-section-title">
-                        <Cpu size={15} />
-                        <span>模型名称</span>
-                      </div>
-                      <input
-                        type="text"
-                        className="field-input"
-                        value={formModel}
-                        onChange={(e) => setFormModel(e.target.value)}
-                        placeholder="gpt-4o / deepseek-chat"
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                    </div>
-
-                    {/* 接口地址 */}
-                    <div className="setting-section">
-                      <div className="setting-section-title">
-                        <Globe size={15} />
-                        <span>接口地址</span>
-                      </div>
-                      <input
-                        type="text"
-                        className="field-input"
-                        value={formEndpoint}
-                        onChange={(e) => setFormEndpoint(e.target.value)}
-                        placeholder="https://api.openai.com/v1"
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
+                      <label className="toggle" title="启用 / 禁用服务商">
+                        <input
+                          type="checkbox"
+                          checked={!!settings.enabledProviders[activeProvider]}
+                          onChange={(e) => handleToggleProvider(e.target.checked)}
+                        />
+                        <span className="toggle-slider" />
+                      </label>
                     </div>
 
                     {/* API Key */}
                     <div className="setting-section">
-                      <div className="setting-section-title">
-                        <Key size={15} />
-                        <span>API Key</span>
+                      <div className="setting-section-head">
+                        <div className="setting-section-title">
+                          <Key size={15} />
+                          <span>API Key</span>
+                        </div>
+                        {activeProviderDef?.apiKeyUrl && (
+                          <a
+                            className="link"
+                            href={activeProviderDef.apiKeyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <ExternalLink size={12} />
+                            获取 API Key
+                          </a>
+                        )}
                       </div>
                       <div className="input-with-action">
                         <input
-                          type={showKey ? "text" : "password"}
+                          type={showKeyState ? "text" : "password"}
                           className="field-input"
-                          value={formKey}
-                          onChange={(e) => setFormKey(e.target.value)}
+                          value={activeProviderCfg?.apiKey ?? ""}
+                          onChange={(e) =>
+                            updateProviderConfig(activeProvider, {
+                              apiKey: e.target.value,
+                            })
+                          }
                           placeholder="sk-..."
                           autoComplete="off"
                           spellCheck={false}
@@ -506,82 +524,281 @@ export function SettingsPage({
                         <button
                           type="button"
                           className="icon-action"
-                          onClick={() => setShowKey(!showKey)}
-                          title={showKey ? "隐藏" : "显示"}
-                          aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
+                          onClick={() => setShowKeyState((v) => !v)}
+                          title={showKeyState ? "隐藏" : "显示"}
+                          aria-label={showKeyState ? "隐藏 API Key" : "显示 API Key"}
                         >
-                          {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                          {showKeyState ? <EyeOff size={15} /> : <Eye size={15} />}
                         </button>
                       </div>
                     </div>
 
-                    {/* 保存按钮 */}
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={!formName.trim()}
-                      className="page-btn w-full justify-center"
-                    >
-                      {saved ? (
-                        <>
-                          <Check size={14} />
-                          <span>已保存</span>
-                        </>
-                      ) : (
-                        <>
-                          <Save size={14} />
-                          <span>{isNew || !editingId ? "保存配置" : "更新配置"}</span>
-                        </>
+                    {/* 接口地址 */}
+                    <div className="setting-section">
+                      <div className="setting-section-title">接口地址</div>
+                      <input
+                        type="text"
+                        className="field-input"
+                        value={activeProviderCfg?.baseUrl ?? ""}
+                        onChange={(e) =>
+                          updateProviderConfig(activeProvider, {
+                            baseUrl: e.target.value,
+                          })
+                        }
+                        placeholder={activeProviderDef?.defaultBaseUrl ?? "https://..."}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <p className="setting-section-desc">
+                        默认地址由系统预设。修改可用于代理转发或自建网关。
+                      </p>
+                    </div>
+
+                    {/* 自定义 provider 的标识（只读） */}
+                    {activeProviderIsCustom && (
+                      <div className="setting-section">
+                        <div className="setting-section-title">服务商标识</div>
+                        <input
+                          type="text"
+                          className="field-input"
+                          value={activeProvider}
+                          disabled
+                          readOnly
+                        />
+                        <p className="setting-section-desc">
+                          自定义服务商的唯一标识，创建后不可修改。
+                        </p>
+                      </div>
+                    )}
+
+                    {/* 模型列表 */}
+                    <div className="setting-section">
+                      <div className="setting-section-head">
+                        <div className="setting-section-title">模型列表</div>
+                        {!addModelOpen ? (
+                          <button
+                            className="link"
+                            type="button"
+                            onClick={handleOpenAddModel}
+                            title="添加自定义模型"
+                          >
+                            <Plus size={12} />
+                            添加模型
+                          </button>
+                        ) : (
+                          <button
+                            className="link"
+                            type="button"
+                            onClick={handleCloseAddModel}
+                            title="取消"
+                          >
+                            取消
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 添加模型内联输入框（Tauri 不支持 window.prompt） */}
+                      {addModelOpen && (
+                        <div className="add-model-form">
+                          <input
+                            type="text"
+                            className="field-input"
+                            value={addModelInput}
+                            onChange={(e) => {
+                              setAddModelInput(e.target.value);
+                              if (addModelError) setAddModelError("");
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleSubmitAddModel();
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                handleCloseAddModel();
+                              }
+                            }}
+                            placeholder="例如: my-custom-model-v1"
+                            autoComplete="off"
+                            spellCheck={false}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            className="btn-primary btn-primary-sm"
+                            onClick={handleSubmitAddModel}
+                            disabled={!addModelInput.trim()}
+                          >
+                            添加
+                          </button>
+                          {addModelError && (
+                            <span className="add-model-error">{addModelError}</span>
+                          )}
+                        </div>
                       )}
-                    </button>
+                      <div className="model-list">
+                        {providerModels.length === 0 ? (
+                          <div className="providers-empty">
+                            暂无模型。点击右上"添加模型"新增。
+                          </div>
+                        ) : (
+                          providerModels.map((m) => {
+                            const enabled =
+                              activeProviderCfg?.enabledModels?.[m.id] !== false;
+                            const isCurrent =
+                              settings.activeProvider === activeProvider &&
+                              settings.activeModel === m.id;
+                            const iconCls = activeProviderDef?.iconClass || "";
+                            const iconText = activeProviderDef?.icon || "M";
+                            return (
+                              <div
+                                key={m.id}
+                                className="model-card"
+                                data-model={m.id}
+                              >
+                                <div className={`model-icon ${iconCls}`}>{iconText}</div>
+                                <div className="model-info">
+                                  <div className="model-name">
+                                    <span>{m.name}</span>
+                                    <span className="model-id">{m.id}</span>
+                                    {"custom" in m && m.custom && (
+                                      <span
+                                        className="model-id"
+                                        style={{
+                                          background: "var(--page-amber-soft)",
+                                          color: "var(--page-amber-soft-text)",
+                                        }}
+                                      >
+                                        自定义
+                                      </span>
+                                    )}
+                                    {isCurrent && (
+                                      <span
+                                        className="model-id"
+                                        style={{
+                                          background: "var(--page-rose-soft)",
+                                          color: "var(--page-rose)",
+                                        }}
+                                      >
+                                        当前
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="model-meta">
+                                    输入 ${(m.inPrice || "—").replace("$", "")} · 输出 ${(m.outPrice || "—").replace("$", "")}
+                                    <span className="model-meta-sep">·</span>
+                                    cache: 写 ${(m.cacheWrite || "—").replace("$", "")} / 读 ${(m.cacheRead || "—").replace("$", "")}
+                                  </div>
+                                </div>
+                                <label
+                                  className="toggle"
+                                  title={enabled ? "禁用模型" : "启用模型"}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={enabled}
+                                    onChange={(e) =>
+                                      handleToggleModel(m.id, e.target.checked)
+                                    }
+                                  />
+                                  <span className="toggle-slider" />
+                                </label>
+                                {isCurrent ? null : (
+                                  <button
+                                    type="button"
+                                    className="page-btn-secondary"
+                                    style={{ height: 28, padding: "0 10px", fontSize: 12 }}
+                                    onClick={() => setActiveProvider(activeProvider, m.id)}
+                                  >
+                                    <Check size={12} />
+                                    <span>使用</span>
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
 
                     {/* 测试连接 */}
-                    <button
-                      type="button"
-                      onClick={handleTestConnection}
-                      disabled={testing || !formEndpoint || !formKey || !formModel}
-                      className="page-btn-secondary w-full justify-center"
-                    >
-                      {testing ? (
-                        <>
-                          <Loader2 size={14} className="animate-spin" />
-                          <span>测试中...</span>
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw size={14} />
-                          <span>测试连接</span>
-                        </>
-                      )}
-                    </button>
-
-                    {/* 测试结果 */}
-                    {testResult && (
-                      <div
-                        className="connectivity-result"
-                        style={
-                          testResult.ok
-                            ? {
-                                background: "rgba(34, 197, 94, 0.08)",
-                                borderColor: "rgba(34, 197, 94, 0.3)",
-                                color: "#16a34a",
-                              }
-                            : {
-                                background: "rgba(239, 68, 68, 0.08)",
-                                borderColor: "rgba(239, 68, 68, 0.3)",
-                                color: "#dc2626",
-                              }
+                    <div className="setting-section">
+                      <div className="setting-section-title">连通性测试</div>
+                      <button
+                        type="button"
+                        onClick={handleTestConnection}
+                        disabled={
+                          testing ||
+                          !activeProviderCfg?.apiKey ||
+                          !activeProviderCfg?.baseUrl ||
+                          !settings.activeModel
                         }
+                        className="page-btn-secondary w-full justify-center"
                       >
-                        {testResult.ok ? "✓ " : "✗ "}
-                        {testResult.msg}
+                        {testing ? (
+                          <>
+                            <Loader2 size={14} className="animate-spin" />
+                            <span>测试中...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw size={14} />
+                            <span>测试连接</span>
+                          </>
+                        )}
+                      </button>
+                      {testResult && (
+                        <div
+                          className="connectivity-result"
+                          style={
+                            testResult.ok
+                              ? {
+                                  background: "rgba(34, 197, 94, 0.08)",
+                                  borderColor: "rgba(34, 197, 94, 0.3)",
+                                  color: "#16a34a",
+                                }
+                              : {
+                                  background: "rgba(239, 68, 68, 0.08)",
+                                  borderColor: "rgba(239, 68, 68, 0.3)",
+                                  color: "#dc2626",
+                                }
+                          }
+                        >
+                          {testResult.ok ? "✓ " : "✗ "}
+                          {testResult.msg}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 移除自定义服务商 */}
+                    {activeProviderIsCustom && (
+                      <div className="setting-section">
+                        <button
+                          type="button"
+                          className="btn-danger-outline"
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `确定移除此自定义服务商「${
+                                  settings.customProviders.find(
+                                    (p) => p.id === activeProvider
+                                  )?.name || activeProvider
+                                }」？`
+                              )
+                            )
+                              return;
+                            removeCustomProvider(activeProvider);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                          <span>移除此服务商</span>
+                        </button>
                       </div>
                     )}
                   </>
                 ) : (
                   <div className="provider-empty">
                     <FolderOpenIcon />
-                    <span>从左侧选择一个模型配置，或点击 + 新建</span>
+                    <span>从左侧选择一个服务商，或点击 + 添加</span>
                   </div>
                 )}
               </div>
@@ -609,9 +826,11 @@ export function SettingsPage({
                       onUpdate({
                         riskManagement: {
                           ...settings.riskManagement,
-                          commandWhitelistEnabled: !settings.riskManagement.commandWhitelistEnabled,
+                          commandWhitelistEnabled:
+                            !settings.riskManagement.commandWhitelistEnabled,
                         },
                       });
+                      triggerRiskSaved();
                     }}
                   />
                   <span className="toggle-slider" />
@@ -633,10 +852,13 @@ export function SettingsPage({
                           riskManagement: {
                             ...settings.riskManagement,
                             whitelist: settings.riskManagement.whitelist.map((w) =>
-                              w.command === entry.command ? { ...w, enabled: !w.enabled } : w
+                              w.command === entry.command
+                                ? { ...w, enabled: !w.enabled }
+                                : w
                             ),
                           },
                         });
+                        triggerRiskSaved();
                       }}
                     />
                     <span className="checkbox-row-key">{entry.command}</span>
@@ -673,6 +895,7 @@ export function SettingsPage({
                             },
                           },
                         });
+                        triggerRiskSaved();
                       }}
                     />
                     <span className="toggle-slider" />
@@ -696,10 +919,12 @@ export function SettingsPage({
                             ...settings.riskManagement,
                             pathRestriction: {
                               ...settings.riskManagement.pathRestriction,
-                              allowReadOutside: !settings.riskManagement.pathRestriction.allowReadOutside,
+                              allowReadOutside:
+                                !settings.riskManagement.pathRestriction.allowReadOutside,
                             },
                           },
                         });
+                        triggerRiskSaved();
                       }}
                     />
                     <span className="toggle-slider" />
@@ -764,6 +989,16 @@ export function SettingsPage({
                 })}
               </div>
             </div>
+
+            {savedRisk && (
+              <div className="connectivity-result" style={{
+                background: "rgba(34, 197, 94, 0.08)",
+                borderColor: "rgba(34, 197, 94, 0.3)",
+                color: "#16a34a",
+              }}>
+                ✓ 已保存
+              </div>
+            )}
           </div>
 
           {/* ===== Pane 3: 通用 ===== */}
@@ -836,6 +1071,132 @@ export function SettingsPage({
           </div>
         </div>
       </div>
+
+      {/* ===== 自定义服务商弹窗 ===== */}
+      {showAddCustom && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowAddCustom(false);
+          }}
+        >
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-head">
+              <div className="modal-title">添加自定义服务商</div>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setShowAddCustom(false)}
+                aria-label="关闭"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div className="field">
+                <label className="field-label">服务商名称</label>
+                <input
+                  type="text"
+                  className="field-input"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="例如：公司内部网关"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label">服务商标识 (ID)</label>
+                <input
+                  type="text"
+                  className="field-input"
+                  value={customId}
+                  onChange={(e) => setCustomId(e.target.value)}
+                  placeholder="例如：my-corp-gateway"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <p style={{ fontSize: 12, color: "var(--page-text-3)", marginTop: 4 }}>
+                  唯一标识，创建后不可修改。仅支持小写字母、数字和连字符。
+                </p>
+              </div>
+              <div className="field">
+                <label className="field-label">接口地址</label>
+                <input
+                  type="text"
+                  className="field-input"
+                  value={customEndpoint}
+                  onChange={(e) => setCustomEndpoint(e.target.value)}
+                  placeholder="https://your-gateway.com/v1"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label">API Key（可选）</label>
+                <input
+                  type="password"
+                  className="field-input"
+                  value={customKey}
+                  onChange={(e) => setCustomKey(e.target.value)}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              {/* v2.1: sensenova / 其他非内置服务商的快速参考 */}
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--page-text-3)",
+                  background: "var(--page-surface-2)",
+                  border: "1px solid var(--page-border)",
+                  borderRadius: "var(--page-radius)",
+                  padding: "10px 12px",
+                  lineHeight: 1.55,
+                }}
+              >
+                <div style={{ fontWeight: 500, marginBottom: 4, color: "var(--page-text-2)" }}>
+                  常用示例
+                </div>
+                <div>
+                  <code style={{ fontFamily: "ui-monospace, monospace" }}>sensenova</code>：
+                  ID 填 <code style={{ fontFamily: "ui-monospace, monospace" }}>sensenova</code>，
+                  接口地址 <code style={{ fontFamily: "ui-monospace, monospace" }}>https://api.sensenova.cn/v1</code>，
+                  模型 <code style={{ fontFamily: "ui-monospace, monospace" }}>deepseek-v4-flash</code>（在"模型列表"用"添加模型"输入）
+                </div>
+              </div>
+              {customError && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--page-red)",
+                    background: "var(--page-red-soft)",
+                    border: "1px solid var(--page-red)",
+                    borderRadius: "var(--page-radius)",
+                    padding: "8px 10px",
+                  }}
+                >
+                  ✗ {customError}
+                </div>
+              )}
+            </div>
+            <div className="modal-foot">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowAddCustom(false)}
+              >
+                取消
+              </button>
+              <button type="button" className="btn-primary" onClick={handleAddCustom}>
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

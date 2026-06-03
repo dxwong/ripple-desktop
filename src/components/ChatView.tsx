@@ -4,7 +4,7 @@ import ChatMessage from "./ChatMessage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
-import { Message, ModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
+import { Message, ActiveModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
 import { isTauri } from "../hooks/useTauri";
 import { fetchStatsSummary, fetchAccountBalance } from "../services/api";
 import { flog } from "../services/frontendLogger";
@@ -57,9 +57,11 @@ interface ChatViewProps {
   /** 停止 AI 处理的回调 */
   onStop?: () => void;
   darkMode?: boolean;
-  activeConfig?: ModelConfig;
-  modelConfigs?: ModelConfig[];
-  onSwitchModel?: (id: string) => void;
+  activeConfig?: ActiveModelConfig;
+  /** 可选模型条目（id 形如 "provider::model"） */
+  modelEntries?: Array<{ id: string; name: string; model: string; provider: string }>;
+  /** 切换模型条目 */
+  onSwitchModelEntry?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
   /** 当前项目目录（有值表示是项目对话） */
@@ -198,8 +200,8 @@ function ChatView({
   onStop,
   darkMode = true,
   activeConfig,
-  modelConfigs,
-  onSwitchModel,
+  modelEntries,
+  onSwitchModelEntry,
   chatMode = "chat",
   cwd,
   backendConnected = false,
@@ -561,6 +563,7 @@ function ChatView({
         </div>
       </div>
 
+      {/* ===== 输入框区域容器（v2.0 结构：max-w-5xl 居中） ===== */}
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           {/* 工具确认横幅 — 输入框上方靠右 */}
@@ -573,6 +576,25 @@ function ChatView({
               />
             </div>
           )}
+          <MessageInput
+            onSend={onSendMessage}
+            disabled={isProcessing}
+            isProcessing={isProcessing}
+            onStop={onStop}
+            activeConfig={activeConfig}
+            modelEntries={modelEntries}
+            onSwitchModelEntry={onSwitchModelEntry}
+            chatMode={chatMode}
+            hasProject={!!cwd}
+            placeholder={
+              isProcessing
+                ? "AI 正在回复... 点击停止按钮可中断"
+                : chatMode === "code" || cwd
+                ? "输入编程指令..."
+                : "输入消息..."
+            }
+          />
+
           {/* 权限模式切换按钮 — 弹窗时隐藏 */}
           {!(pendingToolRequests.length > 0 && permissionMode !== "auto") && (
           <div className="flex justify-end mb-1.5">
@@ -621,24 +643,6 @@ function ChatView({
             </button>
           </div>
           )}
-          <MessageInput
-            onSend={onSendMessage}
-            disabled={isProcessing}
-            isProcessing={isProcessing}
-            onStop={onStop}
-            activeConfig={activeConfig}
-            modelConfigs={modelConfigs}
-            onSwitchModel={onSwitchModel}
-            chatMode={chatMode}
-            hasProject={!!cwd}
-            placeholder={
-              isProcessing
-                ? "AI 正在回复... 点击停止按钮可中断"
-                : chatMode === "code" || cwd
-                ? "输入编程指令..."
-                : "输入消息..."
-            }
-          />
           <div className="flex items-center justify-between mt-2 px-1">
             {/* 左侧：使用统计实时指标 */}
             <div className="flex items-center gap-4 text-[12px] text-content-tertiary dark:text-content-tertiary-dark">

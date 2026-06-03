@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Message, Conversation, ChatMode, ModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage, AppSettings } from "../types";
+import { Message, Conversation, ChatMode, ActiveModelConfig, ToolRequestData, PermissionMode, ToolCallResult, ConversationUsage, AppSettings } from "../types";
 import { SSEClient } from "../services/sse";
 import { checkHealth, fetchSessions, fetchSession, confirmToolCall, deleteSession, saveSession, createCheckpoint, restoreCheckpoint, copySession } from "../services/api";
 import { useStore, syncStore } from "./useStore";
@@ -516,7 +516,7 @@ export function useStreamingChat(
     async (
       content: string,
       useBackend = false,
-      modelConfig?: ModelConfig,
+      modelConfig?: ActiveModelConfig,
       cwd?: string,
       regenerate?: boolean,
       targetConvId?: string  // 新增：可选的目标会话ID，用于手机端消息路由
@@ -527,12 +527,13 @@ export function useStreamingChat(
         useBackend,
         backendConnected: backendConnected,
         hasModelConfig: !!modelConfig,
-        modelConfigId: modelConfig?.id || '(none)',
+        modelConfigName: modelConfig?.name || '(none)',
+        modelConfigProvider: modelConfig?.provider || '(none)',
         cwd: cwd || '(none)',
         regenerate,
         targetConvId: targetConvId || '(none)',
       });
-      onLog?.(`sendMessage: content="${content.slice(0, 30)}" useBackend=${useBackend} backendConnected=${backendConnected} hasConfig=${!!modelConfig} configId=${modelConfig?.id || '(none)'} cwd=${cwd || '(none)'} targetConvId=${targetConvId || '(none)'}`);
+      onLog?.(`sendMessage: content="${content.slice(0, 30)}" useBackend=${useBackend} backendConnected=${backendConnected} hasConfig=${!!modelConfig} configName=${modelConfig?.name || '(none)'} provider=${modelConfig?.provider || '(none)'} cwd=${cwd || '(none)'} targetConvId=${targetConvId || '(none)'}`);
 
       // 同步锁：防止 isProcessing 异步状态更新导致的竞态条件
       // isProcessingRef 赋值后立即生效，比 state 更可靠
@@ -674,6 +675,8 @@ export function useStreamingChat(
               message: content,
               sessionId: convId,
               regenerate: regenerate || false,
+              // v2.1: 新字段 - provider 用于服务端在 @ripple/ai 注册表查找正确 API 协议
+              provider: modelConfig?.provider,
               modelId: modelConfig?.model || "deepseek-v4-flash",
               model: modelConfig?.model,
               endpoint: modelConfig?.endpoint,

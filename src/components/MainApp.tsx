@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import Sidebar from "./Sidebar";
 import ChatView from "./ChatView";
 import FileTree from "./FileTree";
@@ -21,6 +21,10 @@ import { logger } from "./LogPanel";
 import { isTauri } from "../hooks/useTauri";
 import { healthSSEClient } from "../services/healthSSEClient";
 import { setLogApiUrl } from "../services/frontendLogger";
+import {
+  KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_MODELS,
+} from "ripple-shared/providers";
 import {
   startBridge,
   stopBridge,
@@ -68,9 +72,13 @@ export function MainApp() {
     updateSettings,
     resetSettings,
     activeConfig,
-    saveModelConfig,
-    deleteModelConfig,
-    setActiveModel,
+    setActiveProvider,
+    setProviderEnabled,
+    updateProviderConfig,
+    setModelEnabled,
+    addCustomModel,
+    addCustomProvider,
+    removeCustomProvider,
   } = useSettings();
   const chat = useStreamingChat(
     settings.permissionMode,
@@ -421,6 +429,68 @@ export function MainApp() {
   const currentCwd = chat.activeConversation?.cwd;
   const currentMode = chat.activeConversation?.mode || "chat";
 
+  // v2.1: 构造"模型条目"列表（用于 MessageInput 下拉切换）
+  //   每个条目 id = "providerId::modelId"
+  //   包含所有已启用 provider 下所有启用的 model
+  const modelEntries = useMemo(() => {
+    const entries: Array<{ id: string; name: string; model: string; provider: string }> = [];
+    // 内置 provider
+    for (const p of KNOWN_PROVIDERS) {
+      if (!settings.enabledProviders[p.id]) continue;
+      const cfg = settings.providerConfigs[p.id];
+      if (!cfg) continue;
+      for (const m of KNOWN_PROVIDER_MODELS[p.id] ?? []) {
+        if (cfg.enabledModels[m.id] !== false) {
+          entries.push({
+            id: `${p.id}::${m.id}`,
+            name: `${p.name} · ${m.name}`,
+            model: m.id,
+            provider: p.id,
+          });
+        }
+      }
+      for (const mid of cfg.customModels ?? []) {
+        if (cfg.enabledModels[mid] !== false) {
+          entries.push({
+            id: `${p.id}::${mid}`,
+            name: `${p.name} · ${mid}`,
+            model: mid,
+            provider: p.id,
+          });
+        }
+      }
+    }
+    // 自定义 provider
+    for (const cp of settings.customProviders ?? []) {
+      if (!settings.enabledProviders[cp.id]) continue;
+      const cfg = settings.providerConfigs[cp.id];
+      if (!cfg) continue;
+      for (const mid of cfg.customModels ?? []) {
+        if (cfg.enabledModels[mid] !== false) {
+          entries.push({
+            id: `${cp.id}::${mid}`,
+            name: `${cp.name} · ${mid}`,
+            model: mid,
+            provider: cp.id,
+          });
+        }
+      }
+    }
+    return entries;
+  }, [
+    settings.enabledProviders,
+    settings.providerConfigs,
+    settings.customProviders,
+  ]);
+
+  // v2.1: 切换对话模型（id 形如 "provider::model"）
+  const handleSwitchModelEntry = useCallback((id: string) => {
+    const [provider, model] = id.split("::");
+    if (provider && model) {
+      setActiveProvider(provider, model);
+    }
+  }, [setActiveProvider]);
+
   // 发送消息（桌面端和手机端的统一出口）
   const handleSendMessage = useCallback(async (content: string, regenerate?: boolean, options?: { fromMobile?: boolean }) => {
     const convId = chat.activeConversationId;
@@ -430,7 +500,7 @@ export function MainApp() {
     // 手机端消息必须传递 targetConvId，确保 SSE 流输出追加到正确的会话
     // 避免依赖 activeConversationIdRef 在 setTimeout(300ms) 后的闭包值
     const targetConvId = options?.fromMobile ? convId : undefined;
-    debugLog(`handleSendMessage: content="${content.slice(0, 30)}" convId=${convId} fromMobile=${!!options?.fromMobile} targetConvId=${targetConvId} activeConfig=${activeConfig?.id || '(none)'} backendConnected=${chat.backendConnected}`);
+    debugLog(`handleSendMessage: content="${content.slice(0, 30)}" convId=${convId} fromMobile=${!!options?.fromMobile} targetConvId=${targetConvId} activeConfig=${activeConfig?.name || '(none)'} provider=${activeConfig?.provider || '(none)'} backendConnected=${chat.backendConnected}`);
     logger.info(`发送消息: "${content.slice(0, 30)}" convId=${convId} fromMobile=${!!options?.fromMobile} targetConvId=${targetConvId}`);
     await chat.sendMessage(content, chat.backendConnected, activeConfig, currentCwd, regenerate, targetConvId);
   }, [chat.sendMessage, chat.backendConnected, activeConfig, currentCwd, chat.activeConversationId]);
@@ -612,8 +682,8 @@ export function MainApp() {
                     onStop={chat.stopStreaming}
                     darkMode={settings.darkMode}
                     activeConfig={activeConfig}
-                    modelConfigs={settings.modelConfigs}
-                    onSwitchModel={setActiveModel}
+                    modelEntries={modelEntries}
+                    onSwitchModelEntry={handleSwitchModelEntry}
                     chatMode={currentMode}
                     cwd={currentCwd}
                     backendConnected={chat.backendConnected}
@@ -680,9 +750,13 @@ export function MainApp() {
                   settings={settings}
                   onUpdate={updateSettings}
                   onReset={resetSettings}
-                  onSaveModelConfig={saveModelConfig}
-                  onDeleteModelConfig={deleteModelConfig}
-                  onSetActiveModel={setActiveModel}
+                  setActiveProvider={setActiveProvider}
+                  setProviderEnabled={setProviderEnabled}
+                  updateProviderConfig={updateProviderConfig}
+                  setModelEnabled={setModelEnabled}
+                  addCustomModel={addCustomModel}
+                  addCustomProvider={addCustomProvider}
+                  removeCustomProvider={removeCustomProvider}
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                 />
               )}

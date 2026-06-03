@@ -1,50 +1,99 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useStore } from "./useStore";
-import type { AppSettings, ModelConfig, ModelConfigFormData, ApiProvider } from "../types";
+import type {
+  AppSettings,
+  ProviderConfig,
+  CustomProvider,
+  ActiveModelConfig,
+} from "../types";
 import { DEFAULT_RISK_CONFIG } from "../types";
+import {
+  KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_MODELS,
+  getProviderDef,
+} from "ripple-shared/providers";
 import { fetchSettings, saveSettingsToCloud } from "../services/api";
 
 /** 生成唯一 ID */
 const genId = () => Math.random().toString(36).substring(2, 10);
 
-/** 默认模型配置 */
-const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  id: "default",
-  name: "默认配置",
-  provider: "custom",
-  endpoint: "https://api.openai.com/v1",
-  apiKey: "",
-  model: "gpt-4o",
-  createdAt: Date.now(),
-};
+/**
+ * 默认 provider 配置（按 32 个内置 + 默认激活 deepseek 构造）
+ * - 第一个 provider 启用
+ * - 启用其下所有内置 model
+ */
+function buildDefaultSettings(): AppSettings {
+  // 默认激活 deepseek（用户最常用的国产服务，对应旧 v1.7 工作流）
+  // 若 KNOWN_PROVIDERS 未来不包含 deepseek，回落到第一个有内置模型的 provider
+  const defaultProviderId =
+    KNOWN_PROVIDERS.find((p) => p.id === "deepseek")?.id ??
+    KNOWN_PROVIDERS.find((p) => KNOWN_PROVIDER_MODELS[p.id]?.length)?.id ??
+    KNOWN_PROVIDERS[0].id;
+  const defaultProvider = KNOWN_PROVIDERS.find((p) => p.id === defaultProviderId) ?? KNOWN_PROVIDERS[0];
+  const defaultModels = KNOWN_PROVIDER_MODELS[defaultProviderId] ?? [];
 
-/** 默认设置 */
-const DEFAULT_SETTINGS: AppSettings = {
-  activeModelId: "default",
-  modelConfigs: [DEFAULT_MODEL_CONFIG],
-  apiProvider: "custom",
-  apiEndpoint: "https://api.openai.com/v1",
-  apiKey: "",
-  modelName: "gpt-4o",
-  darkMode: false,
-  permissionMode: "confirm",
-  agentGatewayUrl: "http://localhost:3002",
-  mobileBridgePort: 9876,
-  riskManagement: DEFAULT_RISK_CONFIG,
-};
+  const enabledProviders: Record<string, boolean> = {};
+  const providerConfigs: Record<string, ProviderConfig> = {};
+
+  for (const p of KNOWN_PROVIDERS) {
+    enabledProviders[p.id] = p.id === defaultProviderId;
+    const models = KNOWN_PROVIDER_MODELS[p.id] ?? [];
+    providerConfigs[p.id] = {
+      apiKey: "",
+      baseUrl: "",
+      enabledModels: models.reduce<Record<string, boolean>>((acc, m) => {
+        acc[m.id] = true;
+        return acc;
+      }, {}),
+      customModels: [],
+    };
+  }
+
+  return {
+    activeProvider: defaultProviderId,
+    activeModel: defaultModels[0]?.id ?? "",
+    enabledProviders,
+    providerConfigs,
+    customProviders: [],
+    darkMode: false,
+    permissionMode: "confirm",
+    agentGatewayUrl: "http://localhost:3002",
+    mobileBridgePort: 9876,
+    riskManagement: DEFAULT_RISK_CONFIG,
+  };
+}
+
+const DEFAULT_SETTINGS: AppSettings = buildDefaultSettings();
 
 /** 设置存储键名 */
 const STORAGE_KEY = "app_settings";
 
 /**
+ * v2.1 重构：从旧的 modelConfigs 体系迁移到 providerConfigs 体系
+ *
+ * - 不保留旧 modelConfigs（旧数据丢弃）
+ * - 旧 settings.json 数据若包含 modelConfigs，自动用 DEFAULT_SETTINGS 覆盖
+ * - 旧 ripple-settings (v1.x 单配置) 也不再迁移
+ */
+function isLegacyShape(data: any): boolean {
+  if (!data || typeof data !== "object") return false;
+  // 旧版 schema 标志：activeModelId + modelConfigs 数组
+  return (
+    "activeModelId" in data ||
+    "modelConfigs" in data ||
+    ("apiProvider" in data && "apiEndpoint" in data)
+  );
+}
+
+/**
  * 设置管理 Hook
  *
- * 核心设计：
- * - 支持保存多个大模型配置（ModelConfig），以列表形式持久化
+ * 核心设计（v2.1）：
+ * - Provider 中心化：32 个内置 provider + 用户自定义 provider
+ * - 每个 provider 独立配置：apiKey / baseUrl / 启用的 model 集合
+ * - 当前激活：activeProvider + activeModel 两个字段
  * - 云端优先：启动时先读云端，云端无数据则读本地
  * - 双写策略：每次保存同时写本地 + 云端（云端失败不阻塞）
- * - 反向迁移：本地有数据但云端无时，自动推送到云端
- * - 兼容旧版本的单个配置存储
  */
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -63,17 +112,21 @@ export function useSettings() {
         const cloudRes = await fetchSettings();
         if (cloudRes.data?.settings) {
           const cloud = cloudRes.data.settings as Record<string, unknown>;
-          // 从云端数据构造 AppSettings（补充不上云的本地字段）
-          merged = {
-            ...DEFAULT_SETTINGS,
-            ...cloud,
-            // 不上云的字段：保留本地值或默认值
-            agentGatewayUrl: DEFAULT_SETTINGS.agentGatewayUrl,
-            mobileBridgePort: DEFAULT_SETTINGS.mobileBridgePort,
-          } as AppSettings;
-          source = "cloud";
-          // 用云端数据更新 localStorage
-          await saveItem(STORAGE_KEY, merged);
+          // 旧版 schema 检测 → 丢弃整个云端数据用默认
+          if (isLegacyShape(cloud)) {
+            await log("warn", "SETTINGS", "云端是 v1.x 旧格式，已忽略，使用默认");
+          } else {
+            merged = {
+              ...DEFAULT_SETTINGS,
+              ...cloud,
+              // 不上云的字段：保留本地值或默认值
+              agentGatewayUrl: DEFAULT_SETTINGS.agentGatewayUrl,
+              mobileBridgePort: DEFAULT_SETTINGS.mobileBridgePort,
+            } as AppSettings;
+            source = "cloud";
+            // 用云端数据更新 localStorage
+            await saveItem(STORAGE_KEY, merged);
+          }
         }
       } catch {
         /* 云端不可用，继续走本地 */
@@ -82,9 +135,12 @@ export function useSettings() {
       // ── 2. 云端无数据，从本地读取 ──
       if (!merged) {
         const saved = await loadItem<AppSettings | null>(STORAGE_KEY, null);
-        if (saved) {
+        if (saved && !isLegacyShape(saved)) {
           merged = { ...DEFAULT_SETTINGS, ...saved };
           source = "local";
+        } else if (saved && isLegacyShape(saved)) {
+          // 本地也是旧格式：丢弃，用默认
+          await log("warn", "SETTINGS", "本地是 v1.x 旧格式，已忽略，使用默认");
         }
       }
 
@@ -93,24 +149,26 @@ export function useSettings() {
         merged = { ...DEFAULT_SETTINGS };
       }
 
-      // ── 4. 确保 modelConfigs 和 activeModelId 存在 ──
-      if (!merged.modelConfigs || merged.modelConfigs.length === 0) {
-        merged.modelConfigs = [{ ...DEFAULT_MODEL_CONFIG }];
-        merged.activeModelId = DEFAULT_MODEL_CONFIG.id;
-      }
+      // ── 4. 确保必需字段存在（防部分持久化数据缺字段） ──
+      merged.activeProvider = merged.activeProvider || DEFAULT_SETTINGS.activeProvider;
+      merged.activeModel = merged.activeModel || DEFAULT_SETTINGS.activeModel;
+      merged.enabledProviders = { ...DEFAULT_SETTINGS.enabledProviders, ...(merged.enabledProviders || {}) };
+      merged.providerConfigs = { ...DEFAULT_SETTINGS.providerConfigs, ...(merged.providerConfigs || {}) };
+      merged.customProviders = merged.customProviders || [];
+      merged.riskManagement = merged.riskManagement || DEFAULT_RISK_CONFIG;
 
       // ── 5. 跨设备访问修正：页面通过 IP 访问时自动修正网关地址 ──
       //   手机浏览器访问 http://192.168.1.10:1420/ 时，
       //   agentGatewayUrl 必须用同一 IP 而非 localhost，否则手机连不上后端
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         const hostname = window.location.hostname;
-        if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '') {
+        if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "") {
           const currentUrl = merged.agentGatewayUrl;
           try {
             const url = new URL(currentUrl);
-            if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+            if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
               url.hostname = hostname;
-              merged.agentGatewayUrl = url.toString().replace(/\/$/, '');
+              merged.agentGatewayUrl = url.toString().replace(/\/$/, "");
             }
           } catch {
             /* URL 解析失败，跳过 */
@@ -122,48 +180,16 @@ export function useSettings() {
       setSettingsSource(source);
       setLoaded(true);
 
-      // ── 5. 反向迁移：本地有数据但云端无 → 推送到云端 ──
+      // ── 6. 反向迁移：本地有数据但云端无 → 推送到云端 ──
       if (source === "local") {
         try {
-          // 检查云端是否真有数据（不是超时）
           const checkRes = await fetchSettings();
           if (!checkRes.data?.settings) {
-            // 云端真的空的 → 推送本地数据
             await saveSettingsToCloud(merged as unknown as Record<string, unknown>);
           }
         } catch {
           /* 推送失败不影响本地使用 */
         }
-      }
-
-      // ── 6. 尝试从旧版 localStorage 迁移（仅本地源时执行） ──
-      if (source === "local") {
-        try {
-          const oldStored = localStorage.getItem("ripple-settings");
-          if (oldStored) {
-            const old = JSON.parse(oldStored);
-            const migrated: AppSettings = {
-              ...DEFAULT_SETTINGS,
-              apiProvider: old.apiProvider || "custom",
-              apiEndpoint: old.apiEndpoint || "https://api.openai.com/v1",
-              apiKey: old.apiKey || "",
-              modelName: old.modelName || "gpt-4o",
-              darkMode: old.darkMode || false,
-            };
-            // 将旧配置转为第一个模型配置
-            migrated.modelConfigs = [{
-              ...DEFAULT_MODEL_CONFIG,
-              name: "迁移配置",
-              provider: migrated.apiProvider,
-              endpoint: migrated.apiEndpoint,
-              apiKey: migrated.apiKey,
-              model: migrated.modelName,
-            }];
-            setSettings(migrated);
-            await saveItem(STORAGE_KEY, migrated);
-            localStorage.removeItem("ripple-settings");
-          }
-        } catch { /* 无旧数据 */ }
       }
     };
     init();
@@ -187,103 +213,179 @@ export function useSettings() {
     }
   }, [settings, loaded, saveItem]);
 
-  // ========== 辅助：从 modelConfigs 同步快捷字段 ==========
-  const syncFromActiveConfig = useCallback(
-    (configs: ModelConfig[], activeId: string): Partial<AppSettings> => {
-      const active = configs.find((c) => c.id === activeId);
-      if (active) {
-        return {
-          apiProvider: active.provider,
-          apiEndpoint: active.endpoint,
-          apiKey: active.apiKey,
-          modelName: active.model,
-        };
-      }
-      return {};
-    },
-    []
-  );
-
   // ========== 更新部分设置 ==========
   const updateSettings = useCallback((partial: Partial<AppSettings>) => {
     setSettings((prev) => ({ ...prev, ...partial }));
   }, []);
 
-  // ========== 保存/更新一个模型配置 ==========
-  const saveModelConfig = useCallback(
-    (form: ModelConfigFormData, editId?: string) => {
+  // ========== Provider 操作 ==========
+
+  /** 切换激活的 provider（同步切换 activeModel 到该 provider 第一个启用的 model） */
+  const setActiveProvider = useCallback((providerId: string, modelId?: string) => {
+    setSettings((prev) => {
+      const targetModel =
+        modelId ??
+        (() => {
+          // 优先取该 provider 下已启用的 model，否则取第一个内置 model
+          const cfg = prev.providerConfigs[providerId];
+          if (cfg) {
+            const builtinIds = (KNOWN_PROVIDER_MODELS[providerId] ?? []).map((m) => m.id);
+            const firstEnabledBuiltin = builtinIds.find((id) => cfg.enabledModels[id] !== false);
+            if (firstEnabledBuiltin) return firstEnabledBuiltin;
+            const firstCustom = cfg.customModels?.[0];
+            if (firstCustom) return firstCustom;
+          }
+          return KNOWN_PROVIDER_MODELS[providerId]?.[0]?.id ?? "";
+        })();
+      return { ...prev, activeProvider: providerId, activeModel: targetModel };
+    });
+  }, []);
+
+  /** 切换激活的 model（必须在当前 activeProvider 下） */
+  const setActiveModel = useCallback((modelId: string) => {
+    setSettings((prev) => ({ ...prev, activeModel: modelId }));
+  }, []);
+
+  /** 启用 / 禁用某个 provider */
+  const setProviderEnabled = useCallback((providerId: string, enabled: boolean) => {
+    setSettings((prev) => ({
+      ...prev,
+      enabledProviders: { ...prev.enabledProviders, [providerId]: enabled },
+    }));
+  }, []);
+
+  /** 更新某个 provider 的配置（apiKey / baseUrl / enabledModels / customModels） */
+  const updateProviderConfig = useCallback(
+    (providerId: string, patch: Partial<ProviderConfig>) => {
       setSettings((prev) => {
-        let configs = [...prev.modelConfigs];
-        let activeId = prev.activeModelId;
-
-        if (editId) {
-          // 编辑已有配置
-          configs = configs.map((c) =>
-            c.id === editId
-              ? { ...c, name: form.name.trim(), provider: form.provider, endpoint: form.endpoint.trim(), apiKey: form.apiKey.trim(), model: form.model.trim() }
-              : c
-          );
-        } else {
-          // 新建配置
-          const newConfig: ModelConfig = {
-            id: genId(),
-            name: form.name.trim(),
-            provider: form.provider,
-            endpoint: form.endpoint.trim(),
-            apiKey: form.apiKey.trim(),
-            model: form.model.trim(),
-            createdAt: Date.now(),
-          };
-          configs = [...configs, newConfig];
-          activeId = newConfig.id;
-        }
-
-        const syncFields = syncFromActiveConfig(configs, activeId);
-        return { ...prev, modelConfigs: configs, activeModelId: activeId, ...syncFields };
+        const existing = prev.providerConfigs[providerId] ?? {
+          apiKey: "",
+          baseUrl: "",
+          enabledModels: {},
+          customModels: [],
+        };
+        return {
+          ...prev,
+          providerConfigs: {
+            ...prev.providerConfigs,
+            [providerId]: { ...existing, ...patch },
+          },
+        };
       });
     },
-    [syncFromActiveConfig]
+    []
   );
 
-  // ========== 删除一个模型配置 ==========
-  const deleteModelConfig = useCallback(
-    (id: string) => {
+  /** 添加自定义 provider */
+  const addCustomProvider = useCallback((provider: CustomProvider) => {
+    setSettings((prev) => ({
+      ...prev,
+      customProviders: [...prev.customProviders, provider],
+      enabledProviders: { ...prev.enabledProviders, [provider.id]: true },
+      providerConfigs: {
+        ...prev.providerConfigs,
+        [provider.id]: {
+          apiKey: provider.apiKey,
+          baseUrl: provider.baseUrl,
+          enabledModels: {},
+          customModels: [],
+        },
+      },
+    }));
+  }, []);
+
+  /** 移除自定义 provider */
+  const removeCustomProvider = useCallback((providerId: string) => {
+    setSettings((prev) => {
+      const remaining = prev.customProviders.filter((p) => p.id !== providerId);
+      const { [providerId]: _removed, ...restConfigs } = prev.providerConfigs;
+      const { [providerId]: _removedEnabled, ...restEnabled } = prev.enabledProviders;
+      // 若删的是当前激活 provider，切回第一个内置
+      const fallbackId = prev.activeProvider === providerId
+        ? (KNOWN_PROVIDERS[0]?.id ?? "openai")
+        : prev.activeProvider;
+      return {
+        ...prev,
+        customProviders: remaining,
+        providerConfigs: restConfigs,
+        enabledProviders: restEnabled,
+        activeProvider: fallbackId,
+        activeModel: KNOWN_PROVIDER_MODELS[fallbackId]?.[0]?.id ?? prev.activeModel,
+      };
+    });
+  }, []);
+
+  /** 启用 / 禁用某个 model */
+  const setModelEnabled = useCallback(
+    (providerId: string, modelId: string, enabled: boolean) => {
       setSettings((prev) => {
-        if (prev.modelConfigs.length <= 1) return prev; // 保留至少一个
-        const configs = prev.modelConfigs.filter((c) => c.id !== id);
-        let activeId = prev.activeModelId;
-        if (activeId === id) {
-          activeId = configs[0]?.id || "default";
-        }
-        const syncFields = syncFromActiveConfig(configs, activeId);
-        return { ...prev, modelConfigs: configs, activeModelId: activeId, ...syncFields };
+        const cfg = prev.providerConfigs[providerId];
+        if (!cfg) return prev;
+        return {
+          ...prev,
+          providerConfigs: {
+            ...prev.providerConfigs,
+            [providerId]: {
+              ...cfg,
+              enabledModels: { ...cfg.enabledModels, [modelId]: enabled },
+            },
+          },
+        };
       });
     },
-    [syncFromActiveConfig]
+    []
   );
 
-  // ========== 切换当前使用的模型配置 ==========
-  const setActiveModel = useCallback(
-    (id: string) => {
-      setSettings((prev) => {
-        const syncFields = syncFromActiveConfig(prev.modelConfigs, id);
-        return { ...prev, activeModelId: id, ...syncFields };
-      });
-    },
-    [syncFromActiveConfig]
-  );
+  /** 添加自定义 model id 到某个 provider */
+  const addCustomModel = useCallback((providerId: string, modelId: string) => {
+    setSettings((prev) => {
+      const cfg = prev.providerConfigs[providerId];
+      if (!cfg) return prev;
+      if (cfg.customModels.includes(modelId)) return prev;
+      return {
+        ...prev,
+        providerConfigs: {
+          ...prev.providerConfigs,
+          [providerId]: {
+            ...cfg,
+            customModels: [...cfg.customModels, modelId],
+            enabledModels: { ...cfg.enabledModels, [modelId]: true },
+          },
+        },
+      };
+    });
+  }, []);
 
   // ========== 重置 ==========
   const resetSettings = useCallback(() => {
-    setSettings(DEFAULT_SETTINGS);
-    try { localStorage.removeItem("ripple-settings"); } catch {}
-    // 异步清除云端
+    setSettings({ ...DEFAULT_SETTINGS });
+    try {
+      localStorage.removeItem("ripple-settings");
+    } catch {}
     saveSettingsToCloud(DEFAULT_SETTINGS as unknown as Record<string, unknown>).catch(() => {});
   }, []);
 
-  // ========== 获取当前激活的配置 ==========
-  const activeConfig = settings.modelConfigs.find((c) => c.id === settings.activeModelId)
-    ?? settings.modelConfigs[0];
+  // ========== 派生：当前激活的 provider + model 配置 ==========
+  /**
+   * 当前激活的"完整模型信息"，给 sendMessage / ChatView 等下游使用
+   * - 优先从当前 activeProvider 的 ProviderConfig 取 apiKey + baseUrl
+   * - baseUrl 缺省时回落到 KNOWN_PROVIDERS 的 defaultBaseUrl
+   * - 兼容字段：endpoint (=baseUrl) / apiKey / model (=activeModel) / provider (=activeProvider)
+   */
+  const activeConfig: ActiveModelConfig = (() => {
+    const providerId = settings.activeProvider;
+    const providerDef = getProviderDef(providerId);
+    const cfg = settings.providerConfigs[providerId];
+    const baseUrl = cfg?.baseUrl || providerDef?.defaultBaseUrl || "";
+    return {
+      provider: providerId,
+      model: settings.activeModel,
+      endpoint: baseUrl,
+      baseUrl,
+      apiKey: cfg?.apiKey || "",
+      name: providerDef?.name || providerId,
+    };
+  })();
 
   return {
     settings,
@@ -292,13 +394,30 @@ export function useSettings() {
     loaded,
     /** 设置来源（用于调试 UI） */
     settingsSource,
-    /** 当前激活的模型配置详情 */
+    /** 当前激活的 provider + model 完整配置（endpoint / apiKey / model / provider） */
     activeConfig,
-    /** 保存/更新模型配置 */
-    saveModelConfig,
-    /** 删除模型配置 */
-    deleteModelConfig,
-    /** 切换当前模型 */
+    /** 切换激活的 provider，可选同时指定 model */
+    setActiveProvider,
+    /** 切换激活的 model（必须在当前 provider 下） */
     setActiveModel,
+    /** 启用 / 禁用 provider */
+    setProviderEnabled,
+    /** 更新 provider 配置（apiKey / baseUrl / enabledModels / customModels） */
+    updateProviderConfig,
+    /** 启用 / 禁用 model */
+    setModelEnabled,
+    /** 添加自定义 model id */
+    addCustomModel,
+    /** 添加自定义 provider */
+    addCustomProvider,
+    /** 移除自定义 provider */
+    removeCustomProvider,
   };
+}
+
+// 简易 logger
+async function log(_level: string, _msg: string, _data?: any) {
+  // hook 加载期间 console 调试
+  // eslint-disable-next-line no-console
+  console.debug(`[useSettings] ${_level} ${_msg}`, _data ?? "");
 }
