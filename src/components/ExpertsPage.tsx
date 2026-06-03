@@ -11,20 +11,20 @@ import {
   Settings2,
   Bug,
   RotateCcw,
-  Lightbulb,
   Brain,
   Palette,
   Home,
   type LucideIcon,
 } from "lucide-react";
 import { syncStore } from "../hooks/useStore";
+import { fetchExperts, fetchExpert, updateExpert, type ExpertSummary } from "ripple-shared/api";
+import { logger } from "./LogPanel";
 
 /**
- * 专家管理页 — v2.0
- *  - 移植自 demo (plans/desktop/experts.html)
- *  - Agent 专家 / Session 专家 两个 tab
- *  - 卡片网格 + 添加/编辑 modal
- *  - 暂存到 localStorage（不接后端，后续可替换为 API）
+ * 专家管理页 — v2.0（后端对接版）
+ *  - Agent 专家：后端 /api/squad/agents（yaml 字段只读 + 唯一可改 .md）
+ *  - Session 专家：维持 localStorage + mock 数据（功能上不做任何事）
+ *  - 后端不可达时降级到 localStorage
  */
 
 type ExpertType = "agent" | "session";
@@ -36,8 +36,17 @@ interface Expert {
   type: ExpertType;
   status: ExpertStatus;
   description: string;
-  tools: string[]; // 工具名列表（演示用）
-  iconKey: IconKey; // 用于在卡片上选择 lucide 图标
+  tools: string[];
+  iconKey: IconKey;
+  // Agent 专家独有（来自后端 API；Session 专家留空）
+  systemPrompt?: string;
+  triggers?: string[];
+  config?: { provider?: string; model?: string; thinkingLevel?: string };
+  content?: string;       // 原始 yaml 文本
+  useCount?: number;
+  messageCount?: number;
+  lastUsedAt?: number | null;
+  hasCheckpoint?: boolean;
 }
 
 type IconKey = "code" | "eye" | "arch" | "bug" | "general" | "session" | "design";
@@ -62,55 +71,11 @@ const STATUS_TAG_MAP: Record<ExpertStatus, { className: string; label: string }>
   inactive: { className: "tag tag-amber", label: "禁用" },
 };
 
+// Session 专家的 localStorage key（Agent 专家不再用 localStorage）
 const LS_KEY = "ripple-experts-v1";
 
-// 演示初始数据（与 demo 一致）
-const INITIAL_EXPERTS: Expert[] = [
-  {
-    id: "code-writer",
-    name: "code-writer",
-    type: "agent",
-    status: "active",
-    description: "代码编写与优化专家",
-    tools: ["shell", "file"],
-    iconKey: "code",
-  },
-  {
-    id: "reviewer",
-    name: "reviewer",
-    type: "agent",
-    status: "active",
-    description: "代码评审专家",
-    tools: ["read", "analyze"],
-    iconKey: "eye",
-  },
-  {
-    id: "architect",
-    name: "architect",
-    type: "agent",
-    status: "inactive",
-    description: "系统架构设计专家",
-    tools: ["design", "review"],
-    iconKey: "arch",
-  },
-  {
-    id: "debugger",
-    name: "debugger",
-    type: "agent",
-    status: "active",
-    description: "代码调试专家",
-    tools: ["debug", "trace"],
-    iconKey: "bug",
-  },
-  {
-    id: "general",
-    name: "general",
-    type: "agent",
-    status: "active",
-    description: "通用问题专家",
-    tools: ["all-round"],
-    iconKey: "general",
-  },
+// Session 专家初始数据（mock）
+const INITIAL_SESSION_EXPERTS: Expert[] = [
   {
     id: "my-expert",
     name: "my-expert",
@@ -152,6 +117,64 @@ const ICON_KEY_OPTIONS: { key: IconKey; label: string }[] = [
   { key: "design", label: "设计" },
 ];
 
+/** 从专家 name 推断 iconKey（name 包含关键字 → 对应图标） */
+function inferIconKey(name: string, fallback: IconKey = "general"): IconKey {
+  const lower = name.toLowerCase();
+  if (lower.includes("code") || lower.includes("writer")) return "code";
+  if (lower.includes("review")) return "eye";
+  if (lower.includes("arch")) return "arch";
+  if (lower.includes("debug")) return "bug";
+  if (lower.includes("design") || lower.includes("ui")) return "design";
+  if (lower.includes("session") || lower.includes("train")) return "session";
+  return fallback;
+}
+
+/** 把后端 ExpertSummary 转成 UI Expert */
+function summaryToExpert(s: ExpertSummary): Expert {
+  return {
+    id: s.name,
+    name: s.name,
+    type: "agent",
+    status: "active",
+    description: s.description,
+    tools: [],
+    iconKey: inferIconKey(s.name),
+    config: (s.config as Expert["config"]) ?? {},
+    useCount: s.useCount,
+    messageCount: s.messageCount,
+    lastUsedAt: s.lastUsedAt,
+    hasCheckpoint: s.hasCheckpoint,
+  };
+}
+
+/** 格式化最后使用时间 */
+function formatLastUsed(ms: number | null | undefined): string {
+  if (!ms || ms <= 0) return "从未使用";
+  const diffMs = Date.now() - ms;
+  if (diffMs < 0) return "刚刚";
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} 个月前`;
+  const years = Math.floor(months / 12);
+  return `${years} 年前`;
+}
+
+/** 卡片底部使用情况小字：已用 N 次 · 最近 X */
+function buildUsageLine(e: Expert): string | null {
+  if (e.type !== "agent") return null;
+  const useCount = e.useCount ?? 0;
+  if (useCount === 0) return "尚未使用";
+  const lastUsed = formatLastUsed(e.lastUsedAt);
+  // "从未使用" 不会出现因为 useCount > 0
+  return `已用 ${useCount} 次 · 最近 ${lastUsed}`;
+}
+
 interface ExpertsPageProps {
   /** 顶栏左侧菜单按钮回调：移动端打开 drawer，桌面端切换 sidebar 折叠 */
   onMenuClick?: () => void;
@@ -160,59 +183,117 @@ interface ExpertsPageProps {
 export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
   // 当前 tab
   const [activeTab, setActiveTab] = useState<ExpertType>("agent");
-  // 专家列表（localStorage 持久化）
-  const [experts, setExperts] = useState<Expert[]>(() => {
+
+  // Agent 专家：后端 API 加载
+  const [agentExperts, setAgentExperts] = useState<Expert[]>([]);
+  const [agentLoading, setAgentLoading] = useState<boolean>(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  // 后端不可达时的兜底（仅 session tab 之前的数据里包含的 agent 条目）
+  const [agentFallback, setAgentFallback] = useState<Expert[] | null>(null);
+
+  // Session 专家：localStorage 持久化（维持原行为）
+  const [sessionExperts, setSessionExperts] = useState<Expert[]>(() => {
     const saved = syncStore.getItem<Expert[] | null>(LS_KEY, null);
-    return Array.isArray(saved) && saved.length > 0 ? saved : INITIAL_EXPERTS;
+    return Array.isArray(saved) && saved.length > 0 ? saved : INITIAL_SESSION_EXPERTS;
   });
+
   // modal 状态
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  // 持久化
+  // 持久化 session experts
   useEffect(() => {
-    syncStore.setItem(LS_KEY, experts);
-  }, [experts]);
+    syncStore.setItem(LS_KEY, sessionExperts);
+  }, [sessionExperts]);
+
+  // 加载 Agent 专家
+  const loadAgentExperts = async () => {
+    setAgentLoading(true);
+    setAgentError(null);
+    const res = await fetchExperts();
+    if (res.error) {
+      setAgentError(res.error);
+      logger.error(`加载专家列表失败：${res.error}`);
+      // 失败时从 localStorage 兜底（如果之前有缓存）
+      if (agentFallback) {
+        setAgentExperts(agentFallback);
+      } else {
+        setAgentExperts([]);
+      }
+    } else {
+      const list = (res.data ?? []).map(summaryToExpert);
+      setAgentExperts(list);
+      setAgentFallback(list);  // 缓存一份用于下次失败兜底
+    }
+    setAgentLoading(false);
+  };
+
+  useEffect(() => {
+    loadAgentExperts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 切换 tab
   const handleTabChange = (tab: ExpertType) => setActiveTab(tab);
 
-  // 重新加载：清空 localStorage，回到初始数据
+  // 重新加载：刷新 Agent 列表 + 重置 Session 数据
   const handleReload = () => {
-    if (window.confirm("重新加载会重置为初始示例数据，当前所有改动将丢失，确定继续？")) {
+    if (window.confirm("重新加载会重置 Session 专家为初始示例数据，并重新从后端拉取 Agent 专家，确定继续？")) {
       syncStore.removeItem(LS_KEY);
-      setExperts(INITIAL_EXPERTS);
+      setSessionExperts(INITIAL_SESSION_EXPERTS);
+      loadAgentExperts();
     }
   };
 
-  // 删除
+  // 删除（仅 Session 专家支持删除 — Agent 专家二期再做）
   const handleDelete = (id: string) => {
-    setExperts(prev => prev.filter(e => e.id !== id));
+    setSessionExperts(prev => prev.filter(e => e.id !== id));
     setDeleteConfirmId(null);
   };
 
-  // 按 tab 分组
+  // 当前展示的列表（按 tab）
   const filteredExperts = useMemo(
-    () => experts.filter(e => e.type === activeTab),
-    [experts, activeTab]
+    () => (activeTab === "agent" ? agentExperts : sessionExperts),
+    [activeTab, agentExperts, sessionExperts]
   );
-  const agentCount = useMemo(() => experts.filter(e => e.type === "agent").length, [experts]);
-  const sessionCount = useMemo(() => experts.filter(e => e.type === "session").length, [experts]);
+  const agentCount = agentExperts.length;
+  const sessionCount = sessionExperts.length;
 
   // 当前编辑的专家（用于 modal 回显）
-  const editingExpert = editingId ? experts.find(e => e.id === editingId) ?? null : null;
+  const editingExpert = editingId
+    ? (activeTab === "agent" ? agentExperts : sessionExperts).find(e => e.id === editingId) ?? null
+    : null;
   const modalOpen = showAddModal || editingExpert !== null;
 
-  // 保存（新建或更新）
-  const handleSubmit = (data: Omit<Expert, "id"> & { id?: string }) => {
+  // 提交（保存）
+  // Agent 专家：只允许修改 systemPrompt（yaml 字段 disabled，用户在 modal 里改不动）
+  // Session 专家：维持原行为（localStorage 全字段保存）
+  const handleSubmit = async (data: Omit<Expert, "id"> & { id?: string }) => {
     if (editingExpert) {
-      setExperts(prev =>
-        prev.map(e => (e.id === editingExpert.id ? { ...e, ...data, id: editingExpert.id } : e))
-      );
+      if (editingExpert.type === "agent") {
+        // 调用后端 PUT
+        const sysPrompt = data.systemPrompt ?? editingExpert.systemPrompt ?? "";
+        const res = await updateExpert(editingExpert.name, { systemPrompt: sysPrompt });
+        if (res.error) {
+          logger.error(`更新专家失败：${res.error}`);
+          window.alert(`更新失败：${res.error}`);
+          return;
+        }
+        // 保存后重新拉取（Q4: 重新 GET）
+        await loadAgentExperts();
+        logger.success(`已保存 ${editingExpert.name} 的系统提示词`);
+      } else {
+        // Session 专家：localStorage
+        setSessionExperts(prev =>
+          prev.map(e => (e.id === editingExpert.id ? { ...e, ...data, id: editingExpert.id } : e))
+        );
+      }
     } else {
+      // 新建 — 二期功能，本期不开放
+      // 这里走不到，因为 Agent 专家没有"添加"按钮，Session 专家 modal 也不开放
       const newId = data.id || data.name.trim() || `expert-${Date.now()}`;
-      setExperts(prev => [...prev, { ...data, id: newId } as Expert]);
+      setSessionExperts(prev => [...prev, { ...data, id: newId } as Expert]);
     }
     setShowAddModal(false);
     setEditingId(null);
@@ -242,7 +323,7 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
           <button
             className="page-btn-secondary"
             onClick={handleReload}
-            title="重置为初始示例数据"
+            title="重新从后端拉取 Agent 专家 / 重置 Session 专家"
           >
             <RefreshCw size={14} />
             <span>刷新</span>
@@ -284,12 +365,29 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
 
       {/* ===== Content ===== */}
       <div className="content">
-        {filteredExperts.length === 0 ? (
+        {activeTab === "agent" && agentError && (
+          <div
+            className="file-warn"
+            style={{ marginBottom: 12 }}
+            role="alert"
+          >
+            <div>
+              <strong>后端不可达</strong> — {agentError}。Agent 专家列表已降级到本地缓存。
+            </div>
+          </div>
+        )}
+        {activeTab === "agent" && agentLoading ? (
+          <div className="empty-state">
+            <p className="empty-state-text">正在从后端加载 Agent 专家…</p>
+          </div>
+        ) : filteredExperts.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">
-              <Lightbulb size={20} />
+              <Plus size={20} />
             </div>
-            <p className="empty-state-text">还没有专家，点击右上角「添加专家」开始</p>
+            <p className="empty-state-text">
+              {activeTab === "agent" ? "后端暂无 Agent 专家配置" : "还没有 Session 专家，点击右上角「添加专家」开始"}
+            </p>
           </div>
         ) : (
           <div className="resource-grid">
@@ -297,11 +395,40 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
               <ExpertCard
                 key={expert.id}
                 expert={expert}
-                onEdit={() => {
+                onEdit={async () => {
+                  if (expert.type === "agent") {
+                    // 拉详情拿到 systemPrompt（= .md 内容）
+                    const res = await fetchExpert(expert.name);
+                    if (res.error) {
+                      logger.error(`加载专家详情失败：${res.error}`);
+                      window.alert(`无法加载专家详情：${res.error}`);
+                      return;
+                    }
+                    // 临时把详情合并到 agentExperts 中（避免另开 state）
+                    setAgentExperts(prev =>
+                      prev.map(e =>
+                        e.id === expert.id
+                          ? {
+                              ...e,
+                              systemPrompt: res.data?.systemPrompt ?? "",
+                              triggers: res.data?.triggers ?? [],
+                              tools: res.data?.tools ?? [],
+                              content: res.data?.content ?? "",
+                            }
+                          : e
+                      )
+                    );
+                  }
                   setEditingId(expert.id);
                   setShowAddModal(false);
                 }}
-                onDelete={() => setDeleteConfirmId(expert.id)}
+                onDelete={() => {
+                  if (expert.type === "agent") {
+                    window.alert("Agent 专家暂不支持删除（二期功能）");
+                    return;
+                  }
+                  setDeleteConfirmId(expert.id);
+                }}
               />
             ))}
           </div>
@@ -328,7 +455,7 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
           <div className="modal-card modal-card-sm">
             <h3 className="modal-title">确认删除</h3>
             <p className="modal-desc">
-              确定要删除专家「{experts.find(e => e.id === deleteConfirmId)?.name}」吗？此操作不可撤销。
+              确定要删除专家「{sessionExperts.find(e => e.id === deleteConfirmId)?.name}」吗？此操作不可撤销。
             </p>
             <div className="modal-actions">
               <button onClick={() => setDeleteConfirmId(null)} className="btn-secondary flex-1">
@@ -361,6 +488,7 @@ function ExpertCard({ expert, onEdit, onDelete }: ExpertCardProps) {
   const Icon = ICON_MAP[expert.iconKey] ?? Home;
   const gradient = GRADIENT_MAP[expert.type];
   const status = STATUS_TAG_MAP[expert.status];
+  const usageLine = buildUsageLine(expert);
   return (
     <article className="card" data-type={expert.type}>
       <div className="card-head">
@@ -385,6 +513,13 @@ function ExpertCard({ expert, onEdit, onDelete }: ExpertCardProps) {
           {expert.type === "agent" ? "提示词专家" : "会话专家"}
         </span>
       </div>
+      {usageLine && (
+        <div className="card-meta" style={{ marginTop: 4 }}>
+          <span className="meta-item" style={{ color: "var(--page-text-muted, #888)", fontSize: 12 }}>
+            {usageLine}
+          </span>
+        </div>
+      )}
       <div className="card-actions">
         <button className="btn-ghost" onClick={onEdit}>
           <Pencil size={13} />
@@ -415,24 +550,28 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
   const [description, setDescription] = useState(initial?.description ?? "");
   const [tools, setTools] = useState<string[]>(initial?.tools ?? []);
   const [iconKey, setIconKey] = useState<IconKey>(initial?.iconKey ?? "general");
-  const [systemPrompt, setSystemPrompt] = useState(""); // 仅用于演示，未持久化
+  const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
 
   const isEdit = initial !== null;
-  const isValid = name.trim().length > 0 && description.trim().length > 0;
+  // Agent 专家编辑时：yaml 字段全部只读，只有 systemPrompt 可改
+  const isReadOnly = isEdit && initial?.type === "agent";
+  const isValid = isReadOnly ? true : (name.trim().length > 0 && description.trim().length > 0);
 
   const toggleTool = (tool: string) => {
+    if (isReadOnly) return;
     setTools(prev => (prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]));
   };
 
   const handleSubmit = () => {
     if (!isValid) return;
     onSubmit({
-      name: name.trim(),
+      name: name.trim() || (initial?.name ?? ""),
       type,
       status,
       description: description.trim(),
       tools,
       iconKey,
+      systemPrompt,
     });
   };
 
@@ -443,8 +582,16 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
       <div className="page-modal" role="dialog" aria-modal="true">
         <header className="page-modal-head">
           <div>
-            <h2 className="page-modal-title">{isEdit ? "编辑专家" : "添加专家"}</h2>
-            <p className="page-modal-sub">{isEdit ? "修改专家配置" : "配置一个新的 AI 专家"}</p>
+            <h2 className="page-modal-title">
+              {isReadOnly ? "编辑专家（仅系统提示词可改）" : isEdit ? "编辑专家" : "添加专家"}
+            </h2>
+            <p className="page-modal-sub">
+              {isReadOnly
+                ? "yaml 字段为只读（直接修改易导致解析失败），仅关联的 .md 文件可编辑"
+                : isEdit
+                  ? "修改专家配置"
+                  : "配置一个新的 AI 专家"}
+            </p>
           </div>
           <button className="icon-btn modal-close" onClick={onClose} aria-label="关闭">
             <X size={16} />
@@ -459,7 +606,8 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
               placeholder="例如：frontend-expert"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              autoFocus
+              disabled={isReadOnly}
+              autoFocus={!isReadOnly}
             />
           </div>
           <div className="field-row">
@@ -469,6 +617,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
                 className="field-input"
                 value={type}
                 onChange={(e) => setType(e.target.value as ExpertType)}
+                disabled={isReadOnly}
               >
                 <option value="agent">Agent 专家（提示词）</option>
                 <option value="session">Session 专家（训练）</option>
@@ -480,6 +629,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
                 className="field-input"
                 value={status}
                 onChange={(e) => setStatus(e.target.value as ExpertStatus)}
+                disabled={isReadOnly}
               >
                 <option value="active">启用</option>
                 <option value="inactive">禁用</option>
@@ -494,6 +644,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
               placeholder="一句话描述这个专家的用途"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              disabled={isReadOnly}
             />
           </div>
           <div className="field">
@@ -502,6 +653,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
               className="field-input"
               value={iconKey}
               onChange={(e) => setIconKey(e.target.value as IconKey)}
+              disabled={isReadOnly}
             >
               {ICON_KEY_OPTIONS.map(opt => (
                 <option key={opt.key} value={opt.key}>{opt.label}</option>
@@ -509,7 +661,9 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
             </select>
           </div>
           <div className="field">
-            <label className="field-label">系统提示词（演示，未持久化）</label>
+            <label className="field-label">
+              系统提示词{isReadOnly ? "（关联 .md 文件，保存即写回磁盘）" : ""}
+            </label>
             <textarea
               className="field-textarea"
               placeholder="定义专家的角色、能力和行为..."
@@ -526,6 +680,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
                     type="checkbox"
                     checked={tools.includes(tool)}
                     onChange={() => toggleTool(tool)}
+                    disabled={isReadOnly}
                   />
                   <span>{tool}</span>
                 </label>
@@ -543,7 +698,7 @@ function ExpertFormModal({ initial, onClose, onSubmit }: ExpertFormModalProps) {
             disabled={!isValid}
           >
             <Check size={14} />
-            <span>{isEdit ? "保存修改" : "创建专家"}</span>
+            <span>{isReadOnly ? "保存到 .md" : isEdit ? "保存修改" : "创建专家"}</span>
           </button>
         </footer>
       </div>

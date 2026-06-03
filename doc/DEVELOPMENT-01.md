@@ -70,6 +70,57 @@ const stopStreaming = useCallback(() => {
 
 ---
 
+## v0.5.0 里程碑 (2026-06-03)
+
+### ✅ 已解决
+
+#### 记忆管理模块（v2.0 — 真实 fs 接入）
+- [x] 通用记忆 Pane：`<appRoot>/memory/MEMORY.md` + `hot-topics.md` 真实读写
+- [x] 项目记忆 Pane：来自 Sidebar 的项目列表（=`conversations.cwd` 去重）→ `<projectCwd>/{ripple.md, agent.md, README.md}`
+- [x] 缺失文件首次保存自动创建（用代码内 `template` 初始化）
+- [x] 状态显示「最后更新 YYYY-MM-DD HH:MM:SS」（从 mtime 格式化，替代旧的"已是最新"）
+- [x] 错误用 `.file-warn` 警示条（与「文件不存在」同款）
+- [x] 浏览器 dev 模式降级到 localStorage（明确提示"本地暂存模式"）
+- [x] 默认文件 `apps/ripple-desktop/memory/{MEMORY, hot-topics}.md` 随代码提交
+- [x] Tauri 命令：`get_app_root` / `read_text_file`(带 mtime) / `write_text_file`(自动建父目录) / `path_exists` / `ensure_memory_dir`
+- [x] 前端封装 `src/services/appPaths.ts`
+
+#### 专家管理模块（v2.0 — 后端 API 接入）
+- [x] Agent 专家：接 `/api/squad/agents`，5 个内置专家（code-writer/reviewer/architect/debugger/general）
+- [x] Agent 编辑模式：yaml 字段全部 disabled，**唯一可改 systemPrompt**（关联 .md 文件）
+- [x] 卡片底部「已用 N 次 · 最近 X」（自动格式化为分钟/小时/天/月前）
+- [x] Session 专家维持 mock + localStorage（本期完全不动，二期开发）
+- [x] 后端不可达时降级到 localStorage 缓存
+- [x] 共享 API 封装：`fetchExperts` / `fetchExpert` / `updateExpert`（`packages/ripple-shared/src/api.ts`）
+- [x] 删除按钮：Agent 提示"二期功能"、Session 走原流程
+- [x] 添加专家按钮：保持现状（二期）
+
+#### Sidebar 徽章真实化
+- [x] `expertCount` 从后端 `/api/squad/agents` 实时拉取（切到 experts 页时刷新）
+- [x] `memoryCount` = `conversations.cwd` 去重数（即项目数）
+
+#### 详细文档
+- 新建 `doc/MEMORY_EXPERTS_MODULE.md` — 完整模块文档（架构、API、代码位置、FAQ）
+
+#### 新增文件
+- `apps/ripple-desktop/src/services/appPaths.ts` - Tauri fs 封装
+- `apps/ripple-desktop/memory/MEMORY.md` - 通用记忆默认文件
+- `apps/ripple-desktop/memory/hot-topics.md` - 通用记忆默认文件
+- `apps/ripple-desktop/doc/MEMORY_EXPERTS_MODULE.md` - 模块开发文档
+
+#### 修改文件
+- `apps/ripple-desktop/src-tauri/src/lib.rs` - 新增 5 个 fs 命令
+- `apps/ripple-desktop/src/components/MemoryPage.tsx` - 完整重写数据层（UI 结构保持）
+- `apps/ripple-desktop/src/components/ExpertsPage.tsx` - Agent 接后端，Session 维持
+- `apps/ripple-desktop/src/components/MainApp.tsx` - 注入 projects + expertCount
+- `packages/ripple-shared/src/api.ts` - 新增 experts API
+
+#### 验证
+- `npx tsc --noEmit` — 0 errors
+- `npm test` — 65/65 passed（无回归）
+
+---
+
 ## v0.2.0 里程碑
 
 ### ✅ 已解决

@@ -300,6 +300,80 @@ fn write_debug_log(app: AppHandle, message: String) -> Result<(), String> {
     Ok(())
 }
 
+// ==================== 文件系统命令（记忆模块专用）====================
+
+/// 获取应用根目录
+/// - dev 模式（tauri dev）：src-tauri/target/debug/ripple-desktop.exe → 向上找到 tauri.conf.json 所在目录（即项目根）
+/// - prod 模式：安装目录/ripple-desktop.exe → 直接返回 .exe 所在目录
+#[tauri::command]
+fn get_app_root() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut current = exe
+        .parent()
+        .ok_or_else(|| "无法获取 exe 父目录".to_string())?;
+
+    // 向上查找 tauri.conf.json（最多 6 层）
+    for _ in 0..6 {
+        if current.join("tauri.conf.json").exists() {
+            return Ok(current.to_string_lossy().to_string());
+        }
+        match current.parent() {
+            Some(p) => current = p,
+            None => break,
+        }
+    }
+
+    // 回退到 .exe 所在目录
+    Ok(exe.parent().unwrap().to_string_lossy().to_string())
+}
+
+/// 读取文本文件结果（带 mtime，前端用于显示"最后更新"时间）
+#[derive(serde::Serialize)]
+struct FileReadResult {
+    content: String,
+    /// 最后修改时间（Unix 毫秒时间戳）
+    mtime_ms: u64,
+}
+
+/// 读取文本文件
+#[tauri::command]
+fn read_text_file(path: String) -> Result<FileReadResult, String> {
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取文件失败 ({path}): {e}"))?;
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("读取元数据失败: {e}"))?;
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(FileReadResult { content, mtime_ms })
+}
+
+/// 写入文本文件（自动创建父目录）
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {e}"))?;
+    }
+    std::fs::write(p, content).map_err(|e| format!("写入文件失败 ({path}): {e}"))
+}
+
+/// 判断路径是否存在
+#[tauri::command]
+fn path_exists(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).exists())
+}
+
+/// 确保 <app_root>/memory/ 目录存在
+#[tauri::command]
+fn ensure_memory_dir(app_root: String) -> Result<(), String> {
+    let memory_dir = std::path::Path::new(&app_root).join("memory");
+    std::fs::create_dir_all(&memory_dir)
+        .map_err(|e| format!("创建 memory 目录失败: {e}"))
+}
+
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -318,6 +392,8 @@ pub fn run() {
             start_backend, stop_backend,
             start_mobile_bridge, stop_mobile_bridge, broadcast_mobile_event,
             write_debug_log,
+            // 记忆模块命令
+            get_app_root, read_text_file, write_text_file, path_exists, ensure_memory_dir,
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");

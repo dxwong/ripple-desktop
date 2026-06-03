@@ -9,14 +9,14 @@ import LogPanel from "./LogPanel";
 import { StartupLoading } from "./StartupLoading";
 import { ErrorModal } from "./ErrorModal";
 import { ExpertsPage } from "./ExpertsPage";
-import { MemoryPage } from "./MemoryPage";
+import { MemoryPage, type ProjectInfo } from "./MemoryPage";
 import { useStreamingChat } from "../hooks/useStreamingChat";
 import { useSettings } from "../hooks/useSettings";
 import { useFolderPicker } from "../hooks/useFolderPicker";
 import { syncStore } from "../hooks/useStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { ChatMode } from "../types";
-import { fetchModels, setBaseUrl } from "../services/api";
+import { fetchModels, setBaseUrl, fetchExperts } from "../services/api";
 import { logger } from "./LogPanel";
 import { isTauri } from "../hooks/useTauri";
 import { healthSSEClient } from "../services/healthSSEClient";
@@ -429,6 +429,21 @@ export function MainApp() {
   const currentCwd = chat.activeConversation?.cwd;
   const currentMode = chat.activeConversation?.mode || "chat";
 
+  // 派生项目列表：来自 conversations.cwd 去重（Path = label 取末段）
+  // 数据源：用户通过 Sidebar「+ 新建项目」创建的带 cwd 的对话
+  const projects = useMemo<ProjectInfo[]>(() => {
+    const seen = new Map<string, ProjectInfo>();
+    for (const c of chat.conversations) {
+      if (!c.cwd) continue;
+      const id = c.cwd;
+      if (seen.has(id)) continue;
+      const segments = c.cwd.split(/[\\/]/).filter(Boolean);
+      const label = segments[segments.length - 1] || c.cwd;
+      seen.set(id, { id, label, path: c.cwd });
+    }
+    return Array.from(seen.values());
+  }, [chat.conversations]);
+
   // v2.1: 构造"模型条目"列表（用于 MessageInput 下拉切换）
   //   每个条目 id = "providerId::modelId"
   //   包含所有已启用 provider 下所有启用的 model
@@ -620,6 +635,24 @@ export function MainApp() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  // 专家数（从后端 /api/squad/agents 拉取，Sidebar 徽章用）
+  // 切到 experts 页时重新拉取，确保编辑后徽章同步
+  const [expertCount, setExpertCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const res = await fetchExperts();
+      if (cancelled) return;
+      if (res.error) {
+        logger.warn(`专家数加载失败：${res.error}，徽章保持 0`);
+        return;
+      }
+      setExpertCount(res.data?.length ?? 0);
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [currentView]);
+
   return (
     <div className={[
       syncStore.getItem("dark-mode", false) ? "dark" : "",
@@ -663,8 +696,8 @@ export function MainApp() {
               isOpen={sidebarOpen}
               onClose={handleCloseSidebar}
               isCollapsed={isMobile ? false : sidebarCollapsed}
-              expertCount={7}
-              memoryCount={3}
+              expertCount={expertCount}
+              memoryCount={projects.length}
               // v2.0 新增：视图路由
               activeView={currentView}
               onNavigate={handleNavigate}
@@ -744,6 +777,7 @@ export function MainApp() {
               ) : currentView === "memory" ? (
                 <MemoryPage
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                  projects={projects}
                 />
               ) : (
                 <SettingsPage
