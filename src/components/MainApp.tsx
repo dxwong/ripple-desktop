@@ -549,12 +549,25 @@ export function MainApp() {
   }, [currentCwd, chat.activeConversation, chat.activeConversationId, chat.rollbackToSnapshot]);
 
   // 新建普通对话（无 cwd）
+  // v1.5 新增：去重 —— 若列表最上方已是无 cwd、标题"新对话"、空消息的会话，则只切换不新建，
+  // 避免连点 + 按钮产生一堆空白会话。
   const handleNewConversation = (mode: ChatMode = "chat") => {
+    const top = chat.conversations[0];
+    if (top && !top.cwd && top.title === "新对话" && top.messages.length === 0) {
+      chat.switchConversation(top.id);
+      return;
+    }
     chat.newConversation(mode, undefined, undefined);
   };
 
   // 新建项目对话 = 创建一条带 cwd 的对话
+  // v1.5 新增：去重 —— 若同 cwd 下最上方已是"新对话"、空消息的会话，则只切换不新建。
   const handleNewProjectConversation = (name: string, directory: string) => {
+    const top = chat.conversations[0];
+    if (top && top.cwd === directory && top.title === "新对话" && top.messages.length === 0) {
+      chat.switchConversation(top.id);
+      return;
+    }
     chat.newConversation("chat", name, directory);
   };
 

@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronRight,
   Pencil,
+  Check,
   Copy,
   Code,
   Users,
@@ -201,10 +202,12 @@ function Sidebar({
     setFolderCollapsedMap(prev => ({ ...prev, [dir]: !prev[dir] }));
   };
 
-  /** 在指定文件夹下新建对话 */
+  /** 在指定文件夹下新建对话
+   *  v1.5 变更：不再把 folderName 作为 title 传入，留空让 chat.newConversation 用默认"新对话"，
+   *  配合 MainApp 的去重逻辑避免连点 + 产生一堆空白"dev"项。
+   */
   const handleNewConvInFolder = (dir: string) => {
-    const folderName = dir.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'new';
-    onNewProjectConversation(folderName, dir);
+    onNewProjectConversation("", dir);
   };
 
   // 拷贝弹窗重名检测
@@ -517,7 +520,17 @@ function Sidebar({
               <span className="section-title">
                 {searchQuery ? "搜索结果" : "对话"}
               </span>
-              <span className="section-count">{filteredNormalConversations.length}</span>
+              <div className="section-actions">
+                <span className="section-count">{filteredNormalConversations.length}</span>
+                <button
+                  className="icon-btn-xs"
+                  title="新建对话"
+                  aria-label="新建对话"
+                  onClick={() => onNewConversation?.()}
+                >
+                  <MessageSquarePlus size={13} />
+                </button>
+              </div>
             </div>
             <div className="tree">
               {filteredNormalConversations.length === 0 ? (
@@ -526,7 +539,7 @@ function Sidebar({
                     <MessageSquare size={16} />
                   </div>
                   <p>
-                    {searchQuery ? "未找到匹配的对话" : "还没有对话，在右侧输入框开始"}
+                    {searchQuery ? "未找到匹配的对话" : "还没有对话，点击 + 新建"}
                   </p>
                 </div>
               ) : (
@@ -581,11 +594,21 @@ function Sidebar({
                           </button>
                         )}
                         <button
-                          onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (renamingId === conv.id) {
+                              // 已编辑状态：再次点击 = 保存（与 onBlur / Enter 行为一致）
+                              if (renameText.trim()) onRenameConversation(conv.id, renameText.trim());
+                              setRenamingId(null);
+                            } else {
+                              setRenamingId(conv.id);
+                              setRenameText(conv.title);
+                            }
+                          }}
                           className="leaf-action"
-                          title="重命名"
+                          title={renamingId === conv.id ? "保存" : "重命名"}
                         >
-                          <Pencil size={11} />
+                          {renamingId === conv.id ? <Check size={11} /> : <Pencil size={11} />}
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteConfirm(conv.id); }}
