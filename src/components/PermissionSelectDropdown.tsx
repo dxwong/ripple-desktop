@@ -31,8 +31,8 @@ interface OptionMeta {
 }
 
 const PERMISSION_LABELS: Record<PermissionMode, OptionMeta> = {
-  "confirm":   { label: "默认权限",    desc: "风险操作前询问",         Icon: Bot,        accent: false },
-  "auto":      { label: "完全访问权限", desc: "跳过确认，直接处理任务", Icon: ShieldAlert, accent: "amber" },
+  "confirm":   { label: "智能体 手动",  desc: "风险操作前询问",         Icon: Bot,        accent: false },
+  "auto":      { label: "智能体 自动",  desc: "跳过确认，直接处理任务", Icon: ShieldAlert, accent: "amber" },
   "read-only": { label: "Plan 模式",    desc: "先出计划，只读模式",     Icon: Lock,       accent: "blue" },
 };
 
@@ -143,11 +143,9 @@ export default function PermissionSelectDropdown({
                   "w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-left",
                   "transition-colors duration-100",
                   isSelected
-                    ? opt.accent === "amber"
-                      ? "bg-amber-100 dark:bg-amber-950/30"
-                      : opt.accent === "blue"
-                        ? "bg-blue-50 dark:bg-blue-950/30"
-                        : "bg-accent/10"
+                    ? opt.accent === "blue"
+                      ? "bg-blue-50 dark:bg-blue-950/30"
+                      : "bg-accent/10"
                     : "hover:bg-black/[0.04] dark:hover:bg-white/[0.05]",
                 ].join(" ")}
               >
