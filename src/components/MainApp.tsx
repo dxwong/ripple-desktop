@@ -431,11 +431,16 @@ export function MainApp() {
 
   // 派生项目列表：来自 conversations.cwd 去重（Path = label 取末段）
   // 数据源：用户通过 Sidebar「+ 新建项目」创建的带 cwd 的对话
+  // v1.5 变更：去重键改用归一化路径（与 Sidebar.tsx:170 保持一致），
+  //   解决"E:\MyBrain\dev"和"E:\MyBrain\Dev\"被识别成两个项目的 BUG。
+  //   id 用归一化路径作 key，path 保留首次出现的原始路径（用于实际文件读写）。
   const projects = useMemo<ProjectInfo[]>(() => {
+    const normalizePath = (p: string) =>
+      p.toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '');
     const seen = new Map<string, ProjectInfo>();
     for (const c of chat.conversations) {
       if (!c.cwd) continue;
-      const id = c.cwd;
+      const id = normalizePath(c.cwd);
       if (seen.has(id)) continue;
       const segments = c.cwd.split(/[\\/]/).filter(Boolean);
       const label = segments[segments.length - 1] || c.cwd;
