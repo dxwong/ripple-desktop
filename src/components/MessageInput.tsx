@@ -1,16 +1,25 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, ChevronDown, Square } from "lucide-react";
-import type { ChatMode, ActiveModelConfig } from "../types";
+import { ArrowUp, Square, Paperclip, AtSign } from "lucide-react";
+import type { ChatMode, ActiveModelConfig, PermissionMode, AccountBalance } from "../types";
+import PermissionSelectDropdown from "./PermissionSelectDropdown";
+import ModelSelectDropdown from "./ModelSelectDropdown";
+import ContextUsagePopover from "./ContextUsagePopover";
 
 /**
- * v2.1: modelEntries 数据源（id 形如 "provider::model"）
- * 来自 MainApp 拼装的"已启用 provider + 启用 model"列表
+ * v2.2: 扩展 ModelEntry，添加 logo/tags/supportedPermissions 可选字段
+ * MainApp 拼装 modelEntries 时填好；老调用方不填也能降级使用
  */
-interface ModelEntry {
+export interface ModelEntry {
   id: string;
   name: string;
   model: string;
   provider: string;
+  /** Provider 主题色（CSS 渐变字符串或 class） */
+  logo?: string;
+  /** 标签徽章（如 "推荐" / "推理" / "快速"） */
+  tags?: string[];
+  /** 该模型支持的 permissionMode，undefined 表示全部支持 */
+  supportedPermissions?: PermissionMode[];
 }
 
 interface MessageInputProps {
@@ -31,13 +40,28 @@ interface MessageInputProps {
   chatMode?: ChatMode;
   /** 是否有关联项目 */
   hasProject?: boolean;
+
+  // v2.2 新增：权限模式（来自 settings.permissionMode）
+  permissionMode?: PermissionMode;
+  onPermissionModeChange?: (mode: PermissionMode) => void;
+
+  // v2.2 新增：上下文统计（来自 ChatView 现有 state）
+  cacheHitRate?: number | null;
+  balance?: AccountBalance | null;
+  estimatedCost?: number;
+  contextTokens?: number;
 }
 
 /**
- * 消息输入框组件
+ * 消息输入框组件（v2.2）
  *
- * UI：textarea + 右下"模型选择器 + 发送/停止"
- * 数据源：modelEntries 列表（v2.1 格式）
+ * UI：textarea + 底部 toolbar（权限 / 模型 / 附件 / @ / 上下文 / 发送）
+ * 数据源：modelEntries（v2.1 格式）+ 真实 chatContext 统计
+ *
+ * 设计参考 `plans/desktop/desktop-input-redesign.md`：
+ *   - 权限下拉 3 选 1（含"Plan 模式"=read-only）
+ *   - 模型下拉彩色 logo
+ *   - 上下文按钮 hover popover（**无压缩按钮**，避免"假成功"）
  */
 function MessageInput({
   onSend,
@@ -50,15 +74,15 @@ function MessageInput({
   onSwitchModelEntry,
   chatMode = "chat",
   hasProject = false,
+  permissionMode = "confirm",
+  onPermissionModeChange,
+  cacheHitRate = null,
+  balance = null,
+  estimatedCost = 0,
+  contextTokens = 0,
 }: MessageInputProps) {
   const [input, setInput] = useState("");
-  const [showCMDropdown, setShowCMDropdown] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const cmDropdownRef = useRef<HTMLDivElement>(null);
-
-  const isCodeMode = chatMode === "code" || hasProject;
-
-  const entryList = modelEntries ?? [];
 
   // 自动调整高度
   useEffect(() => {
@@ -73,17 +97,6 @@ function MessageInput({
   useEffect(() => {
     if (!disabled) textareaRef.current?.focus();
   }, [disabled]);
-
-  // 点击外部关闭下拉
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (cmDropdownRef.current && !cmDropdownRef.current.contains(e.target as Node)) {
-        setShowCMDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const handleSend = () => {
     if (!input.trim() || disabled) return;
@@ -103,15 +116,7 @@ function MessageInput({
 
   const hasInput = input.trim().length > 0;
 
-  // 模型按钮显示文本："name · model"
-  const modelLabel = activeConfig
-    ? `${activeConfig.name} · ${activeConfig.model}`
-    : "未配置";
-
-  // 当前激活条目 id
-  const activeEntryId = activeConfig
-    ? `${activeConfig.provider}::${activeConfig.model}`
-    : "";
+  const entryList = modelEntries ?? [];
 
   return (
     <div className="input-container flex-col items-stretch gap-0 p-0">
@@ -133,59 +138,61 @@ function MessageInput({
 
       {/* ===== 底部操作区 ===== */}
       <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
-        <div />
-
-        <div className="flex items-center gap-1.5">
-          {/* ---- 对话模型选择器 ---- */}
-          <div className="relative" ref={cmDropdownRef}>
-            <button
-              onClick={() => setShowCMDropdown(!showCMDropdown)}
+        {/* 左侧：权限 + 模型 */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          {/* v2.2: 权限下拉（含"Plan 模式"=read-only） */}
+          {onPermissionModeChange && (
+            <PermissionSelectDropdown
+              value={permissionMode}
+              onChange={onPermissionModeChange}
               disabled={disabled}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
-                         transition-all duration-150 border
-                         disabled:cursor-not-allowed
-                         bg-accent/10 dark:bg-accent/10 hover:bg-accent/20 dark:hover:bg-accent/20 text-accent border-accent/20 dark:border-accent/20`}
-              title="切换对话模型"
-            >
-              <span className="max-w-[80px] truncate">{modelLabel}</span>
-              <ChevronDown size={12} className="shrink-0" />
-            </button>
+            />
+          )}
 
-            {showCMDropdown && entryList.length > 0 && (
-              <div className="absolute bottom-full right-0 mb-1.5 w-56
-                              bg-surface-secondary dark:bg-surface-secondary-dark
-                              border border-border dark:border-border-dark
-                              rounded-xl shadow-elevated overflow-hidden z-50 animate-fade-in">
-                <div className="px-3 py-2 text-xs font-medium text-content-tertiary dark:text-content-tertiary-dark border-b border-border dark:border-border-dark">
-                  对话模型
-                </div>
-                <div className="max-h-[200px] overflow-y-auto py-1">
-                  {entryList.map((entry) => {
-                    const isActive = entry.id === activeEntryId;
-                    return (
-                      <button
-                        key={entry.id}
-                        onClick={() => { onSwitchModelEntry?.(entry.id); setShowCMDropdown(false); }}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-all duration-100
-                          ${isActive
-                            ? "bg-accent/10 text-accent font-medium"
-                            : "text-content dark:text-content-dark hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
-                          }`}
-                      >
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent" : "bg-transparent"}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="truncate">{entry.name}</div>
-                          <div className="text-xs text-content-tertiary dark:text-content-tertiary-dark truncate">{entry.model}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* v2.2: 模型下拉（彩色 logo 替代旧的内联实现） */}
+          {onSwitchModelEntry && (
+            <ModelSelectDropdown
+              activeConfig={activeConfig}
+              entries={entryList}
+              onSwitch={onSwitchModelEntry}
+              disabled={disabled}
+            />
+          )}
 
-          {/* ---- 发送/停止按钮 ---- */}
+          {/* 占位：附件 / @ 按钮（保留入口，TODO 接入） */}
+          <button
+            type="button"
+            disabled
+            title="附件 (即将推出)"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                       text-content-tertiary dark:text-content-tertiary-dark
+                       opacity-40 cursor-not-allowed"
+          >
+            <Paperclip className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            disabled
+            title="@ 文件 (即将推出)"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                       text-content-tertiary dark:text-content-tertiary-dark
+                       opacity-40 cursor-not-allowed"
+          >
+            <AtSign className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {/* 右侧：上下文 + 发送 */}
+        <div className="flex items-center gap-1.5">
+          {/* v2.2: 上下文 popover（仅展示 3 指标，**无压缩按钮**） */}
+          <ContextUsagePopover
+            cacheHitRate={cacheHitRate}
+            balance={balance}
+            estimatedCost={estimatedCost}
+            contextTokens={contextTokens}
+          />
+
+          {/* 发送/停止按钮 */}
           {isProcessing ? (
             <button
               onClick={onStop}

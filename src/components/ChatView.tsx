@@ -4,7 +4,7 @@ import ChatMessage from "./ChatMessage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import MessageInput from "./MessageInput";
 import { ToolConfirmBanner } from "./ToolConfirmBanner";
-import { Message, ActiveModelConfig, ChatMode, ToolRequestData, PermissionMode, PERMISSION_MODES, UsageStats, AccountBalance, ConversationUsage } from "../types";
+import { Message, ActiveModelConfig, ChatMode, ToolRequestData, PermissionMode, UsageStats, AccountBalance, ConversationUsage } from "../types";
 import { isTauri } from "../hooks/useTauri";
 import { fetchStatsSummary, fetchAccountBalance } from "../services/api";
 import { flog } from "../services/frontendLogger";
@@ -36,17 +36,6 @@ function calculateEstimatedCost(model: string, inputTokens: number, outputTokens
       outputTokens * pricing.output) /
     1000000
   );
-}
-
-/**
- * 格式化大数显示，如 100,000 → 100k, 1,500,000 → 1.5M
- * @param num 数字
- * @param suffix 是否保留 'tokens' 后缀
- */
-function formatLargeNumber(num: number): string {
-  if (num < 1000) return num.toLocaleString();
-  if (num < 1000000) return `${(num / 1000).toFixed(1)}k`;
-  return `${(num / 1000000).toFixed(1)}M`;
 }
 
 interface ChatViewProps {
@@ -586,6 +575,14 @@ function ChatView({
             onSwitchModelEntry={onSwitchModelEntry}
             chatMode={chatMode}
             hasProject={!!cwd}
+            // v2.2: 权限下拉（替代旧 Auto 按钮）
+            permissionMode={permissionMode}
+            onPermissionModeChange={onPermissionModeChange}
+            // v2.2: 上下文 popover 数据源（替代旧 4 指标行）
+            cacheHitRate={convCacheHitRate}
+            balance={accountBalance}
+            estimatedCost={estimatedCost}
+            contextTokens={currentConvUsage.totalTokens}
             placeholder={
               isProcessing
                 ? "AI 正在回复... 点击停止按钮可中断"
@@ -594,93 +591,6 @@ function ChatView({
                 : "输入消息..."
             }
           />
-
-          {/* 权限模式切换按钮 — 弹窗时隐藏 */}
-          {!(pendingToolRequests.length > 0 && permissionMode !== "auto") && (
-          <div className="flex justify-end mb-1.5">
-            <button
-              onClick={() => {
-                // 循环切换三种模式
-                const modes: PermissionMode[] = ["auto", "confirm", "read-only"];
-                const currentIndex = modes.indexOf(permissionMode);
-                const nextMode = modes[(currentIndex + 1) % modes.length];
-                onPermissionModeChange?.(nextMode);
-              }}
-              className={`group relative flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all duration-200 ${
-                permissionMode === "auto"
-                  ? "bg-accent/20 text-accent hover:bg-accent/30 shadow-[0_0_6px_rgba(217,119,87,0.4)]"
-                  : permissionMode === "read-only"
-                  ? "bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-150"
-                  : "bg-message-ai dark:bg-message-ai-dark text-content-tertiary hover:text-content-secondary"
-              }`}
-            >
-              <span className={`w-2 h-2 rounded-full transition-all duration-200 ${
-                permissionMode === "auto"
-                  ? "bg-accent shadow-[0_0_4px_rgba(217,119,87,0.5)]"
-                  : permissionMode === "read-only"
-                  ? "bg-blue-500"
-                  : "bg-content-tertiary"
-              }`} />
-              <span>{permissionMode === "auto" ? "Auto" : permissionMode === "read-only" ? "只读" : "确认"}</span>
-              {/* Tooltip */}
-              <div className="absolute -top-20 right-0 px-2 py-1.5 rounded-lg bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-xl">
-                <div className="font-medium text-content-secondary mb-1">点击切换权限模式</div>
-                <div className="space-y-0.5">
-                  {PERMISSION_MODES.map((mode) => (
-                    <div key={mode.value} className={`flex items-center gap-1.5 ${
-                      permissionMode === mode.value ? "text-accent" : "text-content-tertiary"
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        permissionMode === mode.value
-                          ? "bg-accent"
-                          : "bg-content-tertiary"
-                      }`} />
-                      <span>{mode.label}: {mode.description}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </button>
-          </div>
-          )}
-          <div className="flex items-center justify-between mt-2 px-1">
-            {/* 左侧：使用统计实时指标 */}
-            <div className="flex items-center gap-4 text-[12px] text-content-tertiary dark:text-content-tertiary-dark">
-              {/* 缓存命中率（按当前对话统计） */}
-              <span className="flex items-center gap-1.5" title="当前对话缓存命中率">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                缓存 <span className="text-emerald-600 dark:text-emerald-400 font-medium">{convCacheHitRate !== null ? `${convCacheHitRate.toFixed(1)}%` : '--'}</span>
-              </span>
-              {/* 账户余额（优先适配 DeepSeek） */}
-              <span className="flex items-center gap-1.5" title="账户余额（仅 DeepSeek 支持查询）">
-                <span className="w-2 h-2 rounded-full bg-blue-400" />
-                余额 <span className="text-blue-600 dark:text-blue-400 font-medium">
-                  {accountBalance?.available === false ? '不支持' 
-                    : accountBalance?.success === true && accountBalance.balance != null 
-                      ? `${accountBalance.balance.toFixed(2)} ${accountBalance.currency || 'CNY'}` 
-                      : accountBalance?.error ? '失败' : '--'}
-                </span>
-              </span>
-              {/* 当前对话预估费用（基于 DeepSeek 定价） */}
-              <span className="flex items-center gap-1.5" title="当前对话预估费用（基于输入/输出 token 和缓存命中计算）">
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                预估 <span className="text-amber-600 dark:text-amber-400 font-medium">{estimatedCost > 0 ? `¥${estimatedCost.toFixed(2)}` : '--'}</span>
-              </span>
-              {/* 上下文 token（按当前对话累积） */}
-              <span className="flex items-center gap-1.5" title="当前对话累积上下文 token（输入+输出）">
-                <span className="w-2 h-2 rounded-full bg-purple-400" />
-                上下文 <span className="text-purple-600 dark:text-purple-400 font-medium">{currentConvUsage.totalTokens > 0 ? `${formatLargeNumber(currentConvUsage.totalTokens)}` : '--'}</span>
-              </span>
-            </div>
-            {/* 右侧：模式信息 */}
-            <div className="text-[12px]">
-              {chatMode === "code" ? (
-                <span className="text-amber-600 dark:text-amber-400 font-medium">· 开发模式</span>
-              ) : (
-                <span className="text-sky-600 dark:text-sky-400 font-medium">· 对话模式</span>
-              )}
-            </div>
-          </div>
         </div>
       </div>
     </div>
