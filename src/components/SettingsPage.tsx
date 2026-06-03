@@ -253,14 +253,16 @@ export function SettingsPage({
 
   // ── 测试连接 ──
   const handleTestConnection = async () => {
-    if (!activeProviderCfg?.apiKey || !activeProviderCfg?.baseUrl || !settings.activeModel) {
+    // baseUrl 缺省时回落到 provider 默认 baseUrl（用户没保存过就用系统预设）
+    const effectiveBaseUrl = activeProviderCfg?.baseUrl || activeProviderDef?.defaultBaseUrl || "";
+    if (!activeProviderCfg?.apiKey || !effectiveBaseUrl || !settings.activeModel) {
       setTestResult({ ok: false, msg: "请先填写 API Key、接口地址并选择模型" });
       return;
     }
     setTesting(true);
     setTestResult(null);
     const result = await testConnection({
-      endpoint: activeProviderCfg.baseUrl,
+      endpoint: effectiveBaseUrl,
       apiKey: activeProviderCfg.apiKey,
       model: settings.activeModel,
       provider: activeProvider,
@@ -682,17 +684,6 @@ export function SettingsPage({
                                         自定义
                                       </span>
                                     )}
-                                    {isCurrent && (
-                                      <span
-                                        className="model-id"
-                                        style={{
-                                          background: "var(--page-rose-soft)",
-                                          color: "var(--page-rose)",
-                                        }}
-                                      >
-                                        当前
-                                      </span>
-                                    )}
                                   </div>
                                 </div>
                                 <label
@@ -733,18 +724,23 @@ export function SettingsPage({
                     {/* 测试连接 */}
                     <div className="setting-section">
                       <div className="setting-section-title">连通性测试</div>
-                      <p className="setting-section-desc">
-                        当前测试：<strong style={{ color: "var(--page-text)" }}>{settings.activeModel || "(未选择)"}</strong>。
-                        点击上方"使用"或模型卡片切换被测模型。
-                      </p>
                       <button
                         type="button"
                         onClick={handleTestConnection}
                         disabled={
                           testing ||
                           !activeProviderCfg?.apiKey ||
-                          !activeProviderCfg?.baseUrl ||
+                          !(activeProviderCfg?.baseUrl || activeProviderDef?.defaultBaseUrl) ||
                           !settings.activeModel
+                        }
+                        title={
+                          !activeProviderCfg?.apiKey
+                            ? "请先在上方填写 API Key"
+                            : !(activeProviderCfg?.baseUrl || activeProviderDef?.defaultBaseUrl)
+                            ? "请先在上方填写接口地址"
+                            : !settings.activeModel
+                            ? "请先选择模型"
+                            : "测试当前选中模型的连通性"
                         }
                         className="page-btn-secondary w-full justify-center"
                       >

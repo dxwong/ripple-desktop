@@ -2443,6 +2443,14 @@ select.field-input {
 .model-card:hover {
   background: var(--page-hover);
 }
+/* 选中的模型卡片：用 accent 边框 + 浅色背景标识 */
+.model-card.model-card-current {
+  background: var(--page-accent-soft, rgba(217, 119, 87, 0.08));
+  border-color: var(--page-accent, #d97757);
+}
+.model-card.model-card-current:hover {
+  background: var(--page-accent-soft, rgba(217, 119, 87, 0.08));
+}
 
 .model-icon {
   width: 32px;
