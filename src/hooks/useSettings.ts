@@ -150,7 +150,8 @@ function migrateFromV1(v1: any): AppSettings | null {
     if (typeof v1.mobileBridgePort === 'number') base.mobileBridgePort = v1.mobileBridgePort
 
     return base
-  } catch {
+  } catch (err) {
+    console.warn('[useSettings] migrateFromV1 迁移失败', err)
     return null
   }
 }
@@ -323,15 +324,19 @@ export function useSettings() {
     if (loaded && !savingRef.current) {
       savingRef.current = true;
 
-      // 1. 写本地（保底）
-      saveItem(STORAGE_KEY, settings).then(() => {
-        // 2. 写云端（异步，失败不阻塞）
-        saveSettingsToCloud(settings as unknown as Record<string, unknown>).catch(() => {
-          // 云端写入失败不影响本地使用
-        }).finally(() => {
+      // 用 async IIFE + try/finally 确保 savingRef 永远解锁
+      (async () => {
+        try {
+          // 1. 写本地（保底）
+          await saveItem(STORAGE_KEY, settings);
+          // 2. 写云端（异步，失败不阻塞）
+          await saveSettingsToCloud(settings as unknown as Record<string, unknown>).catch(() => {
+            // 云端写入失败不影响本地使用
+          });
+        } finally {
           savingRef.current = false;
-        });
-      });
+        }
+      })();
     }
   }, [settings, loaded, saveItem]);
 
