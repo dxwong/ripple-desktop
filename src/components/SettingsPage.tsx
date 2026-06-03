@@ -653,14 +653,24 @@ export function SettingsPage({
                             return (
                               <div
                                 key={m.id}
-                                className="model-card"
+                                className={`model-card ${isCurrent ? "model-card-current" : ""}`}
                                 data-model={m.id}
+                                onClick={() => {
+                                  // 点击模型卡片即选中（不影响启用状态）
+                                  if (!isCurrent) {
+                                    setActiveProvider(activeProvider, m.id);
+                                  }
+                                }}
+                                style={{ cursor: isCurrent ? "default" : "pointer" }}
                               >
                                 <div className={`model-icon ${iconCls}`}>{iconText}</div>
                                 <div className="model-info">
                                   <div className="model-name">
                                     <span>{m.name}</span>
-                                    <span className="model-id">{m.id}</span>
+                                    {/* 名称与 id 相同则隐藏 id 标签 */}
+                                    {m.name !== m.id && (
+                                      <span className="model-id">{m.id}</span>
+                                    )}
                                     {"custom" in m && m.custom && (
                                       <span
                                         className="model-id"
@@ -684,15 +694,11 @@ export function SettingsPage({
                                       </span>
                                     )}
                                   </div>
-                                  <div className="model-meta">
-                                    输入 ${(m.inPrice || "—").replace("$", "")} · 输出 ${(m.outPrice || "—").replace("$", "")}
-                                    <span className="model-meta-sep">·</span>
-                                    cache: 写 ${(m.cacheWrite || "—").replace("$", "")} / 读 ${(m.cacheRead || "—").replace("$", "")}
-                                  </div>
                                 </div>
                                 <label
                                   className="toggle"
                                   title={enabled ? "禁用模型" : "启用模型"}
+                                  onClick={(e) => e.stopPropagation()}
                                 >
                                   <input
                                     type="checkbox"
@@ -708,7 +714,10 @@ export function SettingsPage({
                                     type="button"
                                     className="page-btn-secondary"
                                     style={{ height: 28, padding: "0 10px", fontSize: 12 }}
-                                    onClick={() => setActiveProvider(activeProvider, m.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveProvider(activeProvider, m.id);
+                                    }}
                                   >
                                     <Check size={12} />
                                     <span>使用</span>
@@ -724,6 +733,10 @@ export function SettingsPage({
                     {/* 测试连接 */}
                     <div className="setting-section">
                       <div className="setting-section-title">连通性测试</div>
+                      <p className="setting-section-desc">
+                        当前测试：<strong style={{ color: "var(--page-text)" }}>{settings.activeModel || "(未选择)"}</strong>。
+                        点击上方"使用"或模型卡片切换被测模型。
+                      </p>
                       <button
                         type="button"
                         onClick={handleTestConnection}
