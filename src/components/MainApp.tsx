@@ -470,6 +470,9 @@ export function MainApp() {
         }
       }
       for (const mid of cfg.customModels ?? []) {
+        // 跳过已在内置列表中的模型（内置列表已被 enabledModels 过滤）
+        const builtinIds = (KNOWN_PROVIDER_MODELS[p.id] ?? []).map((m) => m.id);
+        if (builtinIds.includes(mid)) continue;
         if (cfg.enabledModels[mid] !== false) {
           entries.push({
             id: `${p.id}::${mid}`,
@@ -485,7 +488,11 @@ export function MainApp() {
       if (!settings.enabledProviders[cp.id]) continue;
       const cfg = settings.providerConfigs[cp.id];
       if (!cfg) continue;
+      // 收集自定义 provider 的内置模型 id（如果有）
+      const cpBuiltinIds = (KNOWN_PROVIDER_MODELS[cp.id] ?? []).map((m) => m.id);
       for (const mid of cfg.customModels ?? []) {
+        // 跳过已在内置列表中的模型
+        if (cpBuiltinIds.includes(mid)) continue;
         if (cfg.enabledModels[mid] !== false) {
           entries.push({
             id: `${cp.id}::${mid}`,
