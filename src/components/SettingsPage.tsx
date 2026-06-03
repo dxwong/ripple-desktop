@@ -700,20 +700,6 @@ export function SettingsPage({
                                   />
                                   <span className="toggle-slider" />
                                 </label>
-                                {isCurrent ? null : (
-                                  <button
-                                    type="button"
-                                    className="page-btn-secondary"
-                                    style={{ height: 28, padding: "0 10px", fontSize: 12 }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setActiveProvider(activeProvider, m.id);
-                                    }}
-                                  >
-                                    <Check size={12} />
-                                    <span>使用</span>
-                                  </button>
-                                )}
                               </div>
                             );
                           })

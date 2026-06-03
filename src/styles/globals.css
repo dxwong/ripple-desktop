@@ -2341,6 +2341,7 @@ select.field-input {
 .provider-icon.opencode    { background: #7c3aed; }
 .provider-icon.opencode-go { background: #a78bfa; }
 .provider-icon.custom      { background: #737373; }
+.provider-icon.sensenova  { background: #e60012; }
 
 .provider-name {
   flex: 1;
