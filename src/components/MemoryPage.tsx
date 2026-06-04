@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { syncStore } from "../hooks/useStore";
 import { isTauri } from "../hooks/useTauri";
+import ChatFabButton from "./ChatFabButton";
 import {
   getAppRoot,
   ensureMemoryDir,
@@ -95,21 +96,24 @@ interface MemoryPageProps {
    * 不传则项目 tab 提示「请先在左侧添加项目」
    */
   projects?: ProjectInfo[];
+  /** Chat FAB 回调：返回聊天首页 */
+  onBackToChat?: () => void;
 }
 
-export function MemoryPage({ onMenuClick, projects = [] }: MemoryPageProps) {
+export function MemoryPage({ onMenuClick, projects = [], onBackToChat }: MemoryPageProps) {
   const [activeTab, setActiveTab] = useState<"general" | "project">("general");
 
   return (
-    <section className="page" id="page-memory">
-      <header className="page-header">
-        <div className="page-header-left">
-          {onMenuClick && (
-            <button
-              className="icon-btn"
-              onClick={onMenuClick}
-              aria-label="菜单"
-              title="菜单"
+    <>
+      <section className="page" id="page-memory">
+        <header className="page-header">
+          <div className="page-header-left">
+            {onMenuClick && (
+              <button
+                className="icon-btn"
+                onClick={onMenuClick}
+                aria-label="菜单"
+                title="菜单"
             >
               <MenuIcon />
             </button>
@@ -168,7 +172,9 @@ export function MemoryPage({ onMenuClick, projects = [] }: MemoryPageProps) {
           <ProjectMemoryPane projects={projects} />
         )}
       </div>
-    </section>
+      </section>
+      {onBackToChat && <ChatFabButton onClick={onBackToChat} />}
+    </>
   );
 }
 

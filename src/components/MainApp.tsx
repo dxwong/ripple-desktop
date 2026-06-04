@@ -660,6 +660,13 @@ export function MainApp() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  // 跳回对话页（Chat FAB 触发）
+  const handleBackToChat = useCallback(() => {
+    setCurrentView("chat");
+    // 移动端：跳转后关闭 drawer
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   // 专家数（从后端 /api/squad/agents 拉取，Sidebar 徽章用）
   // 切到 experts 页时重新拉取，确保编辑后徽章同步
   const [expertCount, setExpertCount] = useState<number>(0);
@@ -798,10 +805,12 @@ export function MainApp() {
               ) : currentView === "experts" ? (
                 <ExpertsPage
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                  onBackToChat={handleBackToChat}
                 />
               ) : currentView === "memory" ? (
                 <MemoryPage
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                  onBackToChat={handleBackToChat}
                   projects={projects}
                 />
               ) : (
@@ -817,6 +826,7 @@ export function MainApp() {
                   addCustomProvider={addCustomProvider}
                   removeCustomProvider={removeCustomProvider}
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
+                  onBackToChat={handleBackToChat}
                 />
               )}
             </div>

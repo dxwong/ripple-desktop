@@ -19,6 +19,7 @@ import {
 import { syncStore } from "../hooks/useStore";
 import { fetchExperts, fetchExpert, updateExpert, type ExpertSummary } from "ripple-shared/api";
 import { logger } from "./LogPanel";
+import ChatFabButton from "./ChatFabButton";
 
 /**
  * 专家管理页 — v2.0（后端对接版）
@@ -178,9 +179,11 @@ function buildUsageLine(e: Expert): string | null {
 interface ExpertsPageProps {
   /** 顶栏左侧菜单按钮回调：移动端打开 drawer，桌面端切换 sidebar 折叠 */
   onMenuClick?: () => void;
+  /** Chat FAB 回调：返回聊天首页 */
+  onBackToChat?: () => void;
 }
 
-export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
+export function ExpertsPage({ onMenuClick, onBackToChat }: ExpertsPageProps) {
   // 当前 tab
   const [activeTab, setActiveTab] = useState<ExpertType>("agent");
 
@@ -300,8 +303,9 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
   };
 
   return (
-    <section className="page" id="page-experts">
-      {/* ===== Page Header ===== */}
+    <>
+      <section className="page" id="page-experts">
+        {/* ===== Page Header ===== */}
       <header className="page-header">
         <div className="page-header-left">
           {onMenuClick && (
@@ -471,7 +475,9 @@ export function ExpertsPage({ onMenuClick }: ExpertsPageProps) {
           </div>
         </div>
       )}
-    </section>
+      </section>
+      {onBackToChat && <ChatFabButton onClick={onBackToChat} />}
+    </>
   );
 }
 

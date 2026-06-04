@@ -19,6 +19,7 @@ import {
   X as XIcon,
   ExternalLink,
 } from "lucide-react";
+import ChatFabButton from "./ChatFabButton";
 import type {
   AppSettings,
   PermissionMode,
@@ -50,6 +51,8 @@ interface SettingsPageProps {
   onReset: () => void;
   /** 顶栏左侧菜单按钮回调 */
   onMenuClick?: () => void;
+  /** Chat FAB 回调：返回聊天首页 */
+  onBackToChat?: () => void;
 
   // ── v2.1: Provider 体系操作（从 useSettings 注入，避免双重 hook 实例） ──
   /** 切换激活的 provider，可选同时指定 model */
@@ -104,6 +107,7 @@ export function SettingsPage({
   onUpdate,
   onReset,
   onMenuClick,
+  onBackToChat,
   // v2.1: provider 操作（从 MainApp 注入，复用同一份 hook 状态）
   setActiveProvider,
   setProviderEnabled,
@@ -358,18 +362,19 @@ export function SettingsPage({
   };
 
   return (
-    <section className="page page-settings" id="page-settings">
-      {/* ===== Page Header ===== */}
-      <header className="page-header">
-        <div className="page-header-left">
-          {onMenuClick && (
-            <button
-              className="icon-btn"
-              onClick={onMenuClick}
-              aria-label="菜单"
-              title="菜单"
-            >
-              <MenuIcon />
+    <>
+      <section className="page page-settings" id="page-settings">
+        {/* ===== Page Header ===== */}
+        <header className="page-header">
+          <div className="page-header-left">
+            {onMenuClick && (
+              <button
+                className="icon-btn"
+                onClick={onMenuClick}
+                aria-label="菜单"
+                title="菜单"
+              >
+                <MenuIcon />
             </button>
           )}
           <div className="page-title-wrap">
@@ -1194,6 +1199,8 @@ export function SettingsPage({
         </div>
       )}
     </section>
+    {onBackToChat && <ChatFabButton onClick={onBackToChat} />}
+    </>
   );
 }
 
