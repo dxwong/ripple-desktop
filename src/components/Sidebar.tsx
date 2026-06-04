@@ -143,11 +143,11 @@ function Sidebar({
     syncStore.setItem("sidebar-active-tab", activeTab);
   }, [activeTab]);
 
-  // 移动端切换 tab 时自动关闭 drawer（提升 UX：选完就关）
+  // 移动端切换 tab 时维持 drawer 展开（用户需求：方便在项目/通用间切换）
   const handleTabChange = useCallback((tab: TabKey) => {
     setActiveTab(tab);
-    onClose?.();
-  }, [onClose]);
+    // ❌ 不再 onClose()，让用户继续在 drawer 内切换 tab
+  }, []);
 
   // 移动端切换对话后自动关闭 drawer
   const handleSwitchConversation = useCallback((id: string) => {
