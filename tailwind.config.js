@@ -5,14 +5,16 @@ export default {
   theme: {
     extend: {
       // 现代优雅配色方案
+      // 暗色色系与 mobile 端保持一致（slate-900 / slate-800 / slate-700）
+      // mobile src/index.css: --bg-color: #0f172a; --bg-secondary: #1e293b
       colors: {
         surface: {
           DEFAULT: "#F7F7F5",       // 主背景
-          dark: "#141416",          // 深色主背景
+          dark: "#0F172A",          // 深色主背景（与 mobile 端 --bg-color 一致）
           secondary: "#FAFAFA",     // 侧栏背景（接近主背景的浅灰）
-          "secondary-dark": "#1A1A1C", // 深色侧栏背景
+          "secondary-dark": "#1E293B", // 深色侧栏背景（与 mobile 端 --sidebar-bg 一致）
           elevated: "#FFFFFF",      // 浮层背景
-          "elevated-dark": "#252528", // 深色浮层
+          "elevated-dark": "#1E293B", // 深色浮层（与 mobile 端 --message-ai 一致）
         },
         accent: {
           DEFAULT: "#D97757",       // 主色调（暖橙）
@@ -22,25 +24,25 @@ export default {
         },
         content: {
           DEFAULT: "#1A1A1A",       // 主文字
-          dark: "#E8E8E8",          // 深色主文字
+          dark: "#F1F5F9",          // 深色主文字（与 mobile 端 --text-color 一致）
           secondary: "#8A8A8A",     // 次要文字
-          "secondary-dark": "#6B6B6B",
+          "secondary-dark": "#94A3B8", // 深色次要文字（与 mobile 端 --text-secondary 一致）
           tertiary: "#B0B0B0",      // 辅助文字
-          "tertiary-dark": "#555555",
+          "tertiary-dark": "#64748B",
         },
         border: {
           DEFAULT: "#E8E8E5",       // 边框
-          dark: "#2C2C30",          // 深色边框
+          dark: "#334155",          // 深色边框（与 mobile 端 --border-color 一致）
           light: "#F0F0ED",         // 浅色边框
-          "light-dark": "#222225",  // 深色浅边框
+          "light-dark": "#334155",  // 深色浅边框
         },
         message: {
           user: "#FFFFFF",
-          "user-dark": "#262629",
+          "user-dark": "#3B82F6",   // 暗色用户气泡（与 mobile 端 --message-user 一致）
           ai: "#F0F0EB",
-          "ai-dark": "#18181B",
+          "ai-dark": "#1E293B",     // 暗色 AI 气泡（与 mobile 端 --message-ai 一致）
           code: "#E8E8E5",
-          "code-dark": "#1E1E22",
+          "code-dark": "#1E293B",   // 暗色代码块
         },
       },
       fontFamily: {

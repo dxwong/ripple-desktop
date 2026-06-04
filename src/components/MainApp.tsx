@@ -667,6 +667,19 @@ export function MainApp() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  // ── 同步主题到 <html class="dark"> ──
+  // 修复：之前点击主题切换按钮只改了 settings.darkMode 状态，但没有任何代码
+  //       把它同步到 documentElement，导致 Tailwind `dark:` 修饰符不生效。
+  // Tailwind config: `darkMode: "class"` → 必须 <html class="dark"> 才生效。
+  useEffect(() => {
+    const root = document.documentElement;
+    if (settings.darkMode) {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [settings.darkMode]);
+
   // 专家数（从后端 /api/squad/agents 拉取，Sidebar 徽章用）
   // 切到 experts 页时重新拉取，确保编辑后徽章同步
   const [expertCount, setExpertCount] = useState<number>(0);
