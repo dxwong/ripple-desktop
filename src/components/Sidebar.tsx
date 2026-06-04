@@ -485,6 +485,20 @@ function Sidebar({
                                   )}
                                 </div>
                                 <div className="leaf-actions">
+                                  {/* ✅ 与通用对话一致：仅 active 时显示 Copy 按钮（line 583 同款逻辑） */}
+                                  {conv.id === activeConversationId && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setCopyConfirm(conv.id);
+                                        setCopyTitle(`${conv.title} - 副本`);
+                                      }}
+                                      className="leaf-action hover:!text-green-500"
+                                      title="拷贝对话"
+                                    >
+                                      <Copy size={10} />
+                                    </button>
+                                  )}
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setRenamingId(conv.id); setRenameText(conv.title); }}
                                     className="leaf-action"
