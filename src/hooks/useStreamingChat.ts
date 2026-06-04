@@ -578,53 +578,43 @@ export function useStreamingChat(
         }));
       }
 
-      let snapshotId: string | undefined;
-      // 先把消息加上，让用户立刻看到（snapshotId 后面再补）
-      addMessage("user", content, undefined, convId);
+      // 先把消息加上，让用户立刻看到（snapshotId 后台检查点完成后补）
+      const userMsg = addMessage("user", content, undefined, convId);
+      const userMsgId = userMsg?.id; // 捕获消息 ID，用于 checkpoint 回调中精确定位
       // 空的 assistant 消息不再预先创建，由 appendToConversation 在收到内容时自动创建
       // 这样可以避免发送时同时显示空气泡和 TypingIndicator 的双气泡问题
 
+      // ── fire-and-forget checkpoint：后台创建快照，不阻塞 SSE ──
       if (effectiveCwd) {
-        try {
-          const label = `AI处理前 - ${content.slice(0, 20).replace(/\n/g, ' ')}`;
-          const cpRes = await createCheckpoint(
-            effectiveCwd,
-            label,
-            `AI处理前自动快照: ${content.slice(0, 60)}`,
-            "auto"
-          );
-          if ((cpRes as any).data?.checkpoint?.id) {
-            snapshotId = (cpRes as any).data.checkpoint.id;
-            flog.info('STREAMING', '创建快照成功', { snapshotId, cwd: effectiveCwd });
-            // 补上 snapshotId（更新用户消息）
+        const cpCwd = effectiveCwd;          // 捕获闭包：防止 .then 执行时 effectiveCwd 已变
+        const cpConvId = convId;             // 捕获闭包：防止 .then 执行时 convId 已变
+        const cpUserMsgId = userMsgId;       // 捕获闭包：按 ID 精确定位，避免快速连发时贴错消息
+        const label = `AI处理前 - ${content.slice(0, 20).replace(/\n/g, ' ')}`;
+        createCheckpoint(cpCwd, label, `AI处理前自动快照: ${content.slice(0, 60)}`, "auto")
+          .then((cpRes: any) => {
+            const snapshotId = cpRes?.data?.checkpoint?.id;
+            if (!snapshotId) {
+              flog.warn('STREAMING', '创建快照返回异常（不影响消息发送）', { cwd: cpCwd, error: cpRes?.error || 'unknown' });
+              return;
+            }
+            flog.info('STREAMING', '创建快照成功（fire-and-forget）', { snapshotId, cwd: cpCwd });
+            // 补上 snapshotId：按消息 ID 精确匹配，不走"最后一条 user"避免快速连发错位
             setConversations((prev) =>
               prev.map((conv) => {
-                if (conv.id !== convId) return conv;
+                if (conv.id !== cpConvId) return conv;
                 const msgs = [...conv.messages];
-                // 从后往前找最后一条用户消息补 snapshotId
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                  if (msgs[i].role === 'user') {
-                    msgs[i] = { ...msgs[i], snapshotId };
-                    break;
-                  }
+                const msgIndex = msgs.findIndex(m => m.id === cpUserMsgId);
+                if (msgIndex >= 0) {
+                  msgs[msgIndex] = { ...msgs[msgIndex], snapshotId };
                 }
                 return { ...conv, messages: msgs };
               })
             );
-            // 通知 CheckpointPanel 刷新快照列表（实时更新）
-            window.dispatchEvent(new CustomEvent('checkpoint-created', { detail: { cwd: effectiveCwd } }));
-          } else {
-            flog.warn('STREAMING', '创建快照返回异常（不影响消息发送）', {
-              cwd: effectiveCwd,
-              error: (cpRes as any).error || 'unknown',
-            });
-          }
-        } catch (err) {
-          flog.warn('STREAMING', '创建快照失败（不影响消息发送）', {
-            cwd: effectiveCwd,
-            error: String(err),
+            window.dispatchEvent(new CustomEvent('checkpoint-created', { detail: { cwd: cpCwd } }));
+          })
+          .catch((err: any) => {
+            flog.warn('STREAMING', '创建快照失败（不影响消息发送）', { cwd: cpCwd, error: String(err) });
           });
-        }
       }
 
       try {
