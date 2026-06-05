@@ -515,8 +515,11 @@ export function MainApp() {
     const [provider, model] = id.split("::");
     if (provider && model) {
       setActiveProvider(provider, model);
+      // v1.2 修复：切模型时清空旧 context 统计，
+      // 避免 1M 窗口 → 128K 时 popover 百分比跳变
+      chat.clearContextStats?.();
     }
-  }, [setActiveProvider]);
+  }, [setActiveProvider, chat]);
 
   // 发送消息（桌面端和手机端的统一出口）
   const handleSendMessage = useCallback(async (content: string, regenerate?: boolean, options?: { fromMobile?: boolean }) => {

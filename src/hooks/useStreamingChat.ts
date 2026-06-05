@@ -1669,6 +1669,16 @@ export function useStreamingChat(
     onConversationsChanged?.();
   }, [activeConversationId, onConversationsChanged]);
 
+  /**
+   * 切模型时清空上下文统计 map。
+   * 旧 model 的 contextWindow 残留会导致 popover 百分比跳变（128K↔1M），
+   * 等下一次 SSE context_stats 事件自动重新填充。
+   */
+  const clearContextStats = useCallback(() => {
+    setContextStatsMap({});
+    flog.info("STREAMING", `清空上下文统计（切模型）`);
+  }, []);
+
   return {
     conversations,
     activeConversation,
@@ -1701,5 +1711,7 @@ export function useStreamingChat(
     conversationUsageMap,
     /** 上下文实时统计（文本/工具/系统三分拆） */
     contextStatsMap,
+    /** 切模型时清空上下文统计（避免旧 contextWindow 残留导致百分比跳变） */
+    clearContextStats,
   };
 }
