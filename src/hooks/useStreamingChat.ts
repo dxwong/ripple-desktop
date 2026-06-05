@@ -157,9 +157,11 @@ export function useStreamingChat(
   const { loadItem } = useStore();
   const loadedInitRef = useRef(false); // 确保本地存储加载只执行一次
 
-  // 用 ref 跟踪 activeConversationId + conversations，避免闭包捕获过期值
+  // 用 ref 跟踪 activeConversationId + conversations + pendingToolRequests，避免闭包捕获过期值
   const activeConversationIdRef = useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const pendingToolRequestsRef = useRef(pendingToolRequests);
+  pendingToolRequestsRef.current = pendingToolRequests;
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
 
@@ -1230,6 +1232,17 @@ export function useStreamingChat(
       }
 
       // 不中断 SSE（推通道）：appendToConversation 按 convId 更新指定会话，写通道继续运行
+
+      // ★ 关键修复：通知后端拒绝所有 pending 工具确认，防止后端 waitForConfirmation 等 24h
+      const pendingReqs = pendingToolRequestsRef.current;
+      if (pendingReqs.length > 0 && fromConvId) {
+        flog.info('STREAMING', `切换会话时清理 ${pendingReqs.length} 个 pending 工具确认`, { fromConvId });
+        for (const req of pendingReqs) {
+          confirmToolCall(fromConvId, req.toolCallId, false, "用户切换会话，工具执行已中断").catch((err) => {
+            flog.error('STREAMING', `切换会话清理工具确认失败`, { toolCallId: req.toolCallId, error: err instanceof Error ? err.message : String(err) });
+          });
+        }
+      }
     }
     // 切换对话后恢复输入框状态（原会话的 SSE 仍在后台运行）
     setIsProcessing(false);
@@ -1272,10 +1285,20 @@ export function useStreamingChat(
   // ===== 确认或拒绝工具执行 =====
   const handleToolConfirm = useCallback(
     async (toolCallId: string, approved: boolean, reason?: string) => {
-      // read-only 模式下禁止批准任何工具执行
-      if (approved && permissionMode === "read-only") {
-        flog.warn('STREAMING', 'read-only 模式下拒绝了工具执行', { toolCallId });
+      // read-only 模式下：无论请求批准还是拒绝，都主动通知后端拒绝
+      // 关键修复：之前只清理了前端状态，没有通知后端，导致后端 waitForConfirmation 一直等到 24h 超时
+      if (permissionMode === "read-only") {
+        flog.warn('STREAMING', 'read-only 模式下拒绝了工具执行', { toolCallId, requestedApproved: approved });
+        const rejectSessionId = activeConversationIdRef.current;
         setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+        if (rejectSessionId) {
+          // 主动发送拒绝到后端，防止后端无限等待（write_file/shell/remove 超时 24h）
+          confirmToolCall(rejectSessionId, toolCallId, false,
+            approved ? "当前为只读模式，不允许执行工具操作" : (reason || "只读模式拒绝")
+          ).catch((err) => {
+            flog.error('STREAMING', `read-only 模式拒绝通知发送失败`, { toolCallId, error: err instanceof Error ? err.message : String(err) });
+          });
+        }
         return;
       }
 
