@@ -21,8 +21,14 @@ interface ContextUsagePopoverProps {
   balance: AccountBalance | null | undefined;
   estimatedCost: number;
   contextTokens: number;
-  /** 上下文窗口大小（tokens），用于计算百分比。默认 32000 */
+  /** 上下文窗口大小（tokens），从模型配置获取。默认 128000 */
   contextWindowSize?: number;
+  /** 文本类 tokens（对话文本 + thinking + 摘要） */
+  textTokens?: number;
+  /** 工具类 tokens（工具调用参数 + shell 执行输出） */
+  toolTokens?: number;
+  /** 系统类 tokens（system prompt + RIPPLE.md） */
+  systemTokens?: number;
 }
 
 function formatTokens(n: number): string {
@@ -48,7 +54,10 @@ export default function ContextUsagePopover({
   balance,
   estimatedCost,
   contextTokens,
-  contextWindowSize = 32000,
+  contextWindowSize = 128000,
+  textTokens,
+  toolTokens,
+  systemTokens,
 }: ContextUsagePopoverProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -213,6 +222,19 @@ export default function ContextUsagePopover({
           <div className="text-center text-[10.5px] text-content-tertiary dark:text-content-tertiary-dark tracking-wide">
             悬停查看实时统计
           </div>
+
+          {/* v2.3: 上下文三分拆（文本 / 工具 / 系统） */}
+          {textTokens !== undefined && (
+            <div className="mt-2 pt-2 border-t border-border dark:border-border-dark">
+              <div className="flex items-center gap-2 text-[11px] text-content-tertiary dark:text-content-tertiary-dark mb-1">
+                <span>文本 {formatTokens(textTokens ?? 0)}</span>
+                <span className="mx-0.5">·</span>
+                <span>工具 {formatTokens(toolTokens ?? 0)}</span>
+                <span className="mx-0.5">·</span>
+                <span>系统 {formatTokens(systemTokens ?? 0)}</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

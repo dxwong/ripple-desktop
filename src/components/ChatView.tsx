@@ -75,6 +75,8 @@ interface ChatViewProps {
   onRollbackToSnapshot?: (messageId: string) => void;
   /** 按对话累积使用统计（key = conversationId） */
   conversationUsageMap?: Record<string, ConversationUsage>;
+  /** 上下文实时统计（文本/工具/系统三分拆） */
+  contextStatsMap?: Record<string, { textTokens: number; toolTokens: number; systemTokens: number; contextTokens: number; contextWindow: number }>;
   /** 是否还有更早的消息可加载 */
   hasMore?: boolean;
   /** 加载更早消息 */
@@ -203,6 +205,7 @@ function ChatView({
   onEditBlockApply,
   onRollbackToSnapshot,
   conversationUsageMap = {},
+  contextStatsMap = {},
   hasMore,
   onLoadMore,
   // v1.4 新增
@@ -271,6 +274,8 @@ function ChatView({
 
   // ===== 从 conversationUsageMap 获取当前对话的累计用量 =====
   const currentConvUsage: ConversationUsage = (conversationUsageMap ?? {})[conversationId] || { input: 0, output: 0, totalTokens: 0, cost: 0, cacheRead: 0, cacheWrite: 0 };
+  // ===== 从 contextStatsMap 获取当前对话的实时上下文统计 =====
+  const currentStats = (contextStatsMap ?? {})[conversationId];
   // 按对话计算缓存命中率：cacheHit / (cacheHit + cacheMiss) * 100
   // cacheHit = cacheRead（从缓存读取的 token）
   // cacheMiss = input - cacheRead（需要重新计算的 token）
@@ -582,7 +587,11 @@ function ChatView({
             cacheHitRate={convCacheHitRate}
             balance={accountBalance}
             estimatedCost={estimatedCost}
-            contextTokens={currentConvUsage.totalTokens}
+            contextTokens={currentStats?.contextTokens ?? currentConvUsage.totalTokens}
+            contextWindowSize={currentStats?.contextWindow}
+            textTokens={currentStats?.textTokens}
+            toolTokens={currentStats?.toolTokens}
+            systemTokens={currentStats?.systemTokens}
             placeholder={
               isProcessing
                 ? "AI 正在回复... 点击停止按钮可中断"

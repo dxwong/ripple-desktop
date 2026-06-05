@@ -773,6 +773,7 @@ export function MainApp() {
                     onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
                     onRollbackToSnapshot={handleRollbackToSnapshot}
                     conversationUsageMap={chat.conversationUsageMap}
+                    contextStatsMap={chat.contextStatsMap}
                     hasMore={chat.hasMoreMessages?.[chat.activeConversationId]}
                     onLoadMore={chat.activeConversationId ? () => chat.loadMoreMessages(chat.activeConversationId) : undefined}
                     // v1.4 新增：顶栏 menu 按钮

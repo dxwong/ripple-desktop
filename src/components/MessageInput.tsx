@@ -50,6 +50,11 @@ interface MessageInputProps {
   balance?: AccountBalance | null;
   estimatedCost?: number;
   contextTokens?: number;
+  // v2.3 新增：上下文三分拆 + 窗口大小
+  contextWindowSize?: number;
+  textTokens?: number;
+  toolTokens?: number;
+  systemTokens?: number;
 }
 
 /**
@@ -80,6 +85,10 @@ function MessageInput({
   balance = null,
   estimatedCost = 0,
   contextTokens = 0,
+  contextWindowSize,
+  textTokens,
+  toolTokens,
+  systemTokens,
 }: MessageInputProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -190,6 +199,10 @@ function MessageInput({
             balance={balance}
             estimatedCost={estimatedCost}
             contextTokens={contextTokens}
+            contextWindowSize={contextWindowSize}
+            textTokens={textTokens}
+            toolTokens={toolTokens}
+            systemTokens={systemTokens}
           />
 
           {/* 发送/停止按钮 */}

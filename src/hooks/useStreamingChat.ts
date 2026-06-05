@@ -142,6 +142,8 @@ export function useStreamingChat(
   const [hasMoreMessages, setHasMoreMessages] = useState<Record<string, boolean>>({});
   /** 按对话累积的使用统计（token 和费用），key = conversationId */
   const [conversationUsageMap, setConversationUsageMap] = useState<Record<string, ConversationUsage>>({});
+  /** 上下文实时统计（文本/工具/系统三分拆），key = conversationId */
+  const [contextStatsMap, setContextStatsMap] = useState<Record<string, { textTokens: number; toolTokens: number; systemTokens: number; contextTokens: number; contextWindow: number }>>({});
   const abortRef = useRef<AbortController | null>(null);
   const sseClientRef = useRef<SSEClient | null>(null);
   // SSE 请求代际标记：每次发送新请求时递增，旧回调检查发现代际不匹配则跳过操作
@@ -944,6 +946,27 @@ export function useStreamingChat(
                     };
                   });
                 },
+                onContextStats: (data) => {
+                  resetIdleTimer();
+                  flog.debug('STREAMING', `收到 context_stats 事件`, {
+                    convId,
+                    textTokens: Math.floor(data.textChars / 3),
+                    toolTokens: Math.floor(data.toolChars / 3),
+                    systemTokens: Math.floor(data.systemChars / 3),
+                    estimatedTokens: data.estimatedTokens,
+                  });
+                  onStreamEvent?.("context_stats", convId, data as unknown as Record<string, unknown>);
+                  setContextStatsMap((prev) => ({
+                    ...prev,
+                    [convId]: {
+                      textTokens: Math.floor(data.textChars / 3),
+                      toolTokens: Math.floor(data.toolChars / 3),
+                      systemTokens: Math.floor(data.systemChars / 3),
+                      contextTokens: data.estimatedTokens,
+                      contextWindow: data.contextWindow,
+                    },
+                  }));
+                },
                 onCompact: (data) => {
                   resetIdleTimer();
                   flog.info('STREAMING', `上下文已自动压缩`, { convId, tokensBefore: data.tokensBefore });
@@ -1580,5 +1603,7 @@ export function useStreamingChat(
     clearAllProjectConversations,
     /** 按对话累积使用统计（token + 费用） */
     conversationUsageMap,
+    /** 上下文实时统计（文本/工具/系统三分拆） */
+    contextStatsMap,
   };
 }

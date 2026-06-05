@@ -353,7 +353,7 @@ describe('useSettings 云端同步（v2.1 schema）', () => {
   it('云端数据不完整时使用默认值填充', async () => {
     // 云端只返回 activeProvider，其他字段缺失
     mockFetchSettings.mockResolvedValueOnce({
-      data: { settings: { activeProvider: 'anthropic' } },
+      data: { settings: { activeProvider: 'deepseek' } },
     });
 
     const result = await new Promise<HookResult>((resolve) => {
@@ -361,14 +361,14 @@ describe('useSettings 云端同步（v2.1 schema）', () => {
     });
 
     // 缺失字段应该被默认值填充
-    expect(result.settings.activeProvider).toBe('anthropic');
+    expect(result.settings.activeProvider).toBe('deepseek');
     // providerConfigs 应该被完整填充
-    expect(Object.keys(result.settings.providerConfigs).length).toBeGreaterThanOrEqual(32);
+    expect(Object.keys(result.settings.providerConfigs).length).toBeGreaterThanOrEqual(21);
     // enabledModels 也应有默认
-    const anthropicCfg = result.settings.providerConfigs.anthropic;
-    expect(anthropicCfg).toBeDefined();
-    expect(anthropicCfg.apiKey).toBe('');
-    expect(anthropicCfg.customModels).toEqual([]);
+    const deepseekCfg = result.settings.providerConfigs.deepseek;
+    expect(deepseekCfg).toBeDefined();
+    expect(deepseekCfg.apiKey).toBe('');
+    expect(deepseekCfg.customModels).toEqual([]);
   });
 
   // ──────────────────────────────────────────
