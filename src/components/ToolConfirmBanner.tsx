@@ -63,9 +63,17 @@ export function ToolConfirmBanner({ requests, onConfirm, readOnly = false }: Too
             <div className="flex items-center gap-3 px-4 py-2">
               <Icon size={16} />
               <span className="text-sm font-medium flex-1 truncate">
-                AI 请求 <span className="font-semibold">{toolLabel}</span>
-                {argPath && <span className="text-content-tertiary">: {argPath}</span>}
-                {argCommand && <span className="text-content-tertiary">: {argCommand.slice(0, 30)}...</span>}
+                {req.running ? (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    ⏳ 命令已运行 {req.elapsedSec}s
+                  </span>
+                ) : (
+                  <>
+                    AI 请求 <span className="font-semibold">{toolLabel}</span>
+                    {argPath && <span className="text-content-tertiary">: {argPath}</span>}
+                    {argCommand && <span className="text-content-tertiary">: {argCommand.slice(0, 30)}...</span>}
+                  </>
+                )}
               </span>
 
               {/* 展开详情按钮 */}
@@ -80,24 +88,25 @@ export function ToolConfirmBanner({ requests, onConfirm, readOnly = false }: Too
               {/* 快速操作按钮 */}
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => onConfirm(toolCallId, false, "用户拒绝")}
+                  onClick={() => onConfirm(toolCallId, false, req.running ? "用户取消执行" : "用户拒绝")}
                   className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-message-ai hover:bg-rose-500/15 text-content transition-colors"
+                  title={req.running ? "取消正在运行的命令" : undefined}
                 >
                   <X size={12} />
-                  拒绝
+                  {req.running ? "取消执行" : "拒绝"}
                 </button>
                 <button
                   onClick={() => onConfirm(toolCallId, true)}
-                  disabled={readOnly}
+                  disabled={readOnly && !req.running}
                   className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                    readOnly
+                    readOnly && !req.running
                       ? 'bg-message-ai text-content-tertiary cursor-not-allowed'
                       : 'bg-accent hover:bg-accent/80 text-white'
                   }`}
-                  title={readOnly ? '只读模式下禁止写操作' : undefined}
+                  title={readOnly && !req.running ? '只读模式下禁止写操作' : undefined}
                 >
                   <Check size={12} />
-                  允许
+                  {req.running ? "继续等待" : "允许"}
                 </button>
               </div>
             </div>

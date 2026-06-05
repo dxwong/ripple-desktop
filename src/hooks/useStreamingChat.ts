@@ -162,6 +162,7 @@ export function useStreamingChat(
   activeConversationIdRef.current = activeConversationId;
   const pendingToolRequestsRef = useRef(pendingToolRequests);
   pendingToolRequestsRef.current = pendingToolRequests;
+  const shellStartTimesRef = useRef<Map<string, number>>(new Map()); // toolCallId → timestamp for long-running detection
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
 
@@ -722,6 +723,10 @@ export function useStreamingChat(
                   resetIdleTimer();
                   flog.debug('STREAMING', `工具开始执行`, { toolCallId, toolName });
                   onStreamEvent?.("tool-start", convId, { toolCallId, toolName });
+                  // ★ 记录 shell 启动时间，用于长运行检测
+                  if (toolName === "shell") {
+                    shellStartTimesRef.current.set(toolCallId, Date.now());
+                  }
                   if (activeConversationIdRef.current !== convId) return;
                   // 将工具调用状态推进到执行中（后续 onToolEnd 变为 success/error）
                   setConversations((prev) => {
@@ -744,6 +749,9 @@ export function useStreamingChat(
                   resetIdleTimer();
                   flog.debug('STREAMING', `工具结束`, { toolCallId, toolName, hasError: !!result.error });
                   onStreamEvent?.("tool-end", convId, { toolCallId, toolName, result: result.output || "", error: result.error });
+                  // ★ 清理长运行跟踪
+                  shellStartTimesRef.current.delete(toolCallId);
+                  setPendingToolRequests(prev => prev.filter(t => t.toolCallId !== toolCallId && t.running));
                   // 所有工具结束 → 发射到终端事件总线（在所有会话中都捕获）并更新历史记录
                   emitShellCommandEnd({
                     toolCallId,
@@ -918,6 +926,27 @@ export function useStreamingChat(
                   if (output) {
                     emitShellCommandOutput({ toolCallId, output });
                     terminalHistory.updateOutput(toolCallId, output);
+                  }
+                  // ★ 长运行检测：shell 超过 60s 且未弹出过 → 推入 pendingToolRequests 复用确认弹窗
+                  if (toolName === "shell") {
+                    const startTime = shellStartTimesRef.current.get(toolCallId);
+                    if (startTime) {
+                      const elapsed = Date.now() - startTime;
+                      if (elapsed > 60_000) {
+                        setPendingToolRequests(prev => {
+                          if (prev.some(t => t.toolCallId === toolCallId)) return prev;
+                          return [...prev, {
+                            toolCallId,
+                            toolName,
+                            args: {},
+                            description: `命令已运行 ${Math.floor(elapsed / 1000)}s`,
+                            riskLevel: "medium",
+                            running: true,
+                            elapsedSec: Math.floor(elapsed / 1000),
+                          }];
+                        });
+                      }
+                    }
                   }
                 },
                 onUsage: (usage) => {
@@ -1121,6 +1150,9 @@ export function useStreamingChat(
     isProcessingRef.current = false;
   }, [backendConnected, agentGatewayUrl]);
 
+  const stopStreamingRef = useRef(stopStreaming);
+  stopStreamingRef.current = stopStreaming;
+
   // ===== 新建对话 =====
   const newConversation = useCallback((mode: ChatMode = "chat", title?: string, cwd?: string) => {
     const newConv: Conversation = {
@@ -1286,6 +1318,22 @@ export function useStreamingChat(
   // ===== 确认或拒绝工具执行 =====
   const handleToolConfirm = useCallback(
     async (toolCallId: string, approved: boolean, reason?: string) => {
+      // ★ 长运行工具取消：用户点击"取消执行" → 触发 abort
+      const runningReq = pendingToolRequestsRef.current.find(t => t.toolCallId === toolCallId && t.running);
+      if (runningReq && !approved) {
+        flog.info('STREAMING', `用户取消长运行工具`, { toolCallId, toolName: runningReq.toolName });
+        setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+        shellStartTimesRef.current.delete(toolCallId);
+        stopStreamingRef.current?.();
+        return;
+      }
+      // ★ 长运行工具继续等待：用户点击"继续等待" → 仅关闭弹窗
+      if (runningReq && approved) {
+        flog.info('STREAMING', `用户选择继续等待长运行工具`, { toolCallId });
+        setPendingToolRequests((prev) => prev.filter((t) => t.toolCallId !== toolCallId));
+        return;
+      }
+
       // read-only 模式下：无论请求批准还是拒绝，都主动通知后端拒绝
       // 关键修复：之前只清理了前端状态，没有通知后端，导致后端 waitForConfirmation 一直等到 24h 超时
       if (permissionMode === "read-only") {

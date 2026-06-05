@@ -561,7 +561,10 @@ function ChatView({
       <div className="px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           {/* 工具确认横幅 — 输入框上方靠右 */}
-          {pendingToolRequests.length > 0 && onToolConfirm && permissionMode !== "auto" && (
+          {/* auto 模式下显示长运行取消弹窗，其他模式显示所有确认请求 */}
+          {pendingToolRequests.length > 0 && onToolConfirm && (
+            (permissionMode !== "auto" || pendingToolRequests.some(r => r.running))
+          ) && (
             <div className="flex justify-end mb-2">
               <ToolConfirmBanner
                 requests={pendingToolRequests}
