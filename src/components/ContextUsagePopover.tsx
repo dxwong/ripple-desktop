@@ -139,7 +139,9 @@ export default function ContextUsagePopover({
   const textPct = (textTokens / contextWindowSize) * 100;
   const toolPct = (toolTokens / contextWindowSize) * 100;
 
-  // 整体阈值色调（控制头部数字 + 进度条颜色）
+  // 整体阈值色调（只控制头部数字 + 触发按钮颜色，**不**控制进度条本身）
+  // 设计：进度条文本段永远蓝、工具段永远灰，颜色和下方图例严格一致
+  //       警示信息交给头部百分比文字和触发按钮承担
   const tone: "" | "warn" | "danger" =
     totalPct > 90 ? "danger" : totalPct > 70 ? "warn" : "";
 
@@ -151,21 +153,11 @@ export default function ContextUsagePopover({
         ? "text-amber-600 dark:text-amber-400"
         : "text-blue-600 dark:text-blue-400";
 
-  // 文本段色
-  const textBarClass =
-    tone === "danger"
-      ? "bg-red-500 dark:bg-red-400"
-      : tone === "warn"
-        ? "bg-amber-500 dark:bg-amber-400"
-        : "bg-blue-500 dark:bg-blue-400";
+  // 文本段色（固定蓝色，不随阈值变）
+  const textBarClass = "bg-blue-500 dark:bg-blue-400";
 
-  // 工具段色
-  const toolBarClass =
-    tone === "danger"
-      ? "bg-red-300 dark:bg-red-600"
-      : tone === "warn"
-        ? "bg-amber-300 dark:bg-amber-600"
-        : "bg-gray-400 dark:bg-gray-500";
+  // 工具段色（固定灰色，不随阈值变）
+  const toolBarClass = "bg-gray-400 dark:bg-gray-500";
 
   // ===== 压缩按钮可用性 =====
   const canCompress =
