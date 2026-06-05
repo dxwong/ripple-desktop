@@ -69,6 +69,16 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+/**
+ * 头部 "234K/1000K" 用：整数 + 大写 K，无小数。
+ * 与 formatTokens 的区别：用于窄空间的关键数字（不抢百分比的颜色权重）。
+ */
+function formatTokensShort(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${Math.round(n / 1000)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 function formatYuan(n: number): string {
   if (n === 0) return "免费";
   if (n < 0.01) return "<¥0.01";
@@ -278,13 +288,19 @@ export default function ContextUsagePopover({
             "p-3",
           ].join(" ")}
         >
-          {/* 头部：标题 + 总占比 */}
+          {/* 头部：标题 + 已用/总长 + 总占比 */}
           <div className="flex items-center gap-1.5 mb-2">
             <BarChart3 className="h-3.5 w-3.5 text-content-tertiary dark:text-content-tertiary-dark" strokeWidth={1.75} />
             <span className="text-[12px] font-semibold text-content dark:text-content-dark">
               上下文统计
             </span>
-            <span className={`ml-auto text-[11.5px] font-semibold tabular-nums ${headColor}`}>
+            <span
+              className="ml-auto text-[11.5px] font-semibold tabular-nums text-content-tertiary dark:text-content-tertiary-dark"
+              title={`已用 ${formatTokens(totalUsed)} / ${formatTokens(contextWindowSize)} tokens`}
+            >
+              {formatTokensShort(totalUsed)}/{formatTokensShort(contextWindowSize)}
+            </span>
+            <span className={`text-[11.5px] font-semibold tabular-nums ${headColor}`}>
               {totalPct}%
             </span>
           </div>

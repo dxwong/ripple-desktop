@@ -553,9 +553,20 @@ export function useStreamingChat(
       abortRef.current = abort;
 
       // 使用传入的目标会话ID，或回退到当前活跃会话
-      const convId = targetConvId || activeConversationIdRef.current;
+      let convId = targetConvId || activeConversationIdRef.current;
       if (!convId) {
-        flog.error('STREAMING', '发送失败：没有活跃对话');
+        if (cwd) {
+          // 项目对话：必须有活跃对话才能发送
+          flog.error('STREAMING', '发送失败：项目模式下没有活跃对话，请先选择一个项目对话');
+        } else {
+          // 普通对话（无 cwd）：自动创建新会话并发送
+          const newConv = newConversation("chat");
+          convId = newConv.id;
+          activeConversationIdRef.current = convId;
+          flog.info('STREAMING', `自动创建新对话并发送`, { convId });
+        }
+      }
+      if (!convId) {
         setIsProcessing(false);
         return;
       }
