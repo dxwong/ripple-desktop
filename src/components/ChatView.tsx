@@ -69,8 +69,6 @@ interface ChatViewProps {
   permissionMode?: PermissionMode;
   /** 切换权限模式 */
   onPermissionModeChange?: (mode: PermissionMode) => void;
-  /** EditBlock 应用成功回调 */
-  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
   /** 回滚到指定用户消息（撤销后续 AI 操作） */
   onRollbackToSnapshot?: (messageId: string) => void;
   /** 按对话累积使用统计（key = conversationId） */
@@ -204,7 +202,6 @@ function ChatView({
   onToolConfirm,
   permissionMode = "confirm",
   onPermissionModeChange,
-  onEditBlockApply,
   onRollbackToSnapshot,
   conversationUsageMap = {},
   contextStatsMap = {},
@@ -546,7 +543,6 @@ function ChatView({
                   message={msg}
                   isStreaming={index === streamingIdx}
                   darkMode={darkMode}
-                  onEditBlockApply={onEditBlockApply}
                   onRegenerate={msg.role === "assistant" && index === lastAssistantIdx ? () => handleRegenerate(index) : undefined}
                   onRollback={msg.role === "user" ? () => onRollbackToSnapshot?.(msg.id) : undefined}
                 />
@@ -592,6 +588,17 @@ function ChatView({
             sessionId={conversationId}
             // v1.1.2: 透传压缩阈值（从 MainApp 透传，避免 useSettings 实例隔离）
             compactionThreshold={compactionThreshold}
+            // ★ 关键修复（v1.1.2 silent break 补救）：补全之前 edit 误丢的 7 个 prop
+            // 缺失导致：Plan/auto/confirm 权限下拉框消失、大模型下拉框消失、
+            //          AI 处理中停止按钮不显示
+            // 原因：v1.1.2 改动时 edit ChatView 调用块，newString 未列全原 props
+            isProcessing={isProcessing}
+            onStop={onStop}
+            permissionMode={permissionMode}
+            onPermissionModeChange={onPermissionModeChange}
+            activeConfig={activeConfig}
+            modelEntries={modelEntries}
+            onSwitchModelEntry={onSwitchModelEntry}
           />
         </div>
       </div>

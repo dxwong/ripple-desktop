@@ -51,8 +51,6 @@ interface ChatMessageProps {
   message: Message;
   isStreaming?: boolean;
   darkMode?: boolean;
-  /** EditBlock 应用成功回调 */
-  onEditBlockApply?: (messageId: string, cleanContent: string, appliedCount: number) => void;
   /** 重新生成回调 */
   onRegenerate?: () => void;
   /** 回滚到该消息（撤销后续 AI 操作） */
@@ -372,7 +370,7 @@ export function OrchestrationResultCard({ toolCall }: { toolCall: ToolCallResult
  * - 流式中代码块用轻量 HTML pre，完成后用 createRoot 挂载 Monaco Editor
  * - 复制按钮通过事件委托处理
  */
-const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onEditBlockApply, onRegenerate, onRollback }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, darkMode = true, onRegenerate, onRollback }: ChatMessageProps) {
   const isUser = message.role === "user";
   const hasSnapshot = isUser && !!message.snapshotId;
   const [thinkingExpanded, setThinkingExpanded] = useState(false);

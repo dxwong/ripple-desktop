@@ -38,8 +38,6 @@ interface MessageInputProps {
   onSwitchModelEntry?: (id: string) => void;
   /** 当前会话模式 */
   chatMode?: ChatMode;
-  /** 是否有关联项目 */
-  hasProject?: boolean;
 
   // v2.2 新增：权限模式（来自 settings.permissionMode）
   permissionMode?: PermissionMode;
@@ -82,7 +80,6 @@ function MessageInput({
   modelEntries,
   onSwitchModelEntry,
   chatMode = "chat",
-  hasProject = false,
   permissionMode = "confirm",
   onPermissionModeChange,
   cacheHitRate = null,
