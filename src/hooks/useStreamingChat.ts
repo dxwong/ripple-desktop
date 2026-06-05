@@ -687,6 +687,7 @@ export function useStreamingChat(
                   allowedDir: settings.riskManagement.pathRestriction.allowedDir || effectiveCwd,
                   allowReadOutside: settings.riskManagement.pathRestriction.allowReadOutside,
                 },
+                permissionMode: permissionMode,
               } : undefined,
             };
             flog.info('STREAMING', `发送到后端的参数`, {
