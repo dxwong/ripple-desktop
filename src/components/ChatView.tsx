@@ -592,6 +592,8 @@ function ChatView({
             textTokens={currentStats?.textTokens}
             toolTokens={currentStats?.toolTokens}
             systemTokens={currentStats?.systemTokens}
+            // v1.1: 压缩功能（ContextUsagePopover 内的"压缩"按钮需要）
+            sessionId={conversationId}
             placeholder={
               isProcessing
                 ? "AI 正在回复... 点击停止按钮可中断"
