@@ -200,7 +200,7 @@ export function useSettings() {
   const [settingsSource, setSettingsSource] = useState<"cloud" | "local" | "default">("default");
   const { saveItem, loadItem } = useStore();
 
-  // ========== 初始化加载：云端优先，本地兜底 ==========
+  // ========== 初始化加载：本地优先 + 云端兜底（updatedAt 仲裁） ==========
   /** init 完成前锁，防止用户操作在 init 完成前修改 state 后被覆盖 */
   const initLockRef = useRef(true);
 
@@ -209,67 +209,89 @@ export function useSettings() {
       let merged: AppSettings | null = null;
       let source: "cloud" | "local" | "default" = "default";
 
-      // ── 1. 先尝试从云端读取 ──
+      // ── 1. 先读本地（O(1) 同步）──
+      // v1.1.2 修复：本地优先（避免云端旧值覆盖本地新值导致"重启后设置丢失"）
+      const local = await loadItem<AppSettings | null>(STORAGE_KEY, null);
+
+      // ── 2. 异步读云端（best-effort，失败不阻塞） ──
+      let cloud: any = null;
       try {
         const cloudRes = await fetchSettings();
         if (cloudRes.data?.settings) {
-          const cloud = cloudRes.data.settings as Record<string, unknown>;
-          // 旧版 schema 检测 → 尝试迁移而非丢弃
-          if (isLegacyShape(cloud)) {
-            const migrated = migrateFromV1(cloud);
-            if (migrated) {
-              merged = migrated;
-              source = "cloud";
-              await log("info", "SETTINGS", "云端 v1.x 数据已迁移到 v2.1");
-              // 立即写回迁移后的数据
-              await saveSettingsToCloud(migrated as unknown as Record<string, unknown>).catch(() => {});
-              await saveItem(STORAGE_KEY, migrated);
-            } else {
-              await log("warn", "SETTINGS", "云端 v1.x 数据无法迁移，使用默认");
-            }
-          } else {
-            merged = {
-              ...DEFAULT_SETTINGS,
-              ...cloud,
-              // 不上云的字段：保留本地值或默认值
-              agentGatewayUrl: DEFAULT_SETTINGS.agentGatewayUrl,
-              mobileBridgePort: DEFAULT_SETTINGS.mobileBridgePort,
-            } as AppSettings;
-            source = "cloud";
-            // 用云端数据更新 localStorage
-            await saveItem(STORAGE_KEY, merged);
-          }
+          cloud = cloudRes.data.settings;
         }
-      } catch {
-        /* 云端不可用，继续走本地 */
+      } catch (err) {
+        // 云端读取失败不应阻塞启动
+        await log("warn", "SETTINGS", "云端读取失败，使用本地或默认", { err: String(err) });
       }
 
-      // ── 2. 云端无数据，从本地读取 ──
-      if (!merged) {
-        const saved = await loadItem<AppSettings | null>(STORAGE_KEY, null);
-        if (saved && !isLegacyShape(saved)) {
-          merged = { ...DEFAULT_SETTINGS, ...saved };
+      // ── 3. 旧版 schema 检测与迁移 ──
+      if (cloud && isLegacyShape(cloud)) {
+        const migrated = migrateFromV1(cloud);
+        if (migrated) {
+          cloud = migrated;
+          await log("info", "SETTINGS", "云端 v1.x 数据已迁移到 v2.1");
+          // 立即写回迁移后的数据（先本地后云端，保证双写一致）
+          await saveItem(STORAGE_KEY, migrated);
+          await saveSettingsToCloud(migrated as unknown as Record<string, unknown>);
+        } else {
+          await log("warn", "SETTINGS", "云端 v1.x 数据无法迁移，跳过云端");
+          cloud = null;
+        }
+      }
+      if (local && isLegacyShape(local)) {
+        const migrated = migrateFromV1(local);
+        if (migrated) {
+          await log("info", "SETTINGS", "本地 v1.x 数据已迁移到 v2.1");
+          await saveItem(STORAGE_KEY, migrated);
+          // 注：local 仍是原始 v1.x 形状数据（不可改 const），下面走"用 migrated"路径
+          merged = migrated;
           source = "local";
-        } else if (saved && isLegacyShape(saved)) {
-          // 本地旧格式 → 迁移
-          const migrated = migrateFromV1(saved);
-          if (migrated) {
-            merged = migrated;
-            source = "local";
-            await log("info", "SETTINGS", "本地 v1.x 数据已迁移到 v2.1");
-            await saveItem(STORAGE_KEY, migrated);
-          } else {
-            await log("warn", "SETTINGS", "本地 v1.x 数据无法迁移，使用默认");
-          }
+        } else {
+          await log("warn", "SETTINGS", "本地 v1.x 数据无法迁移，跳过本地");
         }
       }
 
-      // ── 3. 兜底默认值 ──
+      // ── 4. 仲裁：本地 vs 云端（用 updatedAt）──
+      // 关键：原子双写保证本地和云端最终一致，仲裁只是处理历史遗留的旧云端数据
+      if (local && cloud) {
+        const localTs = (local as any).updatedAt ?? 0;
+        const cloudTs = (cloud as any).updatedAt ?? 0;
+        if (cloudTs > localTs) {
+          merged = cloud;
+          source = "cloud";
+          // 用云端数据更新 localStorage（让本地也跟上最新值）
+          await saveItem(STORAGE_KEY, merged);
+        } else {
+          merged = local;
+          source = "local";
+          // 本地比云端新（多设备场景下，设备 A 写完但设备 B 上次未同步）
+          // 把本地新值推到云端，保持多设备一致
+          await saveSettingsToCloud(merged as unknown as Record<string, unknown>);
+        }
+        await log("info", "SETTINGS", `init 仲裁：local_ts=${localTs} cloud_ts=${cloudTs} → 用${source}`);
+      } else if (cloud) {
+        merged = cloud;
+        source = "cloud";
+        // 首次安装但有云端数据 → 同步到本地
+        await saveItem(STORAGE_KEY, merged);
+      } else if (local) {
+        merged = local;
+        source = "local";
+        // 本地有但云端无 → 推到云端（多设备同步）
+        await saveSettingsToCloud(merged as unknown as Record<string, unknown>);
+      }
+
+      // ── 5. 兜底默认值 ──
       if (!merged) {
         merged = { ...DEFAULT_SETTINGS };
+        source = "default";
+        // 首次启动：双写到本地和云端，建立"事实上有设置"的状态
+        await saveItem(STORAGE_KEY, merged);
+        await saveSettingsToCloud(merged as unknown as Record<string, unknown>);
       }
 
-      // ── 4. 确保必需字段存在（防部分持久化数据缺字段） ──
+      // ── 6. 确保必需字段存在（防部分持久化数据缺字段） ──
       merged.activeProvider = merged.activeProvider || DEFAULT_SETTINGS.activeProvider;
       merged.activeModel = merged.activeModel || DEFAULT_SETTINGS.activeModel;
       merged.enabledProviders = { ...DEFAULT_SETTINGS.enabledProviders, ...(merged.enabledProviders || {}) };
@@ -277,7 +299,7 @@ export function useSettings() {
       merged.customProviders = merged.customProviders || [];
       merged.riskManagement = merged.riskManagement || DEFAULT_RISK_CONFIG;
 
-      // ── 5. 跨设备访问修正：页面通过 IP 访问时自动修正网关地址 ──
+      // ── 7. 跨设备访问修正：页面通过 IP 访问时自动修正网关地址 ──
       //   手机浏览器访问 http://192.168.1.10:1420/ 时，
       //   agentGatewayUrl 必须用同一 IP 而非 localhost，否则手机连不上后端
       if (typeof window !== "undefined") {
@@ -302,49 +324,91 @@ export function useSettings() {
       setSettings(merged);
       setSettingsSource(source);
       setLoaded(true);
-
-      // ── 6. 反向迁移：本地有数据但云端无 → 推送到云端 ──
-      if (source === "local") {
-        try {
-          const checkRes = await fetchSettings();
-          if (!checkRes.data?.settings) {
-            await saveSettingsToCloud(merged as unknown as Record<string, unknown>);
-          }
-        } catch {
-          /* 推送失败不影响本地使用 */
-        }
-      }
     };
     init();
   }, [loadItem]);
 
-  // ========== 持久化：双写本地 + 云端 ==========
-  const savingRef = useRef(false);
+  // ========== 持久化：双写本地 + 云端（v1.1.2 保留 useEffect 兜底） ==========
+  // 设计：updateSettings 显式路径走"原子双写 + 失败回滚"（见下）
+  //       useEffect 路径作为兜底：内部 setSettings 调用（setActiveProvider / setModelEnabled 等）
+  //       不走 updateSettings，由 useEffect 自动双写
+  //       标记 lastWrittenByUpdateSettings 避免 updateSettings + useEffect 重复双写
+  const lastWrittenByUpdateSettingsRef = useRef<AppSettings | null>(null);
   useEffect(() => {
-    if (loaded && !savingRef.current) {
-      savingRef.current = true;
-
-      // 用 async IIFE + try/finally 确保 savingRef 永远解锁
+    if (loaded) {
+      // 跳过 updateSettings 刚写的 settings（避免重复双写）
+      if (lastWrittenByUpdateSettingsRef.current === settings) {
+        lastWrittenByUpdateSettingsRef.current = null;
+        return;
+      }
+      // 内部 setSettings 触发的变化 → 自动双写（异步，失败不阻塞 UI）
       (async () => {
         try {
-          // 1. 写本地（保底）
           await saveItem(STORAGE_KEY, settings);
-          // 2. 写云端（异步，失败不阻塞）
-          await saveSettingsToCloud(settings as unknown as Record<string, unknown>).catch(() => {
-            // 云端写入失败不影响本地使用
+          await saveSettingsToCloud(settings as unknown as Record<string, unknown>);
+        } catch (err) {
+          // 内部 setSettings 触发的双写失败：仅记录，不回滚
+          // （用户已经在 UI 上看到新值了，无法无副作用回滚）
+          await log("warn", "SETTINGS", "useEffect 自动双写失败（仅记录）", {
+            err: String(err),
           });
-        } finally {
-          savingRef.current = false;
         }
       })();
     }
   }, [settings, loaded, saveItem]);
 
-  // ========== 更新部分设置 ==========
-  const updateSettings = useCallback((partial: Partial<AppSettings>) => {
-    if (initLockRef.current) return; // init 未完成，禁止修改
-    setSettings((prev) => ({ ...prev, ...partial }));
-  }, []);
+  // ========== 更新部分设置（v1.1.2 原子双写 + 失败回滚） ==========
+  // 关键：本地写 + 云端写 必须都成功，否则内存仍是原值
+  // 用 settingsRef 避免闭包陷阱（快速连续更新时取最新值）
+  // 错误**不**抛给 caller（保持 (partial) => void 签名兼容 SettingsPage），
+  // 失败时用 flog 记录 + toast（如有），内存不更新
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  const updateSettings = useCallback(
+    async (partial: Partial<AppSettings>): Promise<void> => {
+      if (initLockRef.current) {
+        await log("warn", "SETTINGS", "init 未完成，拒绝 updateSettings", { keys: Object.keys(partial).join(",") });
+        return;
+      }
+
+      const prev = settingsRef.current;
+      const next: AppSettings = { ...prev, ...partial, updatedAt: Date.now() };
+
+      // Step 1: 写本地
+      try {
+        await saveItem(STORAGE_KEY, next);
+      } catch (err) {
+        await log("error", "SETTINGS", "本地写入失败", { err: String(err), keys: Object.keys(partial).join(",") });
+        // 内存不更新（setSettings 没调用），用户看到的仍是旧值
+        return;
+      }
+
+      // Step 2: 写云端（失败则回滚本地）
+      try {
+        await saveSettingsToCloud(next as unknown as Record<string, unknown>);
+      } catch (err) {
+        await log("error", "SETTINGS", "云端写入失败，回滚本地", { err: String(err), keys: Object.keys(partial).join(",") });
+        // 回滚本地到旧值（保证本地和云端一致：都是旧值）
+        try {
+          await saveItem(STORAGE_KEY, prev);
+        } catch (rollbackErr) {
+          await log("error", "SETTINGS", "本地回滚失败（需手动修复数据不一致）", {
+            rollbackErr: String(rollbackErr),
+          });
+        }
+        // 内存不更新（setSettings 没调用）
+        return;
+      }
+
+      // Step 3: 两边都成功 → 更新内存
+      // 标记"刚双写过"让 useEffect 跳过这一帧
+      lastWrittenByUpdateSettingsRef.current = next;
+      setSettings(next);
+      await log("info", "SETTINGS", "设置已原子双写成功", { keys: Object.keys(partial).join(",") });
+    },
+    [saveItem]
+  );
 
   // ========== Provider 操作 ==========
 
@@ -552,9 +616,9 @@ export function useSettings() {
   };
 }
 
-// 简易 logger
-async function log(_level: string, _msg: string, _data?: any) {
+// 简易 logger（v1.1.2：支持可变参数，兼容旧 (level, msg, data) 和新 (level, tag, msg, data) 调用）
+async function log(level: string, tag: string, ...args: any[]) {
   // hook 加载期间 console 调试
   // eslint-disable-next-line no-console
-  console.debug(`[useSettings] ${_level} ${_msg}`, _data ?? "");
+  console.debug(`[useSettings] ${level} ${tag}`, ...args);
 }

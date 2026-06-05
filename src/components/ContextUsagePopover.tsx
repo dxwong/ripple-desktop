@@ -5,7 +5,7 @@ import { compactSession, CompactSessionError } from "ripple-shared/api";
 import { flog } from "../services/frontendLogger";
 
 /**
- * 上下文统计 Popover（v1.1）
+ * 上下文统计 Popover（v1.1.2）
  *
  * 设计参考 `plans/desktop/desktop-input-redesign.md`。
  *
@@ -14,6 +14,12 @@ import { flog } from "../services/frontendLogger";
  *   - "压缩"按钮：调 `POST /api/sessions/:id/compact`
  *   - 浮动 toast：成功/失败提示，3 秒自动消失
  *   - 阈值变色：< 70% 蓝灰、70-90% 琥珀、> 90% 红（整个 popover 头部 + 进度条 + 数字 同步）
+ *
+ * v1.1.2 修复：
+ *   - compactionThreshold 改由 MainApp 通过 prop 透传（不再调 useSettings）
+ *   - 原因：ContextUsagePopover 之前内部调 useSettings() 拿到的是与 MainApp 隔离的实例 B，
+ *     SettingsPage 改值后 popover 永远显示 instance B 的 stale 默认值 15%
+ *   - 修法：与 SettingsPage 一致（v2.1 注释），统一由 MainApp 注入
  *
  * 数据源：全部从 ChatView 透传，零 mock
  *   - cacheHitRate / balance / estimatedCost：花钱相关指标
@@ -43,6 +49,12 @@ interface ContextUsagePopoverProps {
   sessionId?: string;
   /** AI 是否正在回复（控制压缩按钮） */
   isProcessing?: boolean;
+  /**
+   * 压缩阈值（百分比）。0 = 不限制，随时可手动压缩
+   * 由 MainApp 从 settings.compactionThreshold 透传，**不**在内部读 useSettings
+   * （避免与 MainApp 实例隔离导致 stale 值）
+   */
+  compactionThreshold: number;
 }
 
 interface ToastMsg {
@@ -73,6 +85,7 @@ export default function ContextUsagePopover({
   toolTokens = 0,
   sessionId,
   isProcessing = false,
+  compactionThreshold,
 }: ContextUsagePopoverProps) {
   const [open, setOpen] = useState(false);
   const [compressing, setCompressing] = useState(false);
@@ -160,11 +173,13 @@ export default function ContextUsagePopover({
   const toolBarClass = "bg-gray-400 dark:bg-gray-500";
 
   // ===== 压缩按钮可用性 =====
+  // 阈值 0% = 不限制，始终可压缩
+  const thresholdUnlimited = compactionThreshold === 0;
   const canCompress =
     !isProcessing &&
     !compressing &&
-    totalPct >= 30 &&
-    !!sessionId;
+    !!sessionId &&
+    (thresholdUnlimited || totalPct >= compactionThreshold);
 
   const handleCompress = useCallback(async () => {
     if (!canCompress || !sessionId) return;
@@ -361,9 +376,11 @@ export default function ContextUsagePopover({
                 ? "AI 正在回复，无法压缩"
                 : !sessionId
                   ? "等待会话初始化"
-                  : totalPct < 30
-                    ? "上下文占用 < 30%，暂不需要压缩"
-                    : "压缩上下文（节省 token）"
+                  : thresholdUnlimited
+                    ? "不限制 — 随时可手动压缩"
+                    : totalPct < compactionThreshold
+                      ? `上下文占用 < ${compactionThreshold}%，暂不需要压缩`
+                      : "压缩上下文（节省 token）"
             }
           >
             {compressing ? (

@@ -679,6 +679,7 @@ export function useStreamingChat(
               cwd: effectiveCwd,
               title: currentConv?.title,
               requestId,
+              compactionThreshold: settings?.compactionThreshold ?? 15,
               // v1.1: 传递风险管理配置给后端
               riskManagement: settings?.riskManagement ? {
                 commandWhitelistEnabled: settings.riskManagement.commandWhitelistEnabled,
@@ -948,6 +949,13 @@ export function useStreamingChat(
                       }
                     }
                   }
+                },
+                onToolHeartbeat: (toolCallId, toolName, elapsedSec, totalElapsedSec) => {
+                  // ★ R2.1 修复（v1.1.1）：心跳回调，仅重置 idle timer + UI 显示已运行秒数
+                  // 不更新 terminal，不污染 LLM context
+                  resetIdleTimer();
+                  flog.debug('STREAMING', `工具心跳（保活）`, { toolCallId, toolName, elapsedSec, totalElapsedSec });
+                  onStreamEvent?.("tool-heartbeat", convId, { toolCallId, toolName, elapsedSec, totalElapsedSec });
                 },
                 onUsage: (usage) => {
                   resetIdleTimer();
@@ -1232,6 +1240,11 @@ export function useStreamingChat(
 
   // ===== 切换对话 =====
   const switchConversation = useCallback((id: string) => {
+    // D4.1 修复：同会话重复点击 early return，避免重复 POST confirmToolCall
+    if (id === activeConversationIdRef.current) {
+      flog.debug('STREAMING', `切换对话忽略（同会话）`, { id });
+      return;
+    }
     const target = conversationsRef.current.find(c => c.id === id);
     flog.info('STREAMING', `切换对话`, {
       fromId: activeConversationIdRef.current,

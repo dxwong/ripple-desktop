@@ -1000,6 +1000,35 @@ export function SettingsPage({
                 ✓ 已保存
               </div>
             )}
+
+            {/* 上下文压缩阈值 */}
+            <div className="setting-row">
+              <div className="setting-row-meta">
+                <div className="setting-row-label">压缩阈值</div>
+                <div className="setting-row-desc">
+                  {settings.compactionThreshold === 0
+                    ? "不限制 — 随时可手动压缩"
+                    : `上下文占用超过 ${settings.compactionThreshold ?? 15}% 时允许压缩`}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 140 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={settings.compactionThreshold ?? 15}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    onUpdate({ compactionThreshold: v });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: 13, minWidth: 32, textAlign: "right" }}>
+                  {settings.compactionThreshold ?? 15}%
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* ===== Pane 3: 通用 ===== */}

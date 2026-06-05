@@ -779,6 +779,8 @@ export function MainApp() {
                     // v1.4 新增：顶栏 menu 按钮
                     onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                     sidebarOpen={isMobile ? sidebarOpen : sidebarCollapsed}
+                    // v1.1.2 新增：压缩阈值透传（避免 ContextUsagePopover 内部 useSettings 实例隔离）
+                    compactionThreshold={settings.compactionThreshold ?? 15}
                   />
 
                   {/* 右侧：文件树 + 文件预览/快照面板（只有项目对话才显示） */}

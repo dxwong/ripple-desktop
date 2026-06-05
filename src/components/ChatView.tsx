@@ -90,6 +90,8 @@ interface ChatViewProps {
    *  - desktop + false → sidebar 展开（显示 PanelLeftClose 让用户折叠）
    */
   sidebarOpen?: boolean;
+  /** v1.1.2 新增：压缩阈值（百分比），从 MainApp 透传 settings.compactionThreshold */
+  compactionThreshold?: number;
 }
 
 function TypingIndicator() {
@@ -211,6 +213,8 @@ function ChatView({
   // v1.4 新增
   onMenuClick,
   sidebarOpen = false,
+  // v1.1.2 新增：压缩阈值（MainApp 透传，避免 useSettings 实例隔离）
+  compactionThreshold = 15,
 }: ChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -574,18 +578,7 @@ function ChatView({
             </div>
           )}
           <MessageInput
-            onSend={onSendMessage}
-            disabled={isProcessing}
-            isProcessing={isProcessing}
-            onStop={onStop}
-            activeConfig={activeConfig}
-            modelEntries={modelEntries}
-            onSwitchModelEntry={onSwitchModelEntry}
-            chatMode={chatMode}
-            hasProject={!!cwd}
-            // v2.2: 权限下拉（替代旧 Auto 按钮）
-            permissionMode={permissionMode}
-            onPermissionModeChange={onPermissionModeChange}
+            onSend={(content) => onSendMessage(content)}
             // v2.2: 上下文 popover 数据源（替代旧 4 指标行）
             cacheHitRate={convCacheHitRate}
             balance={accountBalance}
@@ -597,13 +590,8 @@ function ChatView({
             systemTokens={currentStats?.systemTokens}
             // v1.1: 压缩功能（ContextUsagePopover 内的"压缩"按钮需要）
             sessionId={conversationId}
-            placeholder={
-              isProcessing
-                ? "AI 正在回复... 点击停止按钮可中断"
-                : chatMode === "code" || cwd
-                ? "输入编程指令..."
-                : "输入消息..."
-            }
+            // v1.1.2: 透传压缩阈值（从 MainApp 透传，避免 useSettings 实例隔离）
+            compactionThreshold={compactionThreshold}
           />
         </div>
       </div>

@@ -57,6 +57,8 @@ interface MessageInputProps {
   systemTokens?: number;
   // v1.1 新增：会话 ID（用于 ContextUsagePopover 内的"压缩"按钮）
   sessionId?: string;
+  // v1.1.2 新增：压缩阈值（百分比），透传给 ContextUsagePopover
+  compactionThreshold?: number;
 }
 
 /**
@@ -93,6 +95,8 @@ function MessageInput({
   systemTokens,
   // v1.1 新增
   sessionId,
+  // v1.1.2 新增
+  compactionThreshold = 15,
 }: MessageInputProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -197,7 +201,7 @@ function MessageInput({
 
         {/* 右侧：上下文 + 发送 */}
         <div className="flex items-center gap-1.5">
-          {/* v2.2: 上下文 popover（v1.1 集成"压缩"按钮 + 双色进度条） */}
+          {/* v2.2: 上下文 popover（v1.1 集成"压缩"按钮 + 双色进度条 + v1.1.2 prop 透传阈值） */}
           <ContextUsagePopover
             cacheHitRate={cacheHitRate}
             balance={balance}
@@ -209,6 +213,7 @@ function MessageInput({
             systemTokens={systemTokens}
             sessionId={sessionId}
             isProcessing={isProcessing}
+            compactionThreshold={compactionThreshold}
           />
 
           {/* 发送/停止按钮 */}
