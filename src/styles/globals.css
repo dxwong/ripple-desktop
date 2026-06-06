@@ -1,9 +1,30 @@
 /* Inter 瀛椾綋锛堜娇鐢?swap 绛栫暐閬垮厤闃诲娓叉煋锛?*/
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ★ Monaco Editor mobile 触摸修复（关键）：
+   Monaco 内部的 .monaco-scrollable-element 默认 touch-action: none，
+   会完全拦截移动端触摸事件（包括上下滚动），导致用户无法滚动消息列表。
+   强制覆盖为 pan-y 后，浏览器只让 Monaco 处理上下滚动手势，
+   横向手势直接忽略并冒泡到外层消息容器。
+   注意：Monaco 类名可能因版本变化（目前用 monaco-editor 0.5x 系列）。 */
+.monaco-editor .monaco-scrollable-element,
+.monaco-editor .overflow-guard,
+.monaco-editor .monaco-sash,
+.monaco-editor .slider,
+.monaco-editor .scrollbar > .slider {
+  touch-action: pan-y !important;
+}
+
+/* Monaco 容器本身也限制为上下手势，避免横向手势被 Monaco 误处理 */
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .margin {
+  touch-action: pan-y !important;
+}
 
 /* ========== 鍩虹鏍峰紡 ========== */
 @layer base {
@@ -155,14 +176,25 @@
            text-content-secondary dark:text-content-secondary-dark my-2;
   }
 
+  /* ★ 关键修复：表格在 mobile 端列宽按内容撑开导致右侧被裁。
+     之前 w-full + 内容不换行 → 列宽撑爆容器，右侧数据看不到。
+     修复策略：
+     1. table-layout: fixed — 列宽由第一行决定，不再按内容撑开
+     2. word-break: break-word + white-space: normal — cell 内部允许换行
+     3. max-width: 100% — 表格不超出容器
+     4. overflow-x: auto — 极端情况仍可横滑（兜底） */
   .markdown-body table {
     @apply w-full border-collapse mb-3 text-sm;
     @apply rounded-lg overflow-hidden;
+    table-layout: fixed;
+    max-width: 100%;
   }
 
   .markdown-body th,
   .markdown-body td {
     @apply border border-border/50 dark:border-border-dark/50 px-3 py-2 text-left;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .markdown-body th {
@@ -192,7 +224,7 @@
   }
 
   .markdown-body pre code {
-    @apply block p-4 overflow-x-auto text-[14px] leading-relaxed font-mono;
+    @apply block p-4 text-[14px] leading-relaxed font-mono;
   }
 
   /* marked 鐢熸垚鐨勮交閲忎唬鐮佸潡锛堟祦寮忎腑锛夛紝閬垮厤鏍峰紡鍐茬獊 */
@@ -202,6 +234,9 @@
     display: block;
     max-height: 50vh;
     overflow: hidden;
+    /* 关键：touch-action: pan-y 告诉浏览器此元素只处理上下滚动手势，
+       横向手势直接忽略，让外层消息容器可正常捕获。 */
+    touch-action: pan-y;
   }
 
   .markdown-body .code-block-light pre {
@@ -210,17 +245,28 @@
     border: none !important;
     background: transparent !important;
     max-height: 50vh;
+    /* ★ 关键修复：禁用横向滚动。
+       之前 overflow-x: auto + white-space: pre 导致 mobile 端出现横向滚动条，
+       手指在代码块上无法上下滚动消息列表（触摸事件被横向滚动吞掉）。
+       现在用 white-space: pre-wrap 让长行自动折行，不再需要横向滚动。 */
+    overflow-x: hidden !important;
     overflow-y: hidden !important;
-    overflow-x: auto !important;
   }
 
   .markdown-body .code-block-light pre.code-scroll-container {
-    white-space: pre !important;
+    /* ★ 关键修复：pre → pre-wrap。
+       pre 不换行导致长行超出容器；pre-wrap 保留空格/缩进但允许在空白处换行。
+       配合 word-break: break-word 处理超长无空格字符串（如 base64、URL）。 */
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
   }
 
   .markdown-body .code-block-light pre code {
     padding: 0 !important;
-    white-space: pre !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
   }
 
   .markdown-body :not(pre) > code {

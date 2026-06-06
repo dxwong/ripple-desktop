@@ -22,7 +22,16 @@ markedRenderer.code = function({ text, lang }: { text: string; lang?: string }) 
   // 但 70vh 在 mobile 上 ≈ 560px，多个代码块累加会撑爆消息容器。
   // 这里用 inline style 强写 max-height: min(50vh, 400px)，最小函数兼容所有浏览器，
   // 流式时裁掉超出部分，流式完成后会被 Monaco Editor（已限 400px）替换。
-  return `<div class="code-block-mount" data-code="${encodedCode}" data-lang="${language}"><div class="code-block-light my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full" style="max-height:min(50vh,400px)"><div class="flex items-center justify-between px-4 py-1.5 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]"><span class="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">${language || "code"}</span><button class="code-copy-btn text-xs text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary dark:hover:text-content-secondary-dark transition-colors" data-code="${encodedCode}">复制</button></div><pre class="p-4 overflow-x-auto text-[14px] leading-relaxed font-mono whitespace-pre code-scroll-container" style="max-height:min(50vh,400px)"><code class="language-${language}">${escapeHtml(text)}</code></pre></div></div>`
+  // ★ 关键修复：流式输出的代码块必须加 max-height 限制。
+  // 之前完全靠 globals.css 中的 `.code-block-light { max-height: 70vh }` 兜底，
+  // 但 70vh 在 mobile 上 ≈ 560px，多个代码块累加会撑爆消息容器。
+  // 这里用 inline style 强写 max-height: min(50vh, 400px)，最小函数兼容所有浏览器，
+  // 流式时裁掉超出部分，流式完成后会被 Monaco Editor（已限 400px）替换。
+  //
+  // 此外：whitespace-pre + overflow-x-auto 已被换成 whitespace-pre-wrap + overflow-x-hidden。
+  // 原因：mobile 端长行触发横向滚动条后，触摸事件被吞掉，手指无法上下滚动消息列表。
+  // pre-wrap 保留缩进但在空白处换行，配合 word-break: break-word 处理超长无空格字符串。
+  return `<div class="code-block-mount" data-code="${encodedCode}" data-lang="${language}"><div class="code-block-light my-3 rounded-xl overflow-hidden bg-message-code dark:bg-message-code-dark border border-border dark:border-border-dark max-w-full" style="max-height:min(50vh,400px);touch-action:pan-y"><div class="flex items-center justify-between px-4 py-1.5 border-b border-border dark:border-border-dark bg-black/[0.02] dark:bg-white/[0.02]"><span class="text-xs font-mono text-content-tertiary dark:text-content-tertiary-dark">${language || "code"}</span><button class="code-copy-btn text-xs text-content-tertiary dark:text-content-tertiary-dark hover:text-content-secondary dark:hover:text-content-secondary-dark transition-colors" data-code="${encodedCode}">复制</button></div><pre class="p-4 text-[14px] leading-relaxed font-mono whitespace-pre-wrap code-scroll-container" style="max-height:min(50vh,400px);overflow-x:hidden;word-break:break-word;overflow-wrap:anywhere"><code class="language-${language}">${escapeHtml(text)}</code></pre></div></div>`
 }
 
 marked.use({ renderer: markedRenderer, gfm: true, breaks: true })

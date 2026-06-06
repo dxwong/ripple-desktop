@@ -109,23 +109,61 @@ function CodeEditor({
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // 阻止 Monaco 捕获滚轮事件，让外层消息容器滚动
+  // ★ 关键修复：阻止 Monaco 拦截触摸事件和滚轮，让外层消息容器滚动。
+  // 背景：Monaco 内部的 .monaco-scrollable-element 用了 touch-action: none + JS preventDefault
+  // 阻止触摸事件冒泡。CSS touch-action: pan-y 对 Monaco 不够（Monaco 仍 preventDefault）。
+  // 必须用 capture + passive:false 强制拦截并把 deltaY 转发到外层 .scroll-anchor。
+  // 效果：
+  //   - 触屏滑动代码块 → 滚动消息列表（修复 mobile 端用户痛点）
+  //   - 鼠标滚轮在代码块上 → 滚动消息列表（之前已实现）
+  //   - Monaco 内部仍可滚轮查看长代码（用编辑器内 touchpad / 鼠标滚轮）
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    const getScrollParent = (): HTMLElement | null => {
+      return container.closest<HTMLElement>(".scroll-anchor");
+    };
+
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const parentScrollable = container.closest('.scroll-anchor');
-      if (parentScrollable) {
-        parentScrollable.scrollTop += e.deltaY;
+      const parent = getScrollParent();
+      if (parent) {
+        parent.scrollTop += e.deltaY;
       }
     };
 
-    container.addEventListener('wheel', handleWheel, { capture: true, passive: false });
+    // 触摸事件处理：拦截 touchmove，强制滚动外层
+    let lastTouchY = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+      }
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+      lastTouchY = currentY;
+      // ★ 关键：preventDefault 必须 + passive: false，否则浏览器无视
+      e.preventDefault();
+      e.stopPropagation();
+      const parent = getScrollParent();
+      if (parent) {
+        parent.scrollTop += deltaY;
+      }
+    };
+
+    // 用 capture phase 拦截（Monaco 内部事件不会先于我们触发）
+    container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+    container.addEventListener("touchstart", handleTouchStart, { capture: true, passive: true });
+    container.addEventListener("touchmove", handleTouchMove, { capture: true, passive: false });
+
     return () => {
-      container.removeEventListener('wheel', handleWheel, { capture: true });
+      container.removeEventListener("wheel", handleWheel, { capture: true } as EventListenerOptions);
+      container.removeEventListener("touchstart", handleTouchStart, { capture: true } as EventListenerOptions);
+      container.removeEventListener("touchmove", handleTouchMove, { capture: true } as EventListenerOptions);
     };
   }, []);
 
@@ -170,10 +208,15 @@ function CodeEditor({
   const langLabel = getLanguage(language);
 
   return (
+    // ★ 关键修复：touch-action: pan-y 告诉浏览器此元素只处理上下滚动手势，
+    // 横向手势直接忽略并冒泡到外层。配合 monaco editor 内部 scrollbar.horizontal: hidden，
+    // 避免 mobile 端触摸事件被 Monaco scrollable 吞掉导致无法滚动消息列表。
+    // overflow-hidden 防止代码块内容溢出到外层（wordWrap bounded 后内容应在容器内）。
     <div
       ref={containerRef}
       className={`my-3 rounded-xl overflow-hidden border border-border dark:border-border-dark
                    bg-message-code dark:bg-message-code-dark transition-all duration-200 max-w-full`}
+      style={{ touchAction: "pan-y", overscrollBehavior: "contain" }}
     >
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-black/[0.03] dark:bg-white/[0.03] border-b border-border dark:border-border-dark">
@@ -220,15 +263,24 @@ function CodeEditor({
           fontSize: 14,
           fontFamily: '"JetBrains Mono", "Fira Code", monospace',
           padding: { top: 12, bottom: 12 },
-          wordWrap: "off",
+          // ★ 关键修复：wordWrap: "off" → "bounded"。
+          // 之前不换行导致长行超出代码块宽度，触发横向滚动条；
+          // 移动端触摸事件被横向滚动吞掉，手指无法在代码块上上下滚动消息列表。
+          // "bounded" 在视口边界和 wordWrapColumn 之间取小者换行，
+          // 既保证代码不溢出，也保留 Monaco 的可读性。
+          wordWrap: "bounded",
+          wordWrapColumn: 120,
           tabSize: 2,
           renderWhitespace: "selection",
           bracketPairColorization: { enabled: true },
+          // ★ 关键修复：禁用横向滚动条。wordWrap: bounded 后代码已自动换行，
+          // 不再需要横向滚动，horizontal: 'hidden' + size 0 彻底隐藏。
           scrollbar: {
-            vertical: 'hidden',
-            horizontal: 'auto',
-            verticalScrollbarSize: 0,
-            horizontalScrollbarSize: 6,
+            vertical: 'auto',
+            horizontal: 'hidden',
+            verticalScrollbarSize: 6,
+            horizontalScrollbarSize: 0,
+            alwaysConsumeMouseWheel: false,  // 关键：滚轮事件不被 Monaco 消费
           },
           overviewRulerLanes: 0,
           hideCursorInOverviewRuler: true,
