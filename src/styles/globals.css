@@ -1110,6 +1110,16 @@
   .sidebar.open {
     transform: translateX(0);
   }
+  /* ★ 关键修复：mobile 关闭状态时 width: 0，不占 flex 空间。
+     之前 width 仍为 var(--sidebar-width) (280px)，导致 flex 容器给 sidebar
+     分配 280px 但又被 transform 移出屏幕外，左侧留出大块空白。 */
+  .sidebar:not(.open) {
+    width: 0;
+    min-width: 0;
+    box-shadow: none;
+    overflow: hidden;
+    border-right: none;
+  }
   /* 鎶藉眽鎵撳紑鏃跺噺灏戜富鍖?padding锛堣鍑?drawer 绌洪棿锛?*/
   .titlebar-drag:first-of-type {
     padding-left: 12px;

@@ -50,15 +50,24 @@ export function useVisualViewport(): void {
       "undefined";
 
     // 计算当前应使用的"应用高度"
+    // ★ 关键：用 Math.min(innerHeight, vv.height) 兜底。
+    // iOS Safari 在锁屏→唤醒时 visualViewport.height 可能短暂 stale（> innerHeight），
+    // 此时用 innerHeight 更安全。同时考虑浏览器 URL 栏/软键盘遮罩。
     const compute = () => {
-      // visualViewport 优先（精确反映可见区域，不含被键盘/URL 栏遮住的部分）
+      const inner = window.innerHeight;
       const vv = window.visualViewport;
+      let h: number;
       if (vv && vv.height > 0) {
-        setAppHeight(vv.height);
-        return;
+        // 两者取小：避免 vv 异常大或 innerHeight stale 导致溢出
+        h = Math.min(inner, vv.height);
+      } else {
+        h = inner;
       }
-      // 桌面/Tauri fallback
-      setAppHeight(window.innerHeight);
+      // 防御：极端值（h <= 0 或过大）使用 innerHeight
+      if (h <= 0 || h > window.screen.height * 1.5) {
+        h = inner;
+      }
+      setAppHeight(h);
     };
 
     // 初始化一次
@@ -79,12 +88,34 @@ export function useVisualViewport(): void {
       requestAnimationFrame(compute);
     });
 
+    // ★ 关键：页面从后台回到前台时，mobile 浏览器可能不会自动触发 resize。
+    // 必须手动监听 visibilitychange 和 pageshow 强制重算一次，
+    // 否则锁屏唤醒/切回标签页后视觉高度 stale 导致输入框被遮挡。
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        // 双重 rAF：等浏览器完成布局后取最新值
+        requestAnimationFrame(() => {
+          requestAnimationFrame(compute);
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    // pageshow: 处理 BFCache（Safari 后退缓存）恢复
+    window.addEventListener("pageshow", () => {
+      requestAnimationFrame(compute);
+    });
+    // pagehide: 清理 --app-height
+    window.addEventListener("pagehide", () => {
+      document.documentElement.style.removeProperty("--app-height");
+    });
+
     return () => {
       if (vv && !isTauriEnv) {
         vv.removeEventListener("resize", compute);
         vv.removeEventListener("scroll", compute);
       }
       window.removeEventListener("resize", compute);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []);
 }

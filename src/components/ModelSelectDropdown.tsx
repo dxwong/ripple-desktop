@@ -26,6 +26,8 @@ interface ModelSelectDropdownProps {
   disabled?: boolean;
   /** 内置 provider 主题色 fallback（避免给 32 个 provider 都配置 logo） */
   fallbackTheme?: Record<string, string>;
+  /** 紧凑模式（只显示 provider logo + chevron，省 ~120px 横向空间） */
+  compact?: boolean;
 }
 
 // Provider 主题色 fallback（与 demo 8 个热门 provider 对齐）
@@ -92,6 +94,7 @@ export default function ModelSelectDropdown({
   onSwitch,
   disabled = false,
   fallbackTheme,
+  compact = false,
 }: ModelSelectDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -160,7 +163,8 @@ export default function ModelSelectDropdown({
         >
           {currentShort}
         </span>
-        <span className="truncate max-w-[140px]">{displayLabel}</span>
+        {/* compact 模式：mobile 视口下只显示 logo + chevron，省 ~120px 横向空间 */}
+        {!compact && <span className="truncate max-w-[140px]">{displayLabel}</span>}
         <ChevronDown
           className={[
             "h-3 w-3 shrink-0 transition-transform",

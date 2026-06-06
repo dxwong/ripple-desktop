@@ -4,6 +4,7 @@ import type { ChatMode, ActiveModelConfig, PermissionMode, AccountBalance } from
 import PermissionSelectDropdown from "./PermissionSelectDropdown";
 import ModelSelectDropdown from "./ModelSelectDropdown";
 import ContextUsagePopover from "./ContextUsagePopover";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 
 /**
  * v2.2: 扩展 ModelEntry，添加 logo/tags/supportedPermissions 可选字段
@@ -95,6 +96,11 @@ function MessageInput({
   // v1.1.2 新增
   compactionThreshold = 15,
 }: MessageInputProps) {
+  // ★ 关键修复：mobile 视口下启用 compact 模式，避免 toolbar 内容溢出
+  // 把 send-btn 推出视口。mobile 下隐藏占位按钮（附件/@），permission 用
+  // compact 模式只显示图标，model 走 truncate 截断。
+  const isMobile = useMediaQuery("(max-width: 640px)");
+
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -151,53 +157,66 @@ function MessageInput({
       </div>
 
       {/* ===== 底部操作区 ===== */}
-      <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
+      {/* flex-wrap：极端窄屏下（如 320px）允许左侧内容换行，避免右侧 send-btn 被裁 */}
+      <div className="flex items-center justify-between gap-1.5 flex-wrap px-3 pb-2.5 pt-1">
         {/* 左侧：权限 + 模型 */}
-        <div className="flex items-center gap-1.5 min-w-0">
-          {/* v2.2: 权限下拉（含"Plan 模式"=read-only） */}
+        <div className="flex items-center gap-1 min-w-0 flex-1">
+          {/* v2.2: 权限下拉（含"Plan 模式"=read-only）
+              mobile 下用 compact 模式只显示图标，省 ~80px 横向空间 */}
           {onPermissionModeChange && (
             <PermissionSelectDropdown
               value={permissionMode}
               onChange={onPermissionModeChange}
               disabled={disabled}
+              compact={isMobile}
             />
           )}
 
-          {/* v2.2: 模型下拉（彩色 logo 替代旧的内联实现） */}
+          {/* v2.2: 模型下拉（彩色 logo 替代旧的内联实现）
+              mobile 下用 compact 模式只显示 provider logo，省 ~120px 横向空间 */}
           {onSwitchModelEntry && (
             <ModelSelectDropdown
               activeConfig={activeConfig}
               entries={entryList}
               onSwitch={onSwitchModelEntry}
               disabled={disabled}
+              compact={isMobile}
             />
           )}
 
-          {/* 占位：附件 / @ 按钮（保留入口，TODO 接入） */}
-          <button
-            type="button"
-            disabled
-            title="附件 (即将推出)"
-            className="inline-flex items-center justify-center w-7 h-7 rounded-md
-                       text-content-tertiary dark:text-content-tertiary-dark
-                       opacity-40 cursor-not-allowed"
-          >
-            <Paperclip className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </button>
-          <button
-            type="button"
-            disabled
-            title="@ 文件 (即将推出)"
-            className="inline-flex items-center justify-center w-7 h-7 rounded-md
-                       text-content-tertiary dark:text-content-tertiary-dark
-                       opacity-40 cursor-not-allowed"
-          >
-            <AtSign className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </button>
+          {/* 占位：附件 / @ 按钮（保留入口，TODO 接入）
+              ★ mobile 隐藏：这两个按钮是 disabled 占位，mobile 视口下隐藏避免挤压
+              send-btn 空间，导致发送按钮被推出视口。 */}
+          {!isMobile && (
+            <>
+              <button
+                type="button"
+                disabled
+                title="附件 (即将推出)"
+                className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                           text-content-tertiary dark:text-content-tertiary-dark
+                           opacity-40 cursor-not-allowed"
+              >
+                <Paperclip className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </button>
+              <button
+                type="button"
+                disabled
+                title="@ 文件 (即将推出)"
+                className="inline-flex items-center justify-center w-7 h-7 rounded-md
+                           text-content-tertiary dark:text-content-tertiary-dark
+                           opacity-40 cursor-not-allowed"
+              >
+                <AtSign className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </button>
+            </>
+          )}
         </div>
 
-        {/* 右侧：上下文 + 发送 */}
-        <div className="flex items-center gap-1.5">
+        {/* 右侧：上下文 + 发送
+            ★ shrink-0：流式输出代码块暴增时，发送按钮始终可见不压缩。
+            这两个元素（popover + send-btn）必须保留，缺一不可。 */}
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* v2.2: 上下文 popover（v1.1 集成"压缩"按钮 + 双色进度条 + v1.1.2 prop 透传阈值） */}
           <ContextUsagePopover
             cacheHitRate={cacheHitRate}
