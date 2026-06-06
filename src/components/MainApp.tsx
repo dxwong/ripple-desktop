@@ -15,6 +15,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useFolderPicker } from "../hooks/useFolderPicker";
 import { syncStore } from "../hooks/useStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useVisualViewport } from "../hooks/useVisualViewport";
 import { ChatMode } from "../types";
 import { fetchModels, setBaseUrl, fetchExperts } from "../services/api";
 import { logger } from "./LogPanel";
@@ -47,6 +48,11 @@ const debugLog = async (msg: string) => {
 };
 
 export function MainApp() {
+  // ★ 关键修复：监听 mobile 视口变化（URL 栏显示/隐藏、锁屏唤醒、键盘弹起），
+  // 把精确高度写入 CSS 变量 --app-height，避免 100vh 在 mobile 浏览器中
+  // 包含 URL 栏/不响应唤醒事件，导致输入框被遮挡。
+  useVisualViewport();
+
   // 启动状态管理
   const [startupState, setStartupState] = useState<"loading" | "error" | "ready">("loading");
   const [startupMessage, setStartupMessage] = useState("正在加载配置，请稍后...");
@@ -723,7 +729,10 @@ export function MainApp() {
 
       {/* 主应用界面（启动完成后显示） */}
       {startupState === "ready" && (
-        <div className="h-screen flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark">
+        <div
+          className="flex flex-col bg-surface dark:bg-surface-dark text-content dark:text-content-dark"
+          style={{ height: "var(--app-height, 100dvh)" }}
+        >
           {/* 主内容区：侧边栏 + 聊天区 + 文件树 */}
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/* 左侧边栏 */}

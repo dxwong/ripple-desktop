@@ -196,9 +196,11 @@
   }
 
   /* marked 鐢熸垚鐨勮交閲忎唬鐮佸潡锛堟祦寮忎腑锛夛紝閬垮厤鏍峰紡鍐茬獊 */
+  /* ★ 关键修复：70vh → 50vh。70vh 在 mobile 浏览器 ≈ 560px 单个代码块过高，
+     多个累加会撑爆消息容器并把输入框挤出视口。50vh 是 mobile/desktop 的安全值。 */
   .markdown-body .code-block-light {
     display: block;
-    max-height: 70vh;
+    max-height: 50vh;
     overflow: hidden;
   }
 
@@ -207,7 +209,7 @@
     border-radius: 0 !important;
     border: none !important;
     background: transparent !important;
-    max-height: 70vh;
+    max-height: 50vh;
     overflow-y: hidden !important;
     overflow-x: auto !important;
   }

@@ -380,7 +380,10 @@ function ChatView({
   }, [conversationId]);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+    // ★ 关键修复：flex 列容器子项必须 min-h-0 才能在父级高度变化时正确收缩。
+    // 之前缺少 min-h-0，在 mobile 浏览器 URL 栏动态变化/锁屏唤醒时，
+    // 父级高度减小而本容器不收缩，导致输入框被挤出视口。
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden">
       {/* ===== 顶部栏：窗口拖拽 + 会话信息 + 窗口控制 ===== */}
       <div className="titlebar-drag flex items-center gap-3 px-3 h-9 bg-surface-secondary dark:bg-surface-secondary-dark border-b border-border dark:border-border-dark shrink-0">
         {/* v1.4 新增：menu 按钮（顶栏最左）
@@ -461,7 +464,9 @@ function ChatView({
       )}
 
       {/* ===== 消息区域 ===== */}
-      <div className="flex-1 overflow-y-auto scroll-anchor" ref={messagesContainerRef} onScroll={handleScroll}>
+      {/* min-h-0：flex 子项默认 min-height: auto（按内容撑开），
+          会导致 overflow-y-auto 失效。必须显式 min-h-0 才能正确限制高度并出现滚动条。 */}
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-anchor" ref={messagesContainerRef} onScroll={handleScroll}>
         <div key={conversationId} className="max-w-5xl mx-auto px-2 py-6 animate-slide-up min-w-0">
           {isEmpty ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center animate-fade-in">
@@ -558,7 +563,8 @@ function ChatView({
       </div>
 
       {/* ===== 输入框区域容器（v2.0 结构：max-w-5xl 居中） ===== */}
-      <div className="px-4 pb-3 pt-1">
+      {/* shrink-0：流式输出代码块暴增时，确保输入框不被压扁/挤出视口 */}
+      <div className="shrink-0 px-4 pb-3 pt-1">
         <div className="max-w-5xl mx-auto">
           {/* 工具确认横幅 — 输入框上方靠右 */}
           {/* auto 模式下显示长运行取消弹窗，其他模式显示所有确认请求 */}

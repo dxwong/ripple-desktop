@@ -159,7 +159,14 @@ function CodeEditor({
     monaco.editor.defineTheme("ripple-dark", CUSTOM_THEMES.dark);
   };
 
-  const displayHeight = Math.max(code.split("\n").length * 22 + 20, 100);
+  // ★ 关键修复：加 400px 上限。1000 行代码 = 22020px 会撑爆页面布局，
+  // 把下面的输入框挤出视口，参见 INC-2026-06-07 codeblock-overflow。
+  // 超长代码块可在 Monaco 编辑器内自带垂直滚动条，无需暴露给外层。
+  const MAX_EDITOR_HEIGHT = 400;
+  const displayHeight = Math.min(
+    Math.max(code.split("\n").length * 22 + 20, 100),
+    MAX_EDITOR_HEIGHT
+  );
   const langLabel = getLanguage(language);
 
   return (
