@@ -825,6 +825,7 @@ export function MainApp() {
                 <ExpertsPage
                   onMenuClick={isMobile ? handleToggleSidebarOpen : handleToggleSidebarCollapse}
                   onBackToChat={handleBackToChat}
+                  projects={projects}
                 />
               ) : currentView === "memory" ? (
                 <MemoryPage
