@@ -586,8 +586,11 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
         )}
 
         {/* 消息气泡 */}
+        {/* ★ 关键修复：加 overflow-hidden + min-w-0 形成防御链，
+            防止 Monaco / 长 URL / 超宽表格等子内容撑大消息气泡。
+            配合 ChatView 顶层的 overflow-x-hidden 形成多层防御。 */}
         <div
-          className={`rounded-2xl px-4 py-3 ${
+          className={`rounded-2xl px-4 py-3 overflow-hidden min-w-0 ${
             isUser
               ? "bg-message-user dark:bg-message-user-dark border border-border dark:border-border-dark shadow-msg"
               : "bg-message-ai dark:bg-message-ai-dark"
@@ -598,7 +601,14 @@ const ChatMessage = memo(function ChatMessage({ message, isStreaming = false, da
               {displayContent.replace(/__RIPPLE_ERROR__/g, '').replace(/__RIPPLE_ERROR_END__/g, '').trim()}
             </div>
           ) : (
-          <div className="markdown-body selectable-text" ref={contentRef} onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: htmlContent }} />
+            // ★ 关键修复：markdown-body 加 min-w-0 + max-w-full + overflow-x-hidden
+            // 形成防御链，配合 CSS .markdown-body 的 min-width: 0 等兜底。
+            <div
+              className="markdown-body selectable-text min-w-0 max-w-full overflow-x-hidden"
+              ref={contentRef}
+              onClick={handleContentClick}
+              dangerouslySetInnerHTML={{ __html: htmlContent }}
+            />
           )}
 
           {/* 流式闪烁光标 */}

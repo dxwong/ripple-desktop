@@ -5,18 +5,32 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ★ Monaco Editor mobile 触摸修复（关键）：
-   Monaco 内部的 .monaco-scrollable-element 默认 touch-action: none，
-   会完全拦截移动端触摸事件（包括上下滚动），导致用户无法滚动消息列表。
-   强制覆盖为 pan-y 后，浏览器只让 Monaco 处理上下滚动手势，
-   横向手势直接忽略并冒泡到外层消息容器。
-   注意：Monaco 类名可能因版本变化（目前用 monaco-editor 0.5x 系列）。 */
-.monaco-editor .monaco-scrollable-element,
-.monaco-editor .overflow-guard,
-.monaco-editor .monaco-sash,
-.monaco-editor .slider,
-.monaco-editor .scrollbar > .slider {
-  touch-action: pan-y !important;
+/* ============================================================
+ * ★ 代码块语法高亮颜色（v5 重构：纯 HTML pre + 手写 regex 高亮）
+ *
+ * 颜色参考 VSCode Dark+ 主题，light/dark mode 都用近似色。
+ * 因为代码块背景（bg-message-code）始终是深灰（暗）或浅灰（亮），
+ * 高亮颜色用对比度强的固定值，避免主题切换时颜色看不清。
+ * ============================================================ */
+.code-keyword { color: #c586c0; }       /* 关键字：紫红色（if/else/function 等） */
+.code-string  { color: #ce9178; }       /* 字符串：橙色 */
+.code-number  { color: #b5cea8; }       /* 数字：浅绿色 */
+.code-comment { color: #6a9955; font-style: italic; } /* 注释：暗绿色 + 斜体 */
+
+/* light mode 微调（code-block 在浅灰背景上） */
+:root .code-comment { color: #008000; }
+:root .code-keyword { color: #0000ff; }
+:root .code-string  { color: #a31515; }
+:root .code-number  { color: #098658; }
+
+/* 强制 markdown-body 容器不会被子内容撑大 */
+.markdown-body {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+.markdown-body > * {
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 
 /* Monaco 容器本身也限制为上下手势，避免横向手势被 Monaco 误处理 */
@@ -48,13 +62,35 @@
   -webkit-touch-callout: none !important;
 }
 
-/* 顶部复制按钮的文字仍可选中（虽然点击就行） */
-.code-block-light .code-copy-btn,
-.code-block-light .code-copy-btn * {
-  -webkit-user-select: none !important;
-  -moz-user-select: none !important;
-  user-select: none !important;
-}
+  /* 顶部复制按钮的文字仍可选中（虽然点击就行） */
+  .code-block-light .code-copy-btn,
+  .code-block-light .code-copy-btn * {
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    user-select: none !important;
+  }
+
+  /* ★ 关键修复（v2 防御链）：防止 Monaco / 长内容撑大页面。
+     Monaco 首次渲染时按 longest line 计算宽度，可能临时撑大容器。
+     这些 CSS 规则作为最后兜底，确保任何子内容溢出都被裁切。 */
+  .monaco-editor,
+  .monaco-editor .overflow-guard,
+  .monaco-editor .monaco-scrollable-element,
+  .monaco-editor .view-lines,
+  .monaco-editor .lines-content {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* 强制 markdown-body 容器不会被子内容撑大 */
+  .markdown-body {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+  .markdown-body > * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
 
 /* ========== 鍩虹鏍峰紡 ========== */
 @layer base {

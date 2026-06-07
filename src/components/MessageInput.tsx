@@ -149,7 +149,12 @@ function MessageInput({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm
+          // ★ 关键修复：加 min-w-0 + break-words 防止长无空格字符串撑爆容器。
+          // textarea 默认 min-width: auto = min-content，长无空格 token
+          //（如"aaaaaaaa..."1000字符）会让 min-content = 1000字符宽，撑爆容器，
+          // 视觉上看起来"不换行"。min-w-0 允许收缩到 0，break-words 在不能
+          // 正常换行时强制断词（对中文友好，仅在必要时断行）。
+          className="flex-1 min-w-0 resize-none break-words bg-transparent text-sm
                      text-content dark:text-content-dark
                      placeholder:text-content-tertiary dark:placeholder:text-content-tertiary-dark
                      outline-none py-1 min-h-[44px] max-h-[240px]"
