@@ -26,6 +26,36 @@
   touch-action: pan-y !important;
 }
 
+/* ★ 关键修复：禁用 Monaco 内的文本选择和 iOS 长按菜单。
+   配合 domReadOnly: true + contextmenu: false 让代码块彻底"只读展示"。
+   - user-select: none 阻止桌面/移动端文本选中
+   - -webkit-touch-callout: none 阻止 iOS Safari 长按弹出菜单
+   注：顶部"复制"按钮（.code-copy-btn）仍可点击，使用显式 user-select: text 让按钮文字可选。
+   注 2：流式 HTML pre 代码块也加上同样限制（.code-block-light pre code），
+        避免 mobile 端长按弹出系统菜单。 */
+.monaco-editor,
+.monaco-editor .view-line,
+.monaco-editor .view-line span,
+.monaco-editor .view-lines,
+.monaco-editor .lines-content,
+.code-block-light,
+.code-block-light pre,
+.code-block-light pre code {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* 顶部复制按钮的文字仍可选中（虽然点击就行） */
+.code-block-light .code-copy-btn,
+.code-block-light .code-copy-btn * {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  user-select: none !important;
+}
+
 /* ========== 鍩虹鏍峰紡 ========== */
 @layer base {
   * {

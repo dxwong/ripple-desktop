@@ -117,6 +117,8 @@ function CodeEditor({
   //   - 触屏滑动代码块 → 滚动消息列表（修复 mobile 端用户痛点）
   //   - 鼠标滚轮在代码块上 → 滚动消息列表（之前已实现）
   //   - Monaco 内部仍可滚轮查看长代码（用编辑器内 touchpad / 鼠标滚轮）
+  // ★ 同时阻止 contextmenu 事件，避免浏览器原生右键菜单（"Back/Reload"等）
+  // 出现在代码块上。这是简单的样式/交互处理，不涉及业务逻辑。
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -155,15 +157,23 @@ function CodeEditor({
       }
     };
 
+    // 阻止浏览器原生 context menu（与 Monaco 的 contextmenu: false 配合）
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
     // 用 capture phase 拦截（Monaco 内部事件不会先于我们触发）
     container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
     container.addEventListener("touchstart", handleTouchStart, { capture: true, passive: true });
     container.addEventListener("touchmove", handleTouchMove, { capture: true, passive: false });
+    container.addEventListener("contextmenu", handleContextMenu, { capture: true });
 
     return () => {
       container.removeEventListener("wheel", handleWheel, { capture: true } as EventListenerOptions);
       container.removeEventListener("touchstart", handleTouchStart, { capture: true } as EventListenerOptions);
       container.removeEventListener("touchmove", handleTouchMove, { capture: true } as EventListenerOptions);
+      container.removeEventListener("contextmenu", handleContextMenu, { capture: true } as EventListenerOptions);
     };
   }, []);
 
@@ -257,30 +267,42 @@ function CodeEditor({
         theme={darkMode ? "ripple-dark" : "ripple-light"}
         options={{
           readOnly,
+          // ★ 关键修复：domReadOnly: true 强化 readOnly。
+          // readOnly 只阻止 Monaco 内部修改，但仍允许 cursor focus。
+          // domReadOnly 进一步阻止 Monaco DOM 接受输入事件（包括 focus）。
+          // 配合 CSS user-select: none，让代码块彻底"只读"，不响应任何交互。
+          domReadOnly: true,
+          // ★ 关键修复：禁用 Monaco 内置 context menu。
+          // 之前 contextmenu: true (默认) 时右键代码块会显示 Monaco 菜单
+          // (Cut/Copy/Paste/Command Palette 等)。改为 false 彻底禁用。
+          contextmenu: false,
+          // ★ 关键修复：点击行号不再选中整行（避免误操作）。
+          selectOnLineNumbers: false,
+          // ★ 关键修复：让 Monaco 弹出层（如 hover tooltip）不超出编辑器范围，
+          // 避免 mobile 端溢出造成额外滚动/缩放问题。
+          fixedOverflowWidgets: true,
           minimap: { enabled: false },
           lineNumbers: "on",
           scrollBeyondLastLine: false,
           fontSize: 14,
           fontFamily: '"JetBrains Mono", "Fira Code", monospace',
           padding: { top: 12, bottom: 12 },
-          // ★ 关键修复：wordWrap: "off" → "bounded"。
-          // 之前不换行导致长行超出代码块宽度，触发横向滚动条；
-          // 移动端触摸事件被横向滚动吞掉，手指无法在代码块上上下滚动消息列表。
-          // "bounded" 在视口边界和 wordWrapColumn 之间取小者换行，
-          // 既保证代码不溢出，也保留 Monaco 的可读性。
-          wordWrap: "bounded",
-          wordWrapColumn: 120,
+          // ★ 关键修复：wordWrap: "on"。
+          // 之前 "bounded" + wordWrapColumn: 120 限制过严——长行（>120 列）才会换行，
+          // 普通长行（60-100 列）不会换行。用户明确要求"开启自动换行"。
+          // "on" 按视口宽度换行（不论 wordWrapColumn），mobile 窄屏自然换行。
+          wordWrap: "on",
           tabSize: 2,
           renderWhitespace: "selection",
           bracketPairColorization: { enabled: true },
-          // ★ 关键修复：禁用横向滚动条。wordWrap: bounded 后代码已自动换行，
+          // ★ 关键修复：禁用横向滚动条。wordWrap: on 后代码已自动换行，
           // 不再需要横向滚动，horizontal: 'hidden' + size 0 彻底隐藏。
           scrollbar: {
             vertical: 'auto',
             horizontal: 'hidden',
             verticalScrollbarSize: 6,
             horizontalScrollbarSize: 0,
-            alwaysConsumeMouseWheel: false,  // 关键：滚轮事件不被 Monaco 消费
+            alwaysConsumeMouseWheel: false,  // 滚轮事件不被 Monaco 消费
           },
           overviewRulerLanes: 0,
           hideCursorInOverviewRuler: true,

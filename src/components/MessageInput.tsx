@@ -96,9 +96,9 @@ function MessageInput({
   // v1.1.2 新增
   compactionThreshold = 15,
 }: MessageInputProps) {
-  // ★ 关键修复：mobile 视口下启用 compact 模式，避免 toolbar 内容溢出
-  // 把 send-btn 推出视口。mobile 下隐藏占位按钮（附件/@），permission 用
-  // compact 模式只显示图标，model 走 truncate 截断。
+  // mobile 视口下隐藏占位按钮（附件/@），让 toolbar 更紧凑。
+  // ★ 注意：permission / model 下拉不再用 compact 模式 — 用户明确要求
+  // mobile 下也要看到完整文字（"Plan 模式"、"模型名"），不能只显示图标。
   const isMobile = useMediaQuery("(max-width: 640px)");
 
   const [input, setInput] = useState("");
@@ -162,25 +162,24 @@ function MessageInput({
         {/* 左侧：权限 + 模型 */}
         <div className="flex items-center gap-1 min-w-0 flex-1">
           {/* v2.2: 权限下拉（含"Plan 模式"=read-only）
-              mobile 下用 compact 模式只显示图标，省 ~80px 横向空间 */}
+              ★ 不再传 compact：mobile 下也显示完整文字（如 "Plan 模式"），
+              toolbar 用 flex-wrap 兜底，超宽时换行而不是溢出。 */}
           {onPermissionModeChange && (
             <PermissionSelectDropdown
               value={permissionMode}
               onChange={onPermissionModeChange}
               disabled={disabled}
-              compact={isMobile}
             />
           )}
 
           {/* v2.2: 模型下拉（彩色 logo 替代旧的内联实现）
-              mobile 下用 compact 模式只显示 provider logo，省 ~120px 横向空间 */}
+              ★ 不再传 compact：mobile 下也显示完整 provider · model 名。 */}
           {onSwitchModelEntry && (
             <ModelSelectDropdown
               activeConfig={activeConfig}
               entries={entryList}
               onSwitch={onSwitchModelEntry}
               disabled={disabled}
-              compact={isMobile}
             />
           )}
 
